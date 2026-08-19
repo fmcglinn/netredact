@@ -1,0 +1,52 @@
+# Profile: public publication
+#
+# Destination: a mailing list, a forum post, a conference slide, a blog, a
+# public bug report. Anywhere it will be indexed and cannot be recalled.
+#
+# Everything that could identify you or a subscriber is gone. Free text and
+# device identity are DESTROYED rather than hashed: a stable <DESC-a1b2c3>
+# still leaks how many distinct customers sit on a device, and which ports
+# belong to the same one.
+#
+# Addressing and names are still pseudonymised rather than destroyed, because a
+# post nobody can follow is not worth publishing -- pseudonyms keep the subnet
+# and adjacency structure that makes the example make sense.
+#
+# Read the output line by line before you post it. VLAN names, ACL and
+# route-map names, AS numbers and VRF names are NEVER touched, and on a real
+# config those frequently carry customer names.
+
+[policy]
+secrets   = "redact"
+text      = "redact"   # <DESCRIPTION-REMOVED>
+identity  = "redact"   # serials, UDIs, engine IDs, certificates, SSH keys
+hostnames = "pseudo"
+domains   = "pseudo"
+usernames = "pseudo"
+emails    = "pseudo"
+
+[ipv4]
+default    = "pseudo"
+loopback   = "keep"    # 127.0.0.1 is not identifying and aids readability
+reserved   = "keep"    # 0.0.0.0 / 255.255.255.255 are protocol constants
+multicast  = "keep"    # 224.0.0.5 is OSPF, not a subscriber
+# `pool` is left at its default, ["198.18.0.0/15", "100.64.0.0/10"] -- 16896
+# /24s. A /15 alone is 512, and a large service-provider config can hold more
+# distinct /24s than that; the pool is a hard capacity limit, not a hint.
+# Including 100.64.0.0/10 is safe here precisely because `cgnat` is acted on
+# too, so no real CGNAT address is left in the output to be confused with a
+# generated one.
+# `benchmark` and `cgnat` are deliberately NOT kept for that reason.
+
+[ipv6]
+default     = "pseudo"
+unspecified = "keep"
+loopback    = "keep"
+multicast   = "keep"
+
+[macs]
+oui = "redact"         # discard the vendor prefix too: 00:00:5e
+nic = "pseudo"
+
+[verify]
+strict = true

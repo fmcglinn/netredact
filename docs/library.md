@@ -1,0 +1,253 @@
+# Library use
+
+netredact is a normal importable package; the CLI is a thin wrapper over it.
+
+```python
+from netredact import Config, sanitise_text
+
+cfg = Config.load()                       # searches the standard locations
+result = sanitise_text(text, cfg)
+
+print(result.text)
+for finding in result.findings:
+    print(finding)                        # L18 [type7-left] ...
+```
+
+## `Config`
+
+```python
+Config.load()                             # discover, or built-in defaults
+Config.load("netredact.toml")             # explicit path
+Config.load(path, search=False)           # no fallback search
+Config.from_dict({"policy": {"text": "hash"}})
+Config()                                  # defaults, constructed directly
+```
+
+Build one in code without a file. Every section is a dataclass, and the value
+you assign is an action string:
+
+```python
+from netredact import Config
+
+cfg = Config()
+cfg.policy.text = "hash"                  # a whole family
+cfg.policy.usernames = "pseudo"
+cfg.ipv4.default = "keep"                 # every class not named
+cfg.ipv4.other_unicast = "pseudo"         # one class
+cfg.ipv4.pool = ["198.18.0.0/15"]
+cfg.macs.nic = "pseudo"                   # the two halves are independent
+cfg.overrides["serial-number"] = "keep"   # one rule, by name
+```
+
+The actions and families are exported, so you can validate against them:
+
+```python
+from netredact import ACTIONS, ALLOWED, FAMILIES
+
+ACTIONS            # ("keep", "pseudo", "hash", "redact")
+FAMILIES           # ("secrets", "text", "identity", "hostnames", "domains",
+                   #  "usernames", "emails", "ipv4", "ipv6", "macs")
+ALLOWED["secrets"] # ("keep", "hash", "redact") -- pseudo is illegal here
+```
+
+### Resolving an action
+
+Three methods answer "what will happen to this?", which is also what the
+sanitiser itself calls:
+
+```python
+cfg.action_for("emails")                  # a family -> "keep"
+cfg.action_for_rule("description")        # [overrides] if set, else the family
+cfg.ipv4.action("cgnat")                  # a class, with `default` applied
+cfg.ipv4.any_active()                     # True if any class is not "keep"
+cfg.family_of("serial-number")            # "identity"
+```
+
+### Errors
+
+Invalid values raise `ConfigError` at construction, not at use, and the message
+names the offender:
+
+```python
+>>> Config.from_dict({"policy": {"secrets": "pseudo"}})
+ConfigError: [policy] secrets: pseudo is not available for secrets: use hash
+for an opaque marker, or redact
+
+>>> Config.from_dict({"overrides": {"nosuch": "keep"}})
+ConfigError: [overrides]: unknown rule(s) nosuch. See netredact --list-rules
+
+>>> Config.from_dict({"policy": {"text": "shred"}})
+ConfigError: [policy] text: unknown action 'shred'. Expected one of keep,
+pseudo, hash, redact
+
+>>> Config.from_dict({"macs": {"oui": "hash", "nic": "pseudo"}})
+ConfigError: macs: hash applies to the whole address, set both oui and nic
+to hash
+```
+
+`cfg.to_toml()` renders the current configuration as a commented document —
+this is what `--print-config` prints.
+
+## `sanitise_text`
+
+```python
+sanitise_text(text: str, config: Config | None = None, *,
+              salt: bytes | None = None) -> Result
+```
+
+With no `salt`, a random one is generated and substitutes differ between calls.
+Pass a stable salt for reproducible output — this is the API equivalent of
+`salt_file`:
+
+```python
+salt = Path("~/.config/netredact/salt").expanduser().read_bytes().strip()
+for path in paths:
+    result = sanitise_text(path.read_text(), cfg, salt=salt)
+```
+
+Passing the same salt across files is what makes a fleet pseudonymise
+consistently.
+
+## Nothing is printed
+
+The library writes to no stream. Problems come back on the `Result` (`findings`,
+`collisions`) or are raised — `ConfigError` for a bad configuration,
+`PoolExhausted` for a pseudonym space too small for the input. Reporting is the
+CLI's job, so `netredact` is safe to call from a web handler, a notebook or
+another command-line tool without hijacking its output.
+
+## `Result`
+
+| Attribute | Type | Contents |
+|---|---|---|
+| `text` | `str` | The sanitised configuration. |
+| `lines` | `list[str]` | Same, split. |
+| `vendor` | `str` | `cisco`, `arista`, `juniper`, or `unknown`. |
+| `counts` | `Counter` | Rule or family name → values substituted. A block or banner counts once, not once per line. |
+| `kept_counts` | `Counter` | Rule or family name → occurrences deliberately left in place. The CLI report does not print this; see the recipe below. |
+| `families` | `dict[str, str]` | Every key used in `counts` / `kept_counts` → its family, so you can group without re-deriving the rule table. |
+| `policy_summary` | `str` | The policy in one line, e.g. `secrets=redact, everything else kept`. |
+| `redactions` | `int` | How many values were destroyed: the `secrets`, `text` and `identity` families only, since a substituted address or name still carries its equality relation. |
+| `kept` | `dict[str, set[str]]` | Category → distinct values left in place, e.g. `{"ipv4.rfc1918": {"10.20.30.1"}}`. |
+| `collisions` | `set[str]` | Real addresses kept that fall inside a pseudonym pool. |
+| `findings` | `list[Finding]` | What the verification pass found. |
+| `mapping` | `dict[str, dict[str, str]]` | Category → `{original: pseudonym}`. **The re-identification map.** |
+
+`Finding` has `.line`, `.check` and `.text`, and a readable `str()`.
+
+Descriptions are ordinary `text`-family rules, so they appear in `kept_counts`
+under `description`, `acl-remark` and `login-message` like anything else.
+
+## Recipes
+
+**Refuse to write anything suspicious**
+
+```python
+result = sanitise_text(text, cfg, salt=salt)
+if result.findings:
+    raise SystemExit("\n".join(str(f) for f in result.findings))
+out.write_text(result.text)
+```
+
+**Report what is still in the output**
+
+The CLI report states the policy but does not enumerate what it kept. If you
+want that breakdown — to work down as a file needs to travel further from the
+business — build it yourself:
+
+```python
+for key, n in result.kept_counts.most_common():
+    family = result.families[key]
+    print(f"{n:5d}  {key:24} (family: {family})")
+```
+
+Remember that `findings` cannot tell you this. A kept family is a policy choice,
+not a miss — see [verification](verification.md#what-it-cannot-do-judge-your-policy).
+
+**Keep a re-identification map for your own use only**
+
+```python
+import json
+Path("map.json").write_text(json.dumps(result.mapping, indent=2, default=list))
+Path("map.json").chmod(0o600)
+```
+
+**Sanitise a whole directory consistently**
+
+```python
+from pathlib import Path
+from netredact import Config, sanitise_text
+
+cfg = Config.load()
+salt = Path("fleet.salt").read_bytes()
+for src in Path("configs").glob("*.cfg"):
+    result = sanitise_text(src.read_text(), cfg, salt=salt)
+    (Path("clean") / src.name).write_text(result.text)
+    if result.findings:
+        print(f"{src.name}: {len(result.findings)} finding(s)")
+```
+
+**Add a rule at runtime**
+
+```python
+from netredact import Config, CustomRule, sanitise_text
+
+cfg = Config()
+cfg.custom.append(CustomRule(name="acme-shared-key",
+                             pattern=r"\s*acme\s+shared-key\s+",
+                             family="secrets"))
+result = sanitise_text(text, cfg, salt=salt)
+```
+
+A pattern with no capture groups is a prefix; one with groups declares its own
+targets; `%VAL%` expands to the value matcher as a group. Same rules as
+`[[custom]]` in the file — see
+[configuration](configuration.md#what-the-shape-of-the-pattern-means).
+
+## Lower-level pieces
+
+Useful if you are building something more specialised.
+
+```python
+from netredact import (
+    Sanitiser,           # the stateful transformer; one per file
+    Pseudonymiser,       # HMAC-derived substitutes; renders every action
+    verify,              # run the checks over any list of lines
+    detect_vendor,
+    build_rules,         # compile the rule set, plus your CustomRules
+    rule_names,          # every built-in rule name, in report order
+    family_of,           # rule name -> family
+    check_names,         # every verification check name
+    classify_v4,         # address -> class name
+    classify_v6,
+    V4_CLASS_NAMES,
+    V6_CLASS_NAMES,
+    REMOVED,             # the "<REMOVED>" constant
+)
+```
+
+```python
+>>> classify_v4("100.64.5.9", frozenset())
+'cgnat'
+>>> family_of("serial-number")
+'identity'
+>>> len(rule_names())
+45
+```
+
+`build_rules` takes no `disable` argument: keeping a rule is an action, so a
+kept rule is still compiled, still matches, and is still counted.
+
+`Sanitiser` is two-pass and single-use — build one per file:
+
+```python
+san = Sanitiser(cfg, salt=salt)
+san.collect(lines)          # learn this device's hostnames, domains, users
+out = san.run(lines)        # transform
+```
+
+`Pseudonymiser.render(key, action, value)` is the single entry point for every
+substitution, where `key` is a rule or family name. It is idempotent for `hash`
+and `redact`; a pseudonymised address or MAC is not recognisable as netredact's
+own output by design, so re-running over already-pseudonymised addresses re-maps
+them.

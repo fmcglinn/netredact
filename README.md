@@ -1,0 +1,288 @@
+# netredact
+
+Strip secrets and identifying data out of Cisco IOS/IOS-XE/NX-OS, Arista EOS
+and Juniper JunOS configurations, so you can hand one to a vendor, a
+contractor, a forum or a language model.
+
+Python 3.11+, standard library only, no runtime dependencies.
+
+```bash
+pip install netredact
+
+netredact running-config.txt                 # -> stdout
+netredact configs/*.txt -o clean/
+cat config | netredact -
+netredact running-config.txt --report        # + a summary on stderr
+```
+
+Clean runs are silent. Verification findings and warnings always go to stderr;
+stdout carries the sanitised configuration and nothing else.
+
+## Documentation
+
+Full docs live in [`docs/`](docs/):
+
+- [Getting started](docs/getting-started.md) — install, first run, reading the report
+- [Configuration reference](docs/configuration.md) — every section and key
+- [Example configurations](docs/examples/) — six profiles, from secrets-only to public publication
+- [Address classes](docs/address-classes.md) — the IPv4 / IPv6 taxonomy
+- [Rule reference](docs/rules.md) — all 45 rules and every verification check
+- [Verification](docs/verification.md) — what the output pass catches, and what it cannot
+- [Library use](docs/library.md) — the module API
+- [The actions model](docs/design/actions-model.md) — why the configuration looks like this
+
+## Selector, then action
+
+Configuration names a **part of the config** and gives it an **action**. There
+are four, and they differ in how much structure survives:
+
+| Action | Equality relation | Output |
+|---|---|---|
+| `keep` | — | untouched |
+| `pseudo` | **preserved** | a type-valid substitute; the config still loads |
+| `hash` | **preserved** | an opaque `<DESC-f11e24>` marker; announces the sanitising |
+| `redact` | **destroyed** | a family-appropriate constant; not even "these two were equal" survives |
+
+Every substitute is an HMAC under a salt, never a random value, which is what
+makes `pseudo` and `hash` consistent across files and across a fleet.
+
+`pseudo` and `hash` both preserve equality, which is often the whole point:
+seeing that fourteen ports share one description, or that forty devices share
+one TACACS key, without learning what either says. `redact` destroys that
+relation — and on a customer-facing network, the relation can itself be the
+leak.
+
+**One combination is illegal: `pseudo` on `secrets`.** A loadable
+`enable secret secret-f11e24` looks harmless, but the value is an HMAC of the
+real credential. Use `hash` for an audit-visible marker, or `redact`.
+
+## What acts by default
+
+Only `secrets`, and it redacts. Everything else is kept until you ask for it:
+
+```toml
+[policy]
+secrets   = "redact"  # passwords, keys, community strings, hashes (no pseudo)
+text      = "keep"    # descriptions, remarks, banners, login messages, location, contact
+identity  = "keep"    # serials, UDIs, engine IDs, certificates, SSH public keys
+hostnames = "keep"    # device names, from the collect pass
+domains   = "keep"    # domain names and search lists
+usernames = "keep"    # local users, AAA users, JunOS login names
+emails    = "keep"    # e-mail addresses, wherever they appear
+```
+
+That block is verbatim from `netredact --print-config`. It is a narrow promise,
+deliberately: default output still contains every address, hostname and customer
+description, so it was never publishable anyway. `--report` opens with the
+effective policy, so what is *not* being acted on is stated up front:
+
+```
+$ netredact running-config.txt --report > clean.txt
+=== running-config.txt -> clean.txt  (vendor: cisco) ===
+  policy: secrets=redact, everything else kept
+  changes:
+        19  username-secret, enable-secret, encoded-key ...
+  VERIFY: clean (policy applied, no credential-shaped material left)
+```
+
+## Configuration
+
+Everything tunable lives in a TOML file rather than in flags. Get a fully
+commented starting point, every key at its default:
+
+```bash
+netredact --print-config > netredact.toml
+```
+
+It is discovered from, in order: `--config PATH`, `./netredact.toml`,
+`./.netredact.toml`, `~/.config/netredact/config.toml`, then the built-in
+defaults. Only the keys you set are overridden.
+
+The sections are the selectors:
+
+| Section | Selects |
+|---|---|
+| `[policy]` | the seven families that are *not* a partition: `secrets`, `text`, `identity`, `hostnames`, `domains`, `usernames`, `emails` |
+| `[ipv4]` / `[ipv6]` | one action per address class, plus `default`, `pool`, `well_known_resolvers`, `keep_networks` |
+| `[macs]` | `oui` and `nic` independently, plus the `pool` prefix that `redact` writes |
+| `[overrides]` | one named rule, by name — the escape hatch when a family is too broad |
+| `[[custom]]` | rules of your own |
+| `[verify]` | the pass that re-scans the output |
+
+A family gets its own section when its members **exhaustively partition** a
+value space — the ten IPv4 classes, the eleven IPv6 classes, the two halves of
+a MAC. Named patterns are not a partition, so they get one `[policy]` key plus
+`[overrides]`.
+
+Here is a **hardened profile** — not the default, and not what `--print-config`
+prints:
+
+```toml
+salt_file = "~/.config/netredact/salt"
+
+[policy]
+secrets   = "redact"
+text      = "hash"           # <DESC-a1b2c3>: tells ports apart, not who they are
+identity  = "hash"
+hostnames = "keep"           # site/role naming is how the design reads
+domains   = "pseudo"
+usernames = "pseudo"
+
+[ipv4]
+default       = "keep"       # 10.x tells an outsider nothing
+cgnat         = "pseudo"     # subscriber-facing space
+other_unicast = "pseudo"     # your allocated space -- WHOIS maps it to you
+benchmark     = "pseudo"     # 198.18/15 is pool space; move any real use of it
+# `pool` left at its default: capacity is a hard limit, one /24 of pool per
+# distinct /24 in the file, and the default holds 16896.
+
+[macs]
+oui = "keep"                 # vendor prefix identifies hardware, not you
+nic = "pseudo"
+
+[overrides]
+serial-number = "keep"       # the support desk asks for it first
+
+[verify]
+strict = true                # exit 2 if anything is still suspicious
+```
+
+Six ready-made profiles are in [docs/examples/](docs/examples/).
+
+### Addresses
+
+Every address falls into exactly one class, checked most-specific first, so one
+key governs it with no ambiguity. `default` covers the classes you do not name.
+
+IPv4: `loopback`, `rfc1918`, `cgnat`, `link_local`, `multicast`,
+`documentation`, `benchmark`, `reserved`, `well_known`, `other_unicast`.
+
+IPv6: `unspecified`, `loopback`, `ula`, `link_local`, `multicast`,
+`documentation`, `teredo`, `six_to_four`, `ipv4_mapped`, `well_known`,
+`other_unicast`.
+
+`pseudo` keeps the IPv4 host octet and prefix length — only the /24 moves — and
+the IPv6 interface identifier. Full table with prefixes, RFCs and pool
+collisions in **[docs/address-classes.md](docs/address-classes.md)**.
+
+**Netmasks and wildcard masks are never touched**, whatever you set —
+substituting `255.255.255.0` would break the config.
+
+### Per-rule escape hatches
+
+All 45 rule names are globally unique and none collides with an address class,
+so `[overrides]` is flat: you can name a rule without knowing its family, which
+is exactly the state you are in when a false positive bites you.
+
+```toml
+[overrides]
+location      = "keep"       # this fleet's location lines hold a rack label
+serial-number = "keep"       # TAC asks for it
+banner        = "redact"     # act on the banner alone, not all of `text`
+```
+
+`netredact --list-rules` prints every name with its family.
+
+### Consistency across a fleet
+
+Set `salt_file` and the same real value maps to the same substitute in every run
+and every file — so `128.66.16.20` is the same fake address on all forty devices
+and the topology still makes sense. The file is created `0600` if missing.
+
+**The salt file is a re-identification key.** So is anything written by
+`--map-out`. Keep both out of whatever you are sharing.
+
+## Custom rules
+
+For gear whose syntax netredact does not know:
+
+```toml
+[[custom]]
+name    = "acme-shared-key"
+pattern = '\s*acme\s+shared-key\s+'
+family  = "secrets"       # decides both the action and the rendering
+# stanza = "snmp"         # optional, restrict to a JunOS top-level stanza
+```
+
+There is no `mode` field: the shape of the pattern says where the value is.
+
+- **No capture groups** — the pattern is a *prefix*, everything up to and
+  including the keyword that introduces the value. netredact appends the value
+  matcher itself, so quoting, JunOS `;` terminators and trailing
+  `## SECRET-DATA` comments are handled for you.
+- **With capture groups** — every group is a target and everything outside them
+  is kept verbatim, so one rule can carry several values on one line. `%VAL%`
+  expands to the value matcher as a capturing group.
+
+`family` is what decides the action (via `[policy]`, or `[overrides]` under the
+rule's own name) and how the replacement is rendered.
+
+See [docs/rules.md](docs/rules.md) for the full inventory and
+[docs/configuration.md](docs/configuration.md#custom) for the details.
+
+## Verification
+
+After transforming, netredact re-scans its own **output**. The credential
+checks — crypt hashes, JunOS `$9$`, type-7, long hex/base64 runs, credential
+keywords without a placeholder — are **unconditional**: they fire even when your
+policy deliberately keeps a secret, which is why such a policy still fails
+`--strict`. The rest (e-mail, addresses, SSH keys, certificates) run only when
+the relevant family is not `keep`, because a value you chose to keep is not a
+miss.
+
+Verify therefore **cannot flag a policy choice**; the `policy:` line at the top
+of `--report` is what states it. A clean report means "nothing known was left
+behind", not "this file is safe to publish" — see
+[docs/verification.md](docs/verification.md).
+
+## Two behaviours worth knowing
+
+**Blocks and banners count once.** A certificate block or a multi-line banner is
+one value, however many lines it spans: one replacement, one entry in the
+report.
+
+**`hash` and `redact` are idempotent; `pseudo` on addresses is not.** Running
+netredact over its own output changes nothing for markers and constants —
+netredact recognises its own work. A pseudonymised address or MAC is
+deliberately indistinguishable from a real one, including to netredact, so a
+second pass re-maps it. That is not an oversight: the default IPv4 pool includes
+`100.64.0.0/10`, and treating pool addresses as "already done" would leave real
+CGNAT addresses untouched.
+
+## Library use
+
+```python
+from netredact import Config, sanitise_text
+
+cfg = Config.load()                    # or Config.load("netredact.toml")
+result = sanitise_text(text, cfg)
+
+result.text              # the sanitised configuration
+result.vendor            # "cisco" | "arista" | "juniper" | "unknown"
+result.counts            # Counter of rule / family name -> values substituted
+result.kept_counts       # Counter of what the policy deliberately left in place
+result.policy_summary    # the one-line policy, as the report prints it
+result.findings          # list[Finding] from the verification pass
+result.mapping           # category -> {original: pseudonym}
+```
+
+Pass `salt=` for reproducible substitutes across calls. Full API in
+[docs/library.md](docs/library.md).
+
+## Never touched
+
+VLAN names, ACL / route-map / prefix-list / policy / key-chain / VRF names, AS
+numbers, and interface numbering. These are usually what makes the config worth
+sharing, and BGP communities in particular must survive intact. If your VLAN or
+policy names encode customer names, handle that yourself.
+
+## Limitations
+
+Rule-based, so it only knows the patterns it has been taught. Novel or
+vendor-specific credential syntax will pass through — that is what the
+verification pass and `[[custom]]` are for. Read the output before you send it
+anywhere.
+
+## Licence
+
+MIT

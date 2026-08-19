@@ -1,0 +1,53 @@
+# Profile: analysis by a language model
+#
+# Destination: pasted into a hosted model for review, explanation or migration
+# work.
+#
+# Maximum readability with zero identity. Addressing is pseudonymised rather
+# than removed, so subnet relationships, link adjacencies and ACL logic all
+# still hold and the model can reason about them. Free text is hashed, not
+# destroyed, so it can still tell ports apart.
+#
+# Set salt_file so a whole fleet pseudonymises consistently -- the same real
+# address is the same fake address in every file you paste.
+
+salt_file = "~/.config/netredact/salt"
+
+[policy]
+secrets   = "redact"
+text      = "hash"
+identity  = "hash"
+hostnames = "pseudo"   # device-abc123, consistent everywhere it appears
+domains   = "pseudo"
+usernames = "pseudo"
+emails    = "pseudo"
+
+[ipv4]
+default    = "pseudo"
+# Protocol constants stay put: moving them makes the config harder to read
+# for no privacy gain.
+loopback   = "keep"
+multicast  = "keep"
+reserved   = "keep"
+well_known = "keep"    # 8.8.8.8 identifies nobody and aids reading
+# `pool` is left at its default, ["198.18.0.0/15", "100.64.0.0/10"] -- 16896
+# /24s. A /15 alone is 512, and a large service-provider config can hold more
+# distinct /24s than that; the pool is a hard capacity limit, not a hint.
+# Including 100.64.0.0/10 is safe here precisely because `cgnat` is acted on
+# too, so no real CGNAT address is left in the output to be confused with a
+# generated one.
+# `benchmark` and `cgnat` are deliberately NOT kept for that reason.
+
+[ipv6]
+default     = "pseudo"
+unspecified = "keep"
+loopback    = "keep"
+multicast   = "keep"
+well_known  = "keep"
+
+[macs]
+oui = "keep"
+nic = "pseudo"
+
+[verify]
+strict = true

@@ -1,0 +1,42 @@
+# Profile: external review
+#
+# Destination: a contractor, consultant or auditor outside the business.
+#
+# Keeps the design legible -- internal addressing, topology and per-port
+# structure survive -- while removing anything that ties the file to your
+# organisation or your subscribers.
+#
+# Free text is hashed rather than destroyed: <DESC-a1b2c3> still tells two
+# ports apart and still correlates the same port across files, without saying
+# whose it is.
+
+[policy]
+secrets   = "redact"
+text      = "hash"     # <DESC-a1b2c3>
+identity  = "hash"     # serials, certificates and keys become markers
+hostnames = "keep"     # site/role naming is how the design reads
+domains   = "pseudo"
+usernames = "pseudo"
+emails    = "hash"
+
+[ipv4]
+default       = "keep"    # 10.x tells an outsider nothing; keep it readable
+cgnat         = "pseudo"  # subscriber-facing space
+other_unicast = "pseudo"  # your allocated space -- WHOIS maps it to you
+benchmark     = "pseudo"  # 198.18/15 is pool space; move any real use of it
+# `pool` is left at its default, ["198.18.0.0/15", "100.64.0.0/10"] -- 16896
+# /24s. A /15 alone is only 512, and one /24 of pool is consumed per distinct
+# /24 in the input, so a large service-provider config exhausts it outright.
+# The wider pool is safe here because `cgnat` and `benchmark` are both acted
+# on: no real address is left in the output inside pool space.
+
+[ipv6]
+default       = "keep"
+other_unicast = "pseudo"
+
+[macs]
+oui = "keep"           # the vendor prefix identifies hardware, not you
+nic = "pseudo"         # the device half does
+
+[verify]
+strict = true

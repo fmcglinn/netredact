@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "netredact"
+dynamic = ["version"]
+description = "Redact secrets and pseudonymise identifying data in Cisco, Arista and Juniper network configurations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+# the name carries "redact", so the other words people search for live here
+keywords = ["network", "cisco", "arista", "juniper", "ios", "eos", "junos",
+            "sanitise", "sanitize", "anonymise", "anonymize", "pseudonymise",
+            "deidentify", "redact", "secrets", "netdevops"]
+authors = [{ name = "Fraser McGlinn" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: System Administrators",
+  "Intended Audience :: Telecommunications Industry",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Networking",
+  "Topic :: Security",
+]
+dependencies = []          # stdlib only, on purpose
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+netredact = "netredact.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/fmcglinn/netredact"
+Issues = "https://github.com/fmcglinn/netredact/issues"
+
+[tool.hatch.version]
+path = "src/netredact/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/netredact"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# the rule table reads better as one prefix per line than wrapped
+"src/netredact/rules.py" = ["E501"]

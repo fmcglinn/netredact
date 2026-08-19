@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# never commit these
+*.salt
+salt.key
+*.map.json
+netredact.map.json
+# a local working config: it can name real salt paths and custom rules,
+# and netredact auto-discovers it from the cwd, which breaks the test suite
+/netredact.toml
+.idea/
+.vscode/
+.DS_Store
