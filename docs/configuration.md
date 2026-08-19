@@ -86,6 +86,18 @@ credentials are destroyed, nothing else is. Default output still contains every
 address, hostname and customer description, which is why the report opens with
 the effective policy rather than leaving you to guess.
 
+**Learned names are matched as whole words, longest first.** `hostnames`,
+`domains` and `usernames` are discovered by a first pass over the file and then
+substituted wherever they appear, so the device's own name is caught in a
+description or a peer group too, not just on the line that declared it. The
+longest name wins, which is why `core-rtr-01.example.net` is replaced as one
+FQDN rather than having its domain rewritten and the device name left standing.
+Whole-word means `admin` never matches inside `network-admin`.
+
+One exception: a **single-character** hostname or username is never
+substituted. A two-character account like `lg` is, but rewriting every bare `s`
+or `e` in a configuration would do more damage than a one-letter name is worth.
+
 How each family renders:
 
 | Family | `pseudo` | `hash` | `redact` |
