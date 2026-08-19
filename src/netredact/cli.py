@@ -262,10 +262,23 @@ def main(argv=None) -> int:
 
 
 def _mute_stdout() -> None:
+    """Point stdout at the null device so the shutdown flush cannot fail.
+
+    The descriptor is asked for first and closed afterwards: opening it inside
+    the ``dup2`` call would leak it whenever ``fileno`` is the thing that
+    raises, which is every in-process caller whose stdout is not a real file.
+    """
     try:
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        fd = sys.stdout.fileno()
     except (OSError, ValueError):        # stdout may not be a real fd
+        return
+    null = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(null, fd)
+    except OSError:
         pass
+    finally:
+        os.close(null)
 
 
 def run(argv=None) -> int:

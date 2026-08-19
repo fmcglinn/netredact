@@ -53,6 +53,39 @@ def qk():
 SALT = b"deterministic-test-salt-do-not-use-in-anger"
 
 
+# -- isolation ---------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def hermetic_config(tmp_path_factory, monkeypatch):
+    """No test may discover a real configuration file.
+
+    THE PRINCIPLE: a test asserts against a policy it states. ``find_config``
+    searches three places -- the cwd, ``$XDG_CONFIG_HOME/netredact`` and
+    ``~/.config/netredact`` -- so without this any of them silently rewrites
+    that policy. A ``netredact.toml`` left in the repository root is the one
+    that bites in practice; a developer's own config in ``$HOME`` is the one
+    that bites mysteriously, because it differs per machine and can name a
+    ``salt_file``, which would make CLI output depend on a real
+    re-identification key.
+
+    Every search path is pointed at an empty temporary directory, so
+    :meth:`Config.load` falls through to the built-in defaults. A test that is
+    *about* discovery re-points the cwd itself and still works.
+
+    These directories deliberately do NOT live under the test's own
+    ``tmp_path``: tests that assert on the contents of ``tmp_path`` would count
+    them as output files.
+    """
+    base = tmp_path_factory.mktemp("hermetic")
+    home = base / "home"
+    (home / ".config").mkdir(parents=True)
+    cwd = base / "cwd"
+    cwd.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.chdir(cwd)
+
+
 # -- configuration builders --------------------------------------------------
 # The model is selector-then-action, so a test says which selector it is
 # exercising and with which action; nothing else moves.

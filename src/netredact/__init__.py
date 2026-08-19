@@ -44,7 +44,7 @@ Everything tunable lives in the configuration file; see ``Config`` and
 
 from __future__ import annotations
 
-__version__ = "0.1.1"
+__version__ = "0.1.0"
 
 from .addresses import V4_CLASS_NAMES, V6_CLASS_NAMES, classify_v4, classify_v6
 from .config import (
