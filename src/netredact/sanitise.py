@@ -208,19 +208,28 @@ class Sanitiser:
 
         # A kept name is still matched in pass 2, because the report counts the
         # occurrences it left behind; the action decides what the match does.
-        # longest first, so "buildbox.northwind.test" is handled before
-        # "northwind.test" and a hostname never eats half an FQDN
-        self._name_res = []
+        candidates: list[tuple[str, str]] = []
         for family, discovered, minlen in (("domains", self.domains, 0),
-                                           ("hostnames", self.hostnames, 3),
-                                           ("usernames", self.usernames, 3)):
+                                           ("hostnames", self.hostnames, 2),
+                                           ("usernames", self.usernames, 2)):
             keeping = self._family_actions[family] == "keep"
-            for value in sorted(discovered, key=len, reverse=True):
+            for value in discovered:
                 if keeping:
                     self.p.kept.setdefault(
                         _NAME_CATEGORY[family], set()).add(value)
+                # a one-character name is not worth the collateral: the word
+                # scan would rewrite every bare `s` or `e` in the file
                 if len(value) >= minlen:
-                    self._name_res.append((self._word_re(value), family))
+                    candidates.append((value, family))
+
+        # longest first ACROSS families, not within one: the hostname
+        # "buildbox.northwind.test" has to be handled before the domain
+        # "northwind.test", or the domain match eats the tail of the FQDN and
+        # leaves the device name behind. Sorting is stable, so names of equal
+        # length keep the family order above.
+        candidates.sort(key=lambda pair: len(pair[0]), reverse=True)
+        self._name_res = [(self._word_re(value), family)
+                          for value, family in candidates]
 
     @staticmethod
     def _add(bucket: list, value: str) -> None:

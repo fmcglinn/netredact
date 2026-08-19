@@ -4,6 +4,9 @@ Every test here is a repro that failed on the previous implementation, so the
 comment above it says what the wrong output was.
 """
 
+import os
+import re
+
 import pytest
 
 from netredact import Config, CustomRule, sanitise_text
@@ -336,3 +339,133 @@ def test_every_marker_prefix_is_ignored_by_the_verifier():
     lines = [f"community <{mark}-a1b2c3> ro" for mark, _tok in PREFIX.values()]
     from netredact import verify
     assert verify(lines, Config()) == []
+
+
+# --------------------------------------------------------------------------
+# 11: a domain used to eat the tail of a hostname declared as an FQDN
+# --------------------------------------------------------------------------
+
+FQDN_HOSTNAME = """hostname core-rtr-01.northwind.test
+snmp-server contact noc@northwind.test
+interface Loopback0
+ description peering with core-rtr-01.northwind.test
+"""
+
+
+def test_an_fqdn_hostname_is_replaced_whole():
+    """Was: `hostname core-rtr-01.northwind.test` -> `core-rtr-01.example.com`.
+
+    The name patterns were sorted longest-first *within* each family, and
+    domains were built before hostnames, so every domain ran before every
+    hostname. The short domain -- learned from the e-mail address, never
+    declared with `ip domain-name` -- matched inside the FQDN, rewrote its
+    tail, and left the device's own name sitting in the output.
+    """
+    result = sanitise_text(FQDN_HOSTNAME,
+                           policy(hostnames="pseudo", domains="pseudo"),
+                           salt=SALT)
+    assert "core-rtr-01" not in result.text
+    assert "northwind.test" not in result.text
+    assert result.counts["hostnames"] == 2      # the declaration and the
+    assert result.counts["domains"] == 1        # description; then the e-mail
+
+
+def test_the_domain_is_still_replaced_where_it_stands_alone():
+    """The fix reorders the patterns; it does not stop the domain matching."""
+    text = "ip domain-name northwind.test\nip name-server 128.66.0.53\n"
+    result = sanitise_text(text, policy(domains="pseudo"), salt=SALT)
+    assert "northwind.test" not in result.text
+    assert result.counts["domains"] == 1
+
+
+# --------------------------------------------------------------------------
+# 12: a two-character username was below the minimum length
+# --------------------------------------------------------------------------
+
+SHORT_USER = """! device: agg-sw-02 (DCS-7280SR-48C6, EOS-4.29.2F)
+username lg privilege 15 role lg secret sha512 $6$abcd$0123456789
+"""
+
+
+def test_a_two_character_username_is_replaced():
+    """Was: `username lg` survived, because the minimum length was 3.
+
+    Two-letter operator accounts are real, and skipping them left a named
+    human in a config the policy said to pseudonymise.
+    """
+    result = sanitise_text(SHORT_USER, policy(usernames="pseudo"), salt=SALT)
+    assert "username lg " not in result.text
+    assert " role lg " not in result.text
+    assert result.counts["usernames"] == 2
+
+
+def test_the_short_username_gets_one_tag_in_both_places():
+    """`username X ... role X` has to stay one name, or the config will not load."""
+    out = sanitise_text(SHORT_USER, policy(usernames="pseudo"), salt=SALT).text
+    tags = re.findall(r"user-[0-9a-f]+", out)
+    assert len(tags) == 2 and tags[0] == tags[1]
+    assert f"username {tags[0]} privilege 15 role {tags[0]} secret" in out
+
+
+def test_a_one_character_name_is_still_left_alone():
+    """One character is not worth the collateral: every bare `x` would move."""
+    text = "hostname x\ninterface Ethernet1\n description x-connect to y\n"
+    result = sanitise_text(text, policy(hostnames="pseudo"), salt=SALT)
+    assert result.text == text
+    assert "hostnames" not in result.counts
+
+
+# --------------------------------------------------------------------------
+# 13: a closed pipe is the reader saying "enough", not a crash
+# --------------------------------------------------------------------------
+
+class _ClosedPipe:
+    """Stdout after `| head` has gone away: every write is a broken pipe."""
+
+    def __init__(self, fd: int):
+        self._fd = fd
+
+    def write(self, _text):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def flush(self):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def fileno(self):
+        return self._fd
+
+    def isatty(self):
+        return False
+
+
+@pytest.fixture
+def closed_pipe():
+    """A stdout the fix is safe to redirect.
+
+    ``fileno`` has to answer -- argparse asks it whether it may colourise --
+    and the fix redirects whatever it answers with, so it answers with a
+    private descriptor on the null device rather than the one pytest is
+    capturing the session on.
+    """
+    fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        yield _ClosedPipe(fd)
+    finally:
+        os.close(fd)
+
+
+def test_a_closed_stdout_is_not_a_traceback(fixtures, monkeypatch, closed_pipe):
+    """Was: `netredact cisco.cfg | head` printed a BrokenPipeError traceback.
+
+    The write went straight to ``sys.stdout`` from inside ``main``, so the
+    exception escaped to the interpreter -- twice over, because flushing the
+    dead stream at shutdown raised again where nothing could catch it.
+    """
+    monkeypatch.setattr("sys.stdout", closed_pipe)
+    assert main([str(fixtures / "cisco.cfg")]) == EXIT_OK
+
+
+def test_print_config_down_a_closed_pipe_is_also_clean(monkeypatch, closed_pipe):
+    """The other writer of bulk output: `netredact --print-config | head`."""
+    monkeypatch.setattr("sys.stdout", closed_pipe)
+    assert main(["--print-config"]) == EXIT_OK

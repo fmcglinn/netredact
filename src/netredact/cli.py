@@ -244,6 +244,31 @@ def list_rules() -> None:
 
 
 def main(argv=None) -> int:
+    """Entry point. Wraps :func:`run` so a closed pipe is not a crash.
+
+    ``netredact config | head`` closes stdout while we are still writing it.
+    That is the reader saying "enough", not a failure, so it exits cleanly --
+    but stdout has to be pointed at the null device first, or the interpreter
+    tries to flush the dead pipe on the way out and prints its own traceback
+    from a place we can no longer catch.
+    """
+    try:
+        rc = run(argv)
+        sys.stdout.flush()
+        return rc
+    except BrokenPipeError:
+        _mute_stdout()
+        return EXIT_OK
+
+
+def _mute_stdout() -> None:
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError):        # stdout may not be a real fd
+        pass
+
+
+def run(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.list_rules:

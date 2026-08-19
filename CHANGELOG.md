@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.1.1] - 2026-08-20
+
+### Fixed
+
+- **A hostname declared as an FQDN is now replaced whole.** Domain patterns
+  were all applied before any hostname pattern, so a short domain -- one
+  learned from an e-mail address, never declared with `ip domain-name` --
+  matched inside `hostname core-rtr-01.example.test`, rewrote the tail and left
+  the device's own name in the output. Names from every family are now ordered
+  longest-first together.
+
+- **Two-character usernames are no longer skipped.** The minimum length for a
+  hostname or username was three characters, so a real two-letter operator
+  account survived a policy that said to pseudonymise it. The minimum is now
+  two; a single character is still left alone, because rewriting every bare
+  letter in a config would do more harm than the name is worth.
+
+- **`netredact config | head` exits quietly.** Closing the pipe raised
+  `BrokenPipeError` and printed a traceback, twice over -- once from the write
+  and again when the interpreter flushed the dead stream on the way out. A
+  reader that has seen enough is not a failure, so the exit code is now 0 and
+  nothing is printed.
+
 ## [0.1.0] - 2026-08-19
 
 First release.
