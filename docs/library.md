@@ -19,7 +19,7 @@ for finding in result.findings:
 Config.load()                             # discover, or built-in defaults
 Config.load("netredact.toml")             # explicit path
 Config.load(path, search=False)           # no fallback search
-Config.from_dict({"policy": {"text": "hash"}})
+Config.from_dict({"text": {"default": "hash"}})
 Config()                                  # defaults, constructed directly
 ```
 
@@ -30,7 +30,7 @@ you assign is an action string:
 from netredact import Config
 
 cfg = Config()
-cfg.policy.text = "hash"                  # a whole family
+cfg.text.default = "hash"                 # a whole family
 cfg.policy.usernames = "pseudo"
 cfg.ipv4.default = "keep"                 # every class not named
 cfg.ipv4.other_unicast = "pseudo"         # one class
@@ -74,8 +74,8 @@ Invalid values raise `ConfigError` at construction, not at use, and the message
 names the offender:
 
 ```python
->>> Config.from_dict({"policy": {"secrets": "pseudo"}})
-ConfigError: [policy] secrets: pseudo is not available for secrets: use hash
+>>> Config.from_dict({"secrets": {"default": "pseudo"}})
+ConfigError: [secrets] default: pseudo is not available for secrets: use hash
 for an opaque marker, or redact
 
 >>> Config.from_dict({"identity": {"nosuch": "keep"}})
@@ -86,8 +86,8 @@ default, license-udi, pem-cert, serial-number, snmp-engineid, ssh-public-key
 ConfigError: [text]: serial-number is a rule in [identity], not in [text]: set
 it as [identity] serial-number
 
->>> Config.from_dict({"policy": {"text": "shred"}})
-ConfigError: [policy] text: unknown action 'shred'. Expected one of keep,
+>>> Config.from_dict({"text": {"default": "shred"}})
+ConfigError: [text] default: unknown action 'shred'. Expected one of keep,
 pseudo, hash, redact
 
 >>> Config.from_dict({"macs": {"oui": "hash", "nic": "pseudo"}})

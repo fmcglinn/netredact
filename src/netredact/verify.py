@@ -102,10 +102,11 @@ HANDLED_BODY_RE = re.compile(
                   sorted({REMOVED, DESC_REMOVED, *REDACT_CONST.values()})])
     + r')"?\s*$')
 
-#: names in :data:`VERIFY_RULES` that the ``identity`` action gates, because
-#: what they find is device identity rather than a credential. ``pem-left``
-#: is only half-gated: see :data:`PEM_CERT_RE`.
-IDENTITY_GATED = ("ssh-key-left",)
+#: checks gated by the resolved action of the identity rule whose material
+#: they recognise. A per-rule override must activate its check even when the
+#: family default is ``keep``. ``pem-left`` is only half-gated and is handled
+#: separately below: see :data:`PEM_CERT_RE`.
+IDENTITY_GATED = {"ssh-key-left": "ssh-public-key"}
 
 #: checks that recognise a *shape* rather than a keyword. They cannot tell what
 #: the material is, so they are blinded to anything a named ``identity`` or
@@ -246,14 +247,13 @@ def verify(lines, config: Config | None = None) -> list[Finding]:
                         re.I)
     active = [(n, p) for n, p in VERIFY_RULES
               if n not in disabled and n not in IDENTITY_GATED and n != "pem-left"]
-    identity_acts = cfg.action_for("identity") != "keep"
-    if identity_acts:
-        active += [(n, p) for n, p in VERIFY_RULES
-                   if n in IDENTITY_GATED and n not in disabled]
+    active += [(n, p) for n, p in VERIFY_RULES
+               if n in IDENTITY_GATED and n not in disabled
+               and cfg.action_for_rule(IDENTITY_GATED[n]) != "keep"]
     # ``pem-left`` is line-based like the rest, but only fires once the body is
     # known to still hold material, so it is evaluated apart from `active`
     pem_pats = [] if "pem-left" in disabled else [dict(VERIFY_RULES)["pem-left"]]
-    if pem_pats and identity_acts:
+    if pem_pats and cfg.action_for_rule("pem-cert") != "keep":
         pem_pats.append(PEM_CERT_RE)
     check_email = cfg.action_for("emails") != "keep" and "email-left" not in disabled
     check_v4 = cfg.ipv4.any_active() and "ipv4-left" not in disabled

@@ -352,6 +352,8 @@ def test_a_marker_is_never_re_marked():
                        ("description", "<DESC-abc123>"),
                        ("description", "<DESCRIPTION-REMOVED>"),
                        ("description", "desc-abc123"),
+                       ("patch-name", "<REMOVED>"),
+                       ("pseudowire-name", "<REMOVED>"),
                        ("serial-number", "<REMOVED>"),
                        ("hostnames", "device-abc123"),
                        ("hostnames", "redacted"),

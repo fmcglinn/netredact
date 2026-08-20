@@ -81,11 +81,33 @@ def test_identity_gated_checks():
                               for f in verify([line], policy(identity="hash"))}
 
 
+def test_per_rule_ssh_action_activates_its_check_when_identity_default_keeps():
+    line = "weird-vendor pubkey AAAAB3NzaC1yc2EAAAADAQABAAABgQ"
+    cfg = Config()
+    cfg.identity.ssh_public_key = "hash"
+    assert "ssh-key-left" in {f.check for f in verify([line], cfg)}
+
+
 def test_a_pem_certificate_is_identity_but_a_pem_key_is_a_secret():
     assert verify(PEM_CERT, Config()) == []               # identity is kept
     assert "pem-left" in {f.check for f in verify(PEM_KEY, Config())}
     assert "pem-left" in {f.check
                           for f in verify(PEM_CERT, policy(identity="redact"))}
+
+
+def test_per_rule_pem_cert_action_activates_its_check_when_identity_default_keeps():
+    cfg = Config()
+    cfg.identity.pem_cert = "hash"
+    assert "pem-left" in {f.check for f in verify(PEM_CERT, cfg)}
+
+
+def test_per_rule_certificate_block_action_exposes_a_surviving_body_to_checks():
+    lines = ["certificate self-signed 01",
+             "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbg==",
+             "quit"]
+    cfg = Config()
+    cfg.identity.certificate_block = "hash"
+    assert "long-base64-left" in {f.check for f in verify(lines, cfg)}
 
 
 @pytest.mark.parametrize("body", ["<REMOVED>", "<SECRET-a1b2c3>"])

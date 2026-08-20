@@ -512,7 +512,7 @@ class Config:
     ipv4: IPv4Policy = field(default_factory=IPv4Policy)
     ipv6: IPv6Policy = field(default_factory=IPv6Policy)
     macs: MacPolicy = field(default_factory=MacPolicy)
-    #: the four rule-named families, one section each
+    #: the seven rule-named families, one section each
     secrets: SecretsPolicy = field(default_factory=SecretsPolicy)
     text: TextPolicy = field(default_factory=TextPolicy)
     identity: IdentityPolicy = field(default_factory=IdentityPolicy)
@@ -559,7 +559,7 @@ class Config:
     def action_for(self, family: str) -> str:
         """The family-level action.
 
-        The four ``[policy]`` families answer from ``[policy]``. The four
+        The four ``[policy]`` families answer from ``[policy]``. The seven
         rule-named families, and ``ipv4`` / ``ipv6``, answer with their
         section's ``default`` -- the per-rule and per-class detail lives in
         :meth:`action_for_rule` and :meth:`IPv4Policy.action`. ``macs`` is

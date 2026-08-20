@@ -24,7 +24,7 @@ found this way during development, not hypotheticals.
 
 **Verify cannot flag a policy choice, and it is important to understand why.**
 
-Suppose you leave `[policy] text = "keep"`, which is the default, and the output
+Suppose you leave `[text] default = "keep"`, which is the default, and the output
 still contains `description Customer ACME - SVC-88412`. Is that a finding? An
 unconditional text check would fire on that line for every config at stock
 defaults, which is noise, not a warning. A conditional one would never fire,
@@ -53,11 +53,11 @@ The full table, with the gate on each check, is in the
 `long-base64-left`, `credential-left`, and `pem-left` for a private key or DH
 parameter block.
 
-These fire **regardless of policy**. If you set `[policy] secrets = "keep"`, or
+These fire **regardless of policy**. If you set `[secrets] default = "keep"`, or
 `[secrets] enable-secret = "keep"`, the output still fails `--strict`:
 
 ```
-$ netredact config.txt --strict        # with [policy] secrets = "keep"
+$ netredact config.txt --strict        # with [secrets] default = "keep"
   VERIFY: 19 line(s) a human should look at
     L9 [crypt-hash-left] enable secret 5 $1$mERr$M6KsMCsLPnvvKmnZkH3xF/
     L9 [credential-left] enable secret 5 $1$mERr$M6KsMCsLPnvvKmnZkH3xF/
@@ -77,11 +77,13 @@ a password is not quietly declared clean.
 `email-left`, `ipv4-left`, `ipv6-left`, `ssh-key-left`, and the *certificate*
 half of `pem-left`.
 
-Each of these runs only when the relevant family is not `keep` — e-mail on
-`[policy] emails`, addresses per class in `[ipv4]` / `[ipv6]`, SSH keys and
-certificates on `[policy] identity`. Otherwise they would fire on every line of
-a config you deliberately chose not to touch, and the report would be unreadable
-for exactly the users who read it most carefully.
+Each of these runs only when its relevant resolved action is not `keep` — e-mail
+on `[policy] emails`, addresses per class in `[ipv4]` / `[ipv6]`, SSH keys on
+`[identity] ssh-public-key`, and certificates on `[identity] pem-cert`. A rule
+override activates its check even when the section's `default` remains `keep`.
+Otherwise these checks would fire on every line of a config you deliberately
+chose not to touch, and the report would be unreadable for exactly the users who
+read it most carefully.
 
 The address checks use the **same classification as the sanitiser**, so they
 report genuine misses — an address whose class you act on that nevertheless

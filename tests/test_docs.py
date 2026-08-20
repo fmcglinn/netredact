@@ -1,6 +1,7 @@
 """The shipped examples must load and work, and generated docs must be current."""
 
 import itertools
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -149,6 +150,18 @@ def test_generated_docs_are_up_to_date():
     rc = subprocess.run([sys.executable, "tools/gen_docs.py", "--check"],
                         cwd=ROOT, capture_output=True, text=True)
     assert rc.returncode == 0, rc.stdout + rc.stderr
+
+
+def test_public_api_docs_do_not_use_removed_policy_family_keys():
+    """Family sections replaced [policy] keys and cfg.policy attributes."""
+    pages = (DOCS / "library.md", DOCS / "verification.md")
+    removed = re.compile(
+        r"\[policy\]\s+(?:text|secrets|identity)\b"
+        r"|cfg\.policy\.(?:text|secrets|identity)\b"
+        r'|\{"policy":\s*\{"(?:text|secrets|identity)"'
+    )
+    for path in pages:
+        assert removed.search(path.read_text()) is None, path
 
 
 @pytest.mark.parametrize("name", [

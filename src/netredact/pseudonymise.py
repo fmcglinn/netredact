@@ -165,6 +165,7 @@ _PSEUDO_RE["emails"] = f"{_PSEUDO_RE['usernames']}@{_PSEUDO_RE['domains']}"
 #: family -> constants this module already produced with `redact`
 _REDACTED_CONSTS = {
     "secrets": (REMOVED,),
+    "circuits": (REMOVED,),
     "identity": (REMOVED,),
     "platform": (REMOVED,),
     "text": (REMOVED, DESC_REMOVED),

@@ -85,6 +85,7 @@ choice:
 | `text` | `desc-f11e24` | `<DESC-f11e24>` | `<DESCRIPTION-REMOVED>` |
 | `interfaces` | `desc-f11e24` | `<DESC-f11e24>` | `<DESCRIPTION-REMOVED>` |
 | `vlans` | `vlname-f11e24` | `<VLAN-f11e24>` | `<REMOVED>` |
+| `circuits` | `circuit-f11e24` | `<CIRCUIT-f11e24>` | `<REMOVED>` |
 | `identity` | `SN-f11e24` | `<SERIAL-f11e24>` | `<REMOVED>` |
 | `platform` | `model-f11e24` | `<MODEL-f11e24>` | `<REMOVED>` |
 | `hostnames` | `device-abc123` | `<HOST-abc123>` | `redacted` |
@@ -110,6 +111,13 @@ netredact recognises its own output so a second pass is a no-op — and
 as something it had already sanitised and leave standing. A marker prefix is
 safe from that (`<VLAN-a1b2c3>` collides with nothing); a bare token is not.
 The same reasoning already picked `ver-…` over `version-…` for `os-version`.
+
+`circuits` uses one rendering for both patch names and pseudowire names. A
+name can occur in a patch-panel connector and again in an MPLS LDP section;
+sharing the `circuit-…` / `<CIRCUIT-…>` rendering preserves that relationship
+without revealing the name. The bare token avoids `patch-…` and
+`pseudowire-…`, which can look like real syntax, while `<REMOVED>` deliberately
+destroys the relationship for `redact`.
 
 ## One illegal cell
 
