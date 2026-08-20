@@ -20,3 +20,4 @@ netredact.map.json
 .idea/
 .vscode/
 .DS_Store
+*.swp
