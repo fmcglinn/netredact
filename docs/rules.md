@@ -23,7 +23,7 @@ to the section each belongs to.
 | Token | Expands to |
 |---|---|
 | `<ENC>` | `(?:\d+\|sha512\|sha256\|sha1\|md5\|encrypted\|clear\|ascii\|ascii-text\|hex\|hexadecimal\|plain-text)` |
-| `<VAL>` | `(?:"[^"]*"\|\'[^\']*\'\|[^\s;]+)` |
+| `<VAL>` | `(?!(?:/\*\s*(?:ACCESS-DENIED\|SECRET-DATA)\s*\*/))(?:(?:"[^"]*")\|(?:\'[^\']*\')\|[^\s;]+)` |
 | `%VAL%` | `<VAL>` as a *capturing* group |
 
 `<ENC>` is the optional encoding or algorithm hint between a keyword

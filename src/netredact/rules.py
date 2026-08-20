@@ -83,8 +83,13 @@ __all__ = [
 REMOVED = "<REMOVED>"
 DESC_REMOVED = "<DESCRIPTION-REMOVED>"
 
+#: RANCID writes these comments where the device denied access to a value.
+#: They are evidence that the credential is already absent, not values whose
+#: opening ``/*`` token should be replaced.
+RANCID_SENTINEL = r"/\*\s*(?:ACCESS-DENIED|SECRET-DATA)\s*\*/"
+
 #: a value: a quoted string, or a run of non-space non-semicolon characters
-VAL = r'(?:"[^"]*"|\'[^\']*\'|[^\s;]+)'
+VAL = rf'(?!(?:{RANCID_SENTINEL}))(?:(?:"[^"]*")|(?:\'[^\']*\')|[^\s;]+)'
 #: what a custom / built-in pattern writes to borrow ``VAL``. It expands to a
 #: *capturing* group: a pattern that spells out ``%VAL%`` has said where the
 #: value is, so it must take the explicit-groups path. Expanding it
@@ -92,7 +97,7 @@ VAL = r'(?:"[^"]*"|\'[^\']*\'|[^\s;]+)'
 #: path appended a second value matcher and ``hunter2`` became ``hunter<REMOVED>``.
 VAL_MACRO = "%VAL%"
 #: the capturing spelling of :data:`VAL`, substituted for :data:`VAL_MACRO`
-VAL_GROUP = r"""("[^"]*"|'[^']*'|[^\s;]+)"""
+VAL_GROUP = rf"""((?!(?:{RANCID_SENTINEL}))(?:"[^"]*"|'[^']*'|[^\s;]+))"""
 #: encoding / algorithm hints that sit between the keyword and the secret
 ENC = (r"(?:\d+|sha512|sha256|sha1|md5|encrypted|clear|ascii|ascii-text|hex|"
        r"hexadecimal|plain-text)")

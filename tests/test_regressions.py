@@ -244,6 +244,23 @@ def test_junos_access_denied_secret_placeholder_is_already_safe():
     assert result.findings == []
 
 
+@pytest.mark.parametrize("keyword", [
+    "authentication-key",
+    "privacy-key",
+    "encrypted-password",
+    "secret",
+])
+def test_junos_secret_data_placeholder_is_already_safe(keyword):
+    """RANCID's inaccessible-value sentinel is not itself a credential."""
+    text = f"set protocols bgp group rise-rr {keyword} /* SECRET-DATA */\n"
+
+    result = sanitise_text(text, Config(), salt=SALT)
+
+    assert result.text == text
+    assert result.findings == []
+    assert not result.counts
+
+
 # --------------------------------------------------------------------------
 # 8: the shape-check exemption, and its deliberate asymmetry
 # --------------------------------------------------------------------------
