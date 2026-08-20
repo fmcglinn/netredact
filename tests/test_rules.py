@@ -22,7 +22,7 @@ def test_every_rule_has_a_family_and_the_split_is_as_designed():
     names = rule_names()
     counts = Counter(family_of(name) for name in names)
     assert counts == {"secrets": 32, "text": 7, "identity": 6, "platform": 4,
-                      "interfaces": 1, "vlans": 1}
+                      "interfaces": 1, "vlans": 1, "circuits": 2}
     assert sum(counts.values()) == len(names)
     assert set(counts) <= set(FAMILIES)
 
@@ -66,6 +66,10 @@ def test_family_of_rejects_an_unknown_name():
     # of its own: see rules.BLOCK_SCOPES
     ("interface-description", "interfaces"),
     ("vlan-name", "vlans"),
+    # a name the config refers to from more than one place, so a substitution
+    # has to keep equal names equal -- not free text
+    ("patch-name", "circuits"),
+    ("pseudowire-name", "circuits"),
 ])
 def test_rule_families(name, family):
     assert family_of(name) == family
@@ -139,13 +143,39 @@ def test_only_snmp_host_has_a_handler():
     assert handlers == {"snmp-host": "snmp-host"}
 
 
+def test_a_vendor_label_is_advisory_and_names_a_real_rule():
+    """``RULE_VENDORS`` is documentation, so the only thing to hold is that it
+    cannot go stale: every key is a rule that exists, and every value is a
+    vendor the detector can actually name.
+
+    What it must NOT do is change behaviour. That is asserted where it would
+    show -- ``test_scopes.test_a_vendor_label_never_gates_a_rule`` -- because a
+    label that gated would be a fail-open path: detection is a whole-file guess
+    over material the ``platform`` family deletes, and a misread file would
+    then skip rules silently.
+    """
+    from netredact.rules import RULE_VENDORS, vendor_of
+    from netredact.vendors import VENDOR_NAMES
+
+    assert set(RULE_VENDORS) <= set(rule_names()), "labels a rule that is gone"
+    assert set(RULE_VENDORS.values()) <= set(VENDOR_NAMES)
+    assert vendor_of("patch-name") == "arista"
+    assert vendor_of("enable-secret") is None, "unlabelled, not vendor-neutral"
+
+    # the label reaches the Rule objects, for --list-rules and the docs
+    labelled = {r.name: r.vendor for r in build_rules() if r.vendor}
+    assert labelled == {n: v for n, v in RULE_VENDORS.items()
+                        if n in {r.name for r in build_rules()}}
+
+
 def test_scoped_rules_name_the_block_they_need():
     """A scope is a JunOS stanza or an IOS-style block, under one set of names."""
     stanzas = {r.name: r.stanza for r in build_rules() if r.stanza}
     assert stanzas == {"junos-community": "snmp",
                        "junos-location-body": "location",
                        "interface-description": "interfaces",
-                       "vlan-name": "vlans"}
+                       "vlan-name": "vlans",
+                       "patch-name": "patch-panel"}
 
 
 def test_the_generic_description_rule_is_scoped_out_of_interfaces():

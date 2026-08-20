@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT_CONFIG_NAMES, Config, ConfigError
-from .rules import BUILTIN, OUTSIDE, family_of, rule_names
+from .rules import BUILTIN, OUTSIDE, family_of, rule_names, vendor_of
 from .sanitise import Result, sanitise_text
 from .verify import check_names
 
@@ -241,16 +241,21 @@ def list_rules() -> None:
     stanzas = {name: stanza for name, _pattern, _family, stanza in BUILTIN}
     print('rules (set one by name in its family\'s section, e.g. '
           '[text] location = "hash"):')
-    print(f"  {'rule':24} {'section':12} where it applies")
+    print(f"  {'rule':24} {'section':12} {'dialect':9} where it applies")
     for name in rule_names():
         stanza = stanzas.get(name)
         extra = f"[stanza: {stanza}]" if stanza else ""
         for out in OUTSIDE.get(name, ()):
             extra += f"[outside: {out}]"
-        print(f"  {name:24} {family_of(name):12} {extra}".rstrip())
+        vendor = vendor_of(name) or ""
+        print(f"  {name:24} {family_of(name):12} {vendor:9} {extra}".rstrip())
     print("\nA rule's action comes from one place: the section named above,"
           "\nwhich either names the rule or falls back to that section's"
           "\n`default`. The family also decides how the replacement renders.")
+    print("\n`dialect` is a label, not a filter: every rule is applied to every"
+          "\nfile. A rule is held to one vendor's grammar by its pattern and by"
+          "\nthe block it has to be inside -- evidence in the file -- and never"
+          "\nby what the vendor detector guessed the file was.")
     print("\nverification checks (disable by name in verify.disable):")
     for name in check_names():
         print(f"  {name}")

@@ -7,9 +7,9 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**51 rules**: 32 `secrets`, 7 `text`, 6 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`.
+**53 rules**: 32 `secrets`, 7 `text`, 6 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`, 2 `circuits`.
 
-- 41 keyword rules
+- 43 keyword rules
 - 5 inline rules
 - 4 multi-line block handlers
 - 1 banner handler
@@ -62,20 +62,44 @@ stay out of, and two kinds of block share one set of names:
 | Scope | Opened by |
 |---|---|
 | a JunOS stanza | `interfaces {`, `snmp {`, `location {` — the brace stack |
-| an IOS-style block | `interfaces`: `^interface\s+\S`, `vlans`: `^vlan\s+(?:\d\|database\b)` at column zero, plus the indented lines under it |
+| an IOS-style block | `interfaces`: `^interface\s+\S`, `vlans`: `^vlan\s+(?:\d\|database\b)`, `patch-panel`: `^patch\s+panel\b` at column zero, plus the indented lines under it |
 | one JunOS `set` line | the word after `set`, for that line only |
 
-The names are JunOS's own — `interfaces`, `vlans` — so one rule covers
-every dialect: an IOS `interface Gi0/0` block, a JunOS
-`interfaces { … }` stanza and a `set interfaces … description …` line
-are all inside `interfaces`. Any other unindented line ends an
-IOS-style block, including the bare `!`.
+Where both dialects have the block the name is JunOS's own —
+`interfaces`, `vlans` — so one rule covers every dialect: an IOS
+`interface Gi0/0` block, a JunOS `interfaces { … }` stanza and a
+`set interfaces … description …` line are all inside `interfaces`.
+A block only one vendor has keeps its own name: `patch-panel`. Any
+other unindented line ends an IOS-style block, including the bare
+`!`.
 
 `interface Vlan905` is scope `interfaces`, not `vlans`: an SVI is a
 port, and only a `vlan <id>` block defines a VLAN.
 
 This is also what `[[custom]] stanza` sets, so a custom rule can be
 restricted to a block on any vendor, not only a JunOS stanza.
+
+## Dialects are labelled, not gated
+
+Some rules only make sense in one vendor's grammar, and the table
+below says which — `arista` on `patch-name`, `juniper` on
+`junos-type9`. That label is documentation. **Every rule is applied
+to every file**, and nothing netredact does depends on the vendor it
+reports.
+
+That is deliberate, and the reason is the detector. Vendor detection
+is a whole-file heuristic reading exactly the material the
+`platform` family exists to delete, and it answers `unknown` for the
+input a redaction tool is handed most often: a pasted fragment with
+no header on it. A rule that fired only when the detector agreed
+would skip credential rules on a misread file, silently, and
+`--strict` would still exit 0 — a fail-open path in a tool whose
+promise is fail-safe.
+
+So a vendor-specific rule is confined by **evidence in the file**
+instead. `patch-name` cannot fire on a JunOS config because it has
+to be inside a `patch panel` block, and that grammar opens none.
+Scope is the gate; the dialect column is a caption.
 
 ## Keyword rules
 
@@ -94,7 +118,7 @@ Matched from the start of a line.
 | `key-hash` | `secrets` | `key-hash <alg> X`, `hash <alg> X` | `\s*(?:key-hash\|hash)\s+\S+\s+` |
 | `license-entitlement-key` | `secrets` | `license keys key X` -- the entitlement key, not the UDI | `\s*(?:set\s+system\s+)?license\s+keys\s+key\s+` |
 | `snmp-community` | `secrets` | `snmp-server community X`, `set snmp community X` | `\s*(?:snmp-server\|set\s+snmp)\s+community\s+` |
-| `junos-community` | `secrets` | JunOS `community X { ... }` -- only in scope `snmp` | `\s*community\s+` |
+| `junos-community` | `secrets` | JunOS `community X { ... }` -- only in scope `snmp` -- juniper grammar | `\s*community\s+` |
 | `snmp-host` | `secrets` | the community or v3 user on an `snmp-server host` line | `^\s*snmp-server\s+host\s+\S+\s+(.*)$` |
 | `snmp-v3-auth` | `secrets` | `auth md5\|sha X` | `.*\bauth\s+(?:md5\|sha\d*)\s+` |
 | `snmp-v3-priv` | `secrets` | `priv [aes N\|des\|3des] X`, cipher optional for NX-OS | `.*\bpriv\s+(?:(?:aes(?:\s+\d+)?\|des\|3des)\s+)?` |
@@ -110,20 +134,22 @@ Matched from the start of a line.
 | `ppp-credential` | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` | `\s*ppp\s+(?:chap\|pap\|eap)\s+(?:password\|secret\|sent-username\s+\S+\s+password)\s+(?:<ENC>\s+)*` |
 | `wpa-psk` | `secrets` | `wpa-psk X` | `.*\bwpa-psk\s+(?:<ENC>\s+)*` |
 | `ftp-password` | `secrets` | `ip ftp\|tftp\|http client password X` | `\s*ip\s+(?:ftp\|tftp\|http\s+client)\s+password\s+(?:<ENC>\s+)*` |
-| `junos-password` | `secrets` | `encrypted-password`, `plain-text-password-value` | `.*\b(?:encrypted-password\|plain-text-password-value)\s+` |
-| `unsupported-transceiver` | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name | `^\s*service\s+unsupported-transceiver\s+(?![{}\s]*$)%VAL%(?:\s+%VAL%)?\s*$` |
+| `junos-password` | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar | `.*\b(?:encrypted-password\|plain-text-password-value)\s+` |
+| `unsupported-transceiver` | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar | `^\s*service\s+unsupported-transceiver\s+(?![{}\s]*$)%VAL%(?:\s+%VAL%)?\s*$` |
 | `hardware-model` | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; and the model in Arista's `! device: <name> (<model>, <release>)` header | `(?:^\s*!?\s*(?:hardware(?:\s+(?:model\|version\|revision))?\|model(?:\s+(?:number\|name))?\|chassis(?:\s+type)?\|product(?:\s+id)?\|platform\|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*!\s*device:\s*\S+\s*\(([^)]+),)` |
 | `os-version` | `platform` | a line that is just `version <digits...>`: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;`; and the release in Arista's `! device:` header | `(?:^\s*version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$)` |
 | `software-image` | `platform` | `Software image version:`, `System image file is ...`, `Software version:`; and the bare `Junos:` / `EOS:` forms, where a colon is required | `^\s*!?\s*(?:(?:software\s+image\s+version\|system\s+image\s+file(?:\s+is)?\|(?:software\|firmware\|image\|junos\|eos\|os)\s+version)(?:\s*[:=]\s*\|\s+)\|(?:junos\|eos)\s*[:=]\s*)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `boot-image` | `platform` | `boot system <image>`, commented out or not | `^\s*!?\s*boot\s+system\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `location` | `text` | the whole value of a `location` line; never a JunOS `location {` stanza opener | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `contact` | `text` | the whole value of a `contact` line | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
-| `junos-location-body` | `text` | the street address inside a JunOS `location { ... }` stanza -- only in scope `location` | `^\s*(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
+| `junos-location-body` | `text` | the street address inside a JunOS `location { ... }` stanza -- only in scope `location` -- juniper grammar | `^\s*(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `description` | `text` | a `description` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down -- never in scope `interfaces` | `^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `acl-remark` | `text` | an ACL `remark` | `^\s*remark\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `login-message` | `text` | `banner login`-style `message` and `announcement` text | `^\s*(?:set\s+system\s+login\s+)?(?:message\|announcement)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `interface-description` | `interfaces` | the same `description` line, when it is inside an interface: `interface Gi0/0`, JunOS `interfaces { … }`, `set interfaces … description …` -- only in scope `interfaces` | `^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |
 | `vlan-name` | `vlans` | the `name` under a `vlan <id>` block, and the one-line `vlan <id> name <name>` form. Never an SVI: `interface Vlan905` is an interface -- only in scope `vlans` | `\s*(?:vlan\s+\d+\s+)?name\s+` |
+| `patch-name` | `circuits` | the name of a `patch` inside a `patch panel` block. The `patch panel` header itself is never the value -- only in scope `patch-panel` -- arista grammar | `\s+patch\s+(?!panel(?![-\w]))` |
+| `pseudowire-name` | `circuits` | a pseudowire name, both where it is defined under `mpls ldp` -> `pseudowires` and where a `connector` line refers to it (`pseudowire ldp X alternate Y`). One rule, so a definition and its references can never be given two different actions -- arista grammar | `(?:^\s*connector\s+\d+\s+pseudowire\s+ldp\s+%VAL%(?:\s+alternate\s+%VAL%)?\s*$\|^\s+pseudowire\s+(?![{}\s]*$)%VAL%\s*$)` |
 
 ## Inline rules
 
@@ -177,18 +203,18 @@ A third group only recognises a *shape*:
 `ssh-key-left`, `pem-left`, `long-hex-left`, `long-base64-left`. A long base64 run is
 an authorised SSH key or a leaked one, and the check cannot tell
 which, so those four are blinded to the spans that a kept
-`identity` / `text` / `interfaces` / `vlans` rule matched -- including the body of a kept
+`identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched -- including the body of a kept
 block. A kept `secrets` rule never blinds anything.
 
 | Check | Fires when | Gated by |
 |---|---|---|
 | `crypt-hash-left` | a `$1$`/`$5$`/`$6$`-style hash survived | always |
 | `junos-type9-left` | a JunOS `$9$` blob survived | always |
-| `ssh-key-left` | SSH key material survived | `[policy] identity` is not `"keep"` -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` rule matched |
-| `pem-left` | a `-----BEGIN` block survived -- private keys and DH parameters always, certificates only when `identity` acts | always for a private key; the certificate half needs `identity` to act -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` rule matched |
+| `ssh-key-left` | SSH key material survived | `[policy] identity` is not `"keep"` -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
+| `pem-left` | a `-----BEGIN` block survived -- private keys and DH parameters always, certificates only when `identity` acts | always for a private key; the certificate half needs `identity` to act -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
 | `type7-left` | a Cisco type-7 string survived | always |
-| `long-hex-left` | an unexplained run of 24+ hex characters | always -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` rule matched |
-| `long-base64-left` | an unexplained run of 40+ base64 characters | always -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` rule matched |
+| `long-hex-left` | an unexplained run of 24+ hex characters | always -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
+| `long-base64-left` | an unexplained run of 40+ base64 characters | always -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
 | `credential-left` | a credential keyword not followed by a placeholder | always |
 | `email-left` | an e-mail address survived | `[policy] emails` is not `"keep"` |
 | `ipv4-left` | an IPv4 address survived whose class `[ipv4]` acts on | some `[ipv4]` class acts |

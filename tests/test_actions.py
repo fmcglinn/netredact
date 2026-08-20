@@ -23,6 +23,13 @@ TABLE = [
     # the pseudo token is `vlname`, never `vlan`: `VLAN-100` is a plausible real
     # VLAN name and would then read as already sanitised
     ("vlan-name",         "vlname-7ae0e1",         "<VLAN-7ae0e1>",   "<REMOVED>"),
+    # the two circuits rules render IDENTICALLY from one value, and that is a
+    # contract rather than a coincidence: a pseudowire named on a `connector`
+    # line and defined under `mpls ldp` is found by different branches, and the
+    # output only loads while both come out as the same name. Give either rule
+    # a prefix of its own and these two rows stop matching.
+    ("patch-name",        "circuit-7ed66c",        "<CIRCUIT-7ed66c>", "<REMOVED>"),
+    ("pseudowire-name",   "circuit-7ed66c",        "<CIRCUIT-7ed66c>", "<REMOVED>"),
     ("acl-remark",        "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
     ("login-message",     "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
     ("location",          "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
@@ -46,6 +53,8 @@ VALUE = {
     "secrets": "hunter2",
     "description": "a description", "acl-remark": "a description",
     "interface-description": "a description", "vlan-name": "ACME-CORP-DATA",
+    "patch-name": "acme_ORD000000111222",
+    "pseudowire-name": "acme_ORD000000111222",
     "login-message": "a description", "location": "a description",
     "contact": "a description", "banner": "a description",
     "serial-number": "FDO123", "license-udi": "PID:X,SN:Y",

@@ -27,6 +27,12 @@ default = "hash"
 [vlans]
 default = "pseudo"
 
+# A patch or pseudowire name is usually an order reference with a customer in
+# it. The reviewer needs to see which circuits are wired to what, not whose
+# they are, and pseudo is the only action that keeps the wiring readable.
+[circuits]
+default = "pseudo"
+
 [identity]
 default = "hash"       # serials, certificates and keys become markers
 

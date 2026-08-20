@@ -29,7 +29,7 @@ def load(tmp_path, body: str) -> Config:
 def test_actions_and_families():
     assert ACTIONS == ("keep", "pseudo", "hash", "redact")
     assert FAMILIES == ("secrets", "text", "identity", "platform",
-                        "interfaces", "vlans",
+                        "interfaces", "vlans", "circuits",
                         "hostnames", "domains", "usernames", "emails",
                         "ipv4", "ipv6", "macs")
 

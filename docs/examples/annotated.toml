@@ -157,6 +157,27 @@ default = "keep"  # the action for every rule not named below
 # Per-rule actions. Commented out means: inherit `default`.
 # vlan-name = "keep"
 
+# What a cross-connect or a pseudowire is called: Arista `patch panel`
+# names, and the pseudowires under `mpls ldp`. On a provider edge
+# these are order and customer references -- the stuff a ticket number
+# is made of.
+#
+# Like a VLAN name and unlike a description, these are not free text:
+# a `connector` line names a pseudowire that another section defines,
+# so both mentions have to survive as the same name. `pseudo` does
+# that (`circuit-f11e24`); `redact` collapses every circuit onto one
+# constant, so only use it where the output never has to load.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[circuits]
+default = "keep"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# patch-name      = "keep"
+# pseudowire-name = "keep"
+
 # The four families that have no rules: the collect pass reads these
 # names off the lines that declare them and then substitutes them
 # wherever they appear, so there is nothing to name per rule. Every
@@ -264,7 +285,7 @@ ignore_patterns = []     # regexes to treat as expected, not as findings
 # [[custom]]
 # name = "acme-shared-key"
 # pattern = '\s*acme\s+shared-key\s+'
-# family = "secrets"    # secrets | text | identity | platform | interfaces | vlans | hostnames | domains | usernames | emails | ipv4 | ipv6 | macs
+# family = "secrets"    # secrets | text | identity | platform | interfaces | vlans | circuits | hostnames | domains | usernames | emails | ipv4 | ipv6 | macs
 # action = "redact"     # optional; without it the family decides
-# stanza = "snmp"       # optional: a JunOS stanza, or interfaces / vlans
-#                       # for the IOS-style block of that name
+# stanza = "snmp"       # optional: a JunOS stanza, or an IOS-style block
+#                       # scope: interfaces / vlans / patch-panel

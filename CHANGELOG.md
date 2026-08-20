@@ -94,6 +94,56 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **A `[circuits]` section, with the `patch-name` and `pseudowire-name` rules.**
+  Arista's `patch panel` names and the pseudowires under `mpls ldp` are now
+  something a configuration can reach. On a provider edge these are order
+  references with a customer inside them — the material a ticket number is made
+  of — and nothing could touch them before.
+
+  ```toml
+  [circuits]
+  default = "pseudo"    #  patch acme_ORD000000111222  ->  patch circuit-f11e24
+  ```
+
+  `pseudo` is the action to reach for, for the reason `[vlans]` gives and one
+  more besides: these names are **cross-referenced**. A `connector` line names a
+  pseudowire that the `mpls ldp` section defines, so the two mentions have to
+  come out as the same name or the file no longer loads. They do — the pseudonym
+  is a function of the value, and both rules render through one prefix.
+
+  ```
+  patch panel
+     patch circuit-aa62dc
+        connector 1 pseudowire ldp circuit-e84f3c alternate circuit-fd5076
+        connector 2 interface Port-Channel1.100      <- structure, untouched
+  mpls ldp
+     pseudowires
+        pseudowire circuit-e84f3c                      <- the same name again
+  ```
+
+  The definition and the references of one pseudowire are two branches of
+  `pseudowire-name` rather than two rules, deliberately: two rules could be
+  given two actions and left pointing at nothing.
+
+- **A `patch-panel` block scope, and an advisory dialect label on every rule.**
+  `patch panel` joins `interfaces` and `vlans` as an IOS-style block a rule can
+  require, and it is the first whose name is not JunOS's — JunOS has no
+  equivalent block to share it with.
+
+  `netredact --list-rules` now prints a `dialect` column, and `docs/rules.md`
+  carries the same label: `arista` on `patch-name`, `juniper` on `junos-type9`.
+  **The label is documentation. Every rule is still applied to every file**, and
+  nothing netredact does depends on the vendor it reports.
+
+  That is deliberate. What keeps `patch-name` off a JunOS config is that it has
+  to be inside a `patch panel` block, and JunOS opens none — evidence in the
+  file rather than a guess about the file. Vendor detection is a whole-file
+  heuristic reading exactly the material `[platform]` deletes, and it answers
+  `unknown` for the input this tool is handed most often: a pasted fragment with
+  no header on it. A rule that fired only when the detector agreed would skip
+  credential rules on a misread file silently, and `--strict` would still exit
+  0 — a fail-open path in a tool whose promise is fail-safe.
+
 - **A `[vlans]` section, and the `vlan-name` rule.** The `name` under a
   `vlan <id>` block — and the one-line Catalyst `vlan <id> name <name>` form —
   is now something a configuration can reach. On a service-provider access

@@ -180,9 +180,9 @@ Findings are advisory, and some need judgement:
   near it is indistinguishable from a hostname.
 - Anything in the categories that are
   [never touched](README.md#never-touched). An ACL named `ACME-CORP-IN` will
-  never be reported. Nor will a VLAN name or an interface description that
-  `[vlans]` / `[interfaces]` were told to keep -- a value the policy kept on
-  purpose is not a miss.
+  never be reported. Nor will a VLAN name, a circuit name or an interface
+  description that `[vlans]` / `[circuits]` / `[interfaces]` were told to keep
+  -- a value the policy kept on purpose is not a miss.
 - Meaning. `description Bob's Bakery` is a customer name to you and ordinary
   text to a regex.
 

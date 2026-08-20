@@ -31,6 +31,12 @@ default = "redact"
 [vlans]
 default = "redact"       # <REMOVED>: a public post needs no VLAN names
 
+# <REMOVED> collapses every circuit onto one constant, so the output no longer
+# loads. That is the right trade here and nowhere else: a published config is
+# read, not reloaded.
+[circuits]
+default = "redact"
+
 [identity]
 default = "redact"       # serials, UDIs, engine IDs, certificates, SSH keys
 

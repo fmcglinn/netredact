@@ -27,6 +27,9 @@ default = "hash"
 [vlans]
 default = "pseudo"     # vlname-a1b2c3, and the config still loads
 
+[circuits]
+default = "pseudo"     # circuit-a1b2c3, and the cross-references still agree
+
 [identity]
 default = "hash"
 

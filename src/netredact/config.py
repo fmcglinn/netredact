@@ -43,6 +43,7 @@ __all__ = [
     "RULE_SECTIONS", "VENDORS", "Config", "PolicyConfig", "IPv4Policy",
     "IPv6Policy", "MacPolicy", "SecretsPolicy", "TextPolicy",
     "IdentityPolicy", "PlatformPolicy", "InterfacesPolicy", "VlansPolicy",
+    "CircuitsPolicy",
     "VerifyConfig", "CustomRule",
     "ConfigError", "find_config", "DEFAULT_CONFIG_NAMES",
 ]
@@ -54,6 +55,7 @@ ACTIONS = ("keep", "pseudo", "hash", "redact")
 
 #: the families a rule -- or a bare regex match -- belongs to
 FAMILIES = ("secrets", "text", "identity", "platform", "interfaces", "vlans",
+            "circuits",
             "hostnames", "domains", "usernames", "emails",
             "ipv4", "ipv6", "macs")
 
@@ -415,14 +417,33 @@ VlansPolicy = _rule_policy(
     in the config, so a type-valid ``vlname-f11e24`` keeps it loadable.
     """)
 
+CircuitsPolicy = _rule_policy(
+    "circuits", "keep",
+    """What a cross-connect or a pseudowire is called.
+
+    Arista's ``patch panel`` names and its ``mpls ldp`` pseudowires. On a
+    service-provider edge these are order and customer references -- the
+    material a ticket number is made of -- and unlike a description they are
+    not free text: the config refers to them by name from more than one place,
+    so a connector line and the pseudowire it points at have to come out the
+    other side still pointing at each other.
+
+    That is what makes ``pseudo`` the action to reach for, exactly as in
+    ``[vlans]``: ``circuit-f11e24`` is type-valid, the file still loads, and
+    two mentions of one name still read as one name. ``redact`` is honest but
+    collapses every circuit onto one constant, so use it only where the output
+    never has to load.
+    """)
+
 #: the families whose members are named rules, and so have a section each
 RULE_FAMILIES = ("secrets", "text", "identity", "platform",
-                 "interfaces", "vlans")
+                 "interfaces", "vlans", "circuits")
 
 #: family -> its section class
 RULE_SECTIONS = {"secrets": SecretsPolicy, "text": TextPolicy,
                  "identity": IdentityPolicy, "platform": PlatformPolicy,
-                 "interfaces": InterfacesPolicy, "vlans": VlansPolicy}
+                 "interfaces": InterfacesPolicy, "vlans": VlansPolicy,
+                 "circuits": CircuitsPolicy}
 
 #: rule name -> the section that rule is set in. Read off the rule table, so a
 #: rule refiled between families cannot be pointed at a stale section. One
@@ -498,6 +519,7 @@ class Config:
     platform: PlatformPolicy = field(default_factory=PlatformPolicy)
     interfaces: InterfacesPolicy = field(default_factory=InterfacesPolicy)
     vlans: VlansPolicy = field(default_factory=VlansPolicy)
+    circuits: CircuitsPolicy = field(default_factory=CircuitsPolicy)
     #: extra rules of your own
     custom: list[CustomRule] = field(default_factory=list)
     verify: VerifyConfig = field(default_factory=VerifyConfig)
@@ -962,6 +984,18 @@ _SECTION_INTROS = {
         "# `pseudo` is the one to reach for here: the config refers to a VLAN",
         "# by name elsewhere, so a type-valid `vlname-f11e24` still loads.",
     ],
+    "circuits": [
+        "# What a cross-connect or a pseudowire is called: Arista `patch panel`",
+        "# names, and the pseudowires under `mpls ldp`. On a provider edge",
+        "# these are order and customer references -- the stuff a ticket number",
+        "# is made of.",
+        "#",
+        "# Like a VLAN name and unlike a description, these are not free text:",
+        "# a `connector` line names a pseudowire that another section defines,",
+        "# so both mentions have to survive as the same name. `pseudo` does",
+        "# that (`circuit-f11e24`); `redact` collapses every circuit onto one",
+        "# constant, so only use it where the output never has to load.",
+    ],
 }
 
 _MACS_COMMENTS = {
@@ -1114,8 +1148,8 @@ _CUSTOM_EXAMPLE = [
     "# pattern = '\\s*acme\\s+shared-key\\s+'",
     '# family = "secrets"    # ' + " | ".join(FAMILIES),
     '# action = "redact"     # optional; without it the family decides',
-    '# stanza = "snmp"       # optional: a JunOS stanza, or interfaces / vlans',
-    "#                       # for the IOS-style block of that name",
+    '# stanza = "snmp"       # optional: a JunOS stanza, or an IOS-style block',
+    "#                       # scope: interfaces / vlans / patch-panel",
     "",
 ]
 

@@ -76,10 +76,10 @@ default       = "hash"       # the action for every rule not named below
 serial-number = "keep"       # TAC asks for it first
 ```
 
-Six families work this way — [`[secrets]`](#secrets), [`[text]`](#text),
+Seven families work this way — [`[secrets]`](#secrets), [`[text]`](#text),
 [`[identity]`](#identity), [`[platform]`](#platform),
-[`[interfaces]`](#interfaces) and [`[vlans]`](#vlans) — and between them they
-carry every rule; the [rule reference](rules.md) has the current count and the
+[`[interfaces]`](#interfaces), [`[vlans]`](#vlans) and
+[`[circuits]`](#circuits) — and between them they carry every rule; the [rule reference](rules.md) has the current count and the
 split. The shape is the same as `[ipv4]` one section down: a `default` plus the
 members it governs, so "all of this except that one" needs two lines rather
 than a list of everything else.
@@ -200,6 +200,54 @@ block defines a VLAN. A bare `name` line elsewhere — under a `route-map`, a
 `class-map`, a `crypto` policy — is outside every VLAN block and is never
 touched, which is what the scope buys.
 
+## `[circuits]`
+
+What a cross-connect or a pseudowire is called: Arista's `patch panel` names
+and the pseudowires under `mpls ldp`. Two rules, `patch-name` and
+`pseudowire-name`.
+
+```
+patch panel
+   patch acme_ORD000000111222                       ->  patch circuit-f11e24
+      connector 1 pseudowire ldp acme_…_1 alternate acme_…_2
+      connector 2 interface Port-Channel1.100     ->  untouched: an interface
+   !
+mpls ldp
+   pseudowires
+      pseudowire acme_ORD000000111222_1             ->  pseudowire circuit-8c04a1
+```
+
+On a provider edge these names are order and customer references — the material
+a ticket number is made of. `patch panel`, `pseudowires`, the connector numbers
+and the interface a connector points at are all structure and never move.
+
+**`pseudo` is the action to reach for here**, for the same reason as `[vlans]`
+and one more besides. A `connector` line *references* a pseudowire that the
+`mpls ldp` section *defines*, so the two mentions have to come out as the same
+name or the file no longer loads. They do: the pseudonym is a function of the
+value, and both rules render through one prefix. `redact` collapses every
+circuit onto `<REMOVED>` and breaks that, which is fine for something published
+and read but not for something reloaded.
+
+`patch-name` and `pseudowire-name` are two rules and could be given two
+actions — but the definition and the references of *one* pseudowire are two
+branches of `pseudowire-name` alone, so those can never disagree.
+
+### Why these are not gated to Arista
+
+Only Arista writes this grammar, and `netredact --list-rules` labels both rules
+`arista`. That label is documentation: **every rule is applied to every file**,
+whatever vendor the report names.
+
+What keeps `patch-name` off a JunOS config is that it has to be *inside* a
+`patch panel` block, and JunOS opens none — evidence in the file rather than a
+guess about the file. The distinction matters because vendor detection is a
+whole-file heuristic reading exactly the material `[platform]` deletes, and it
+answers `unknown` for the input this tool is handed most often: a pasted
+fragment with no header on it. A rule that fired only when the detector agreed
+would skip credential rules on a misread file silently, and `--strict` would
+still exit 0.
+
 ## `[policy]` — the families with no rules
 
 The collect pass reads these off the lines that declare them and then
@@ -233,6 +281,7 @@ or `e` in a configuration would do more damage than a one-letter name is worth.
 | `text` | `desc-f11e24` | `<DESC-f11e24>` | `<DESCRIPTION-REMOVED>` (a banner gets `<REMOVED>`) |
 | `interfaces` | `desc-f11e24` | `<DESC-f11e24>` | `<DESCRIPTION-REMOVED>` |
 | `vlans` | `vlname-f11e24` | `<VLAN-f11e24>` | `<REMOVED>` |
+| `circuits` | `circuit-f11e24` | `<CIRCUIT-f11e24>` | `<REMOVED>` |
 | `identity` | `SN-f11e24`, `udi-…`, `eid-…`, `key-…`, `cert-…` | `<SERIAL-f11e24>`, `<UDI-…>`, `<EID-…>`, `<KEY-…>`, `<CERT-…>` | `<REMOVED>` |
 | `platform` | `model-f11e24`, `ver-…`, `image-…` | `<MODEL-f11e24>`, `<VERSION-…>`, `<IMAGE-…>` | `<REMOVED>` |
 | `hostnames` | `device-abc123` | `<HOST-abc123>` | `redacted` |
@@ -462,9 +511,9 @@ family  = "secrets"          # default; decides the action and the rendering
 |---|---|---|
 | `name` | yes | Unique across the rule table. |
 | `pattern` | yes | A regex. See below for what its shape means. |
-| `family` | no, defaults to `"secrets"` | One of `secrets`, `text`, `identity`, `platform`, `interfaces`, `vlans`, `hostnames`, `domains`, `usernames`, `emails`, `ipv4`, `ipv6`, `macs`. |
+| `family` | no, defaults to `"secrets"` | One of `secrets`, `text`, `identity`, `platform`, `interfaces`, `vlans`, `circuits`, `hostnames`, `domains`, `usernames`, `emails`, `ipv4`, `ipv6`, `macs`. |
 | `action` | no | This rule's own action, the way a named key gives one to a built-in rule. Without it the rule takes its family's action. |
-| `stanza` | no | The block the rule is restricted to. A JunOS top-level stanza, exactly like the built-in `junos-community` — or `interfaces` / `vlans`, which also match the IOS-style block of that name. See [scope](rules.md#scope-the-block-a-line-is-inside). |
+| `stanza` | no | The block the rule is restricted to. A JunOS top-level stanza, exactly like the built-in `junos-community` — or `interfaces` / `vlans` / `patch-panel`, which match the IOS-style block of that name. See [scope](rules.md#scope-the-block-a-line-is-inside). |
 
 Use **single-quoted** TOML strings so backslashes reach the regex engine intact.
 

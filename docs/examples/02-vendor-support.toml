@@ -37,6 +37,12 @@ default = "keep"
 [vlans]
 default = "pseudo"         # vlname-a1b2c3
 
+# Same argument, same answer: a `connector` line names a pseudowire that
+# another section defines, so both mentions have to come out as one name or
+# the attachment will not load on a lab box.
+[circuits]
+default = "pseudo"         # circuit-a1b2c3
+
 # Model and release are the case, not a leak: TAC cannot match a bug to your
 # box without them.
 [platform]

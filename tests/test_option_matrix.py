@@ -75,6 +75,9 @@ POLICY_SAMPLE = {
     "interfaces": ("interface GigabitEthernet0/1\n description a port note\n",
                    "a port note"),
     "vlans":     ("vlan 905\n name CUST000000000123\n", "CUST000000000123"),
+    # scoped the same way, on the block only Arista opens
+    "circuits":  ("patch panel\n   patch acme_ORD000000111222\n",
+                  "acme_ORD000000111222"),
     "hostnames": ("hostname core-rtr-01\n", "core-rtr-01"),
     "domains":   ("ip domain-name northwind.test\n", "northwind.test"),
     "usernames": ("username netops privilege 15\n", "netops"),
@@ -89,6 +92,7 @@ REDACT_EXPECTED = {
     "platform": (REMOVED,),
     "interfaces": (DESC_REMOVED,),
     "vlans": (REMOVED,),
+    "circuits": (REMOVED,),
     "hostnames": (REDACT_CONST["hostnames"],),
     "domains": (REDACT_CONST["domains"],),
     "usernames": (REDACT_CONST["usernames"],),
@@ -318,6 +322,8 @@ RULE_SAMPLE = {
                    "a port note"),
     "vlans": ("vlan-name", "vlan 905\n name CUST000000000123\n",
               "CUST000000000123"),
+    "circuits": ("patch-name", "patch panel\n   patch acme_ORD000000111222\n",
+                 "acme_ORD000000111222"),
 }
 
 RULE_CELLS = [(f, a) for f in RULE_FAMILIES for a in ALLOWED[f] if a != "keep"]
@@ -466,7 +472,7 @@ def test_verify_strict_is_carried_on_the_config(strict):
 NON_ENUM_OPTIONS = {
     "policy": set(),
     "secrets": set(), "text": set(), "identity": set(), "platform": set(),
-    "interfaces": set(), "vlans": set(),
+    "interfaces": set(), "vlans": set(), "circuits": set(),
     "ipv4": {"pool", "well_known_resolvers", "keep_networks"},
     "ipv6": {"pool", "well_known_resolvers", "keep_networks"},
     "macs": {"pool"},
@@ -488,6 +494,7 @@ def _rule_keys(family: str) -> set[str]:
     ("platform", RULE_SECTIONS["platform"], _rule_keys("platform")),
     ("interfaces", RULE_SECTIONS["interfaces"], _rule_keys("interfaces")),
     ("vlans", RULE_SECTIONS["vlans"], _rule_keys("vlans")),
+    ("circuits", RULE_SECTIONS["circuits"], _rule_keys("circuits")),
     ("ipv4", IPv4Policy, {k for k, _ in V4_CELLS} | {"default"}),
     ("ipv6", IPv6Policy, {k for k, _ in V6_CELLS} | {"default"}),
     ("macs", MacPolicy, {"oui", "nic"}),

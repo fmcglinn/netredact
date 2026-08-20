@@ -85,6 +85,13 @@ PREFIX: dict[str, tuple[str, str | None]] = {
     # real VLAN name, and `is_rendered` would then read it as already
     # sanitised and leave it standing.
     "vlans": ("VLAN", "vlname"),
+    # both circuits rules resolve here rather than to a prefix each, and that
+    # is load-bearing: the tag is a function of the value, so a pseudowire
+    # named on a `connector` line and the same name in the `mpls ldp` section
+    # render identically only while the two share one (marker, token) pair.
+    # The token is not `patch` or `pseudowire` for the reason `vlans` avoids
+    # `vlan`: `pseudowire pseudowire-1a2b3c` reads as a parser error.
+    "circuits": ("CIRCUIT", "circuit"),
     "serial-number": ("SERIAL", "SN"),
     "license-udi": ("UDI", "udi"),
     "snmp-engineid": ("EID", "eid"),
@@ -131,6 +138,7 @@ _KEY_FAMILY = {
     "description": "text", "acl-remark": "text", "login-message": "text",
     "banner": "text", "location": "text", "contact": "text",
     "interface-description": "interfaces", "vlan-name": "vlans",
+    "patch-name": "circuits", "pseudowire-name": "circuits",
     "serial-number": "identity", "license-udi": "identity",
     "snmp-engineid": "identity", "ssh-public-key": "identity",
     "certificate-block": "identity", "pem-cert": "identity",

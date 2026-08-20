@@ -112,7 +112,7 @@ The sections are the selectors:
 
 | Section | Selects |
 |---|---|
-| `[secrets]` / `[text]` / `[identity]` / `[platform]` / `[interfaces]` / `[vlans]` | one action per named rule, plus a `default` for the family — between them, every rule |
+| `[secrets]` / `[text]` / `[identity]` / `[platform]` / `[interfaces]` / `[vlans]` / `[circuits]` | one action per named rule, plus a `default` for the family — between them, every rule |
 | `[policy]` | the four families with no rules: `hostnames`, `domains`, `usernames`, `emails` |
 | `[ipv4]` / `[ipv6]` | one action per address class, plus `default`, `pool`, `well_known_resolvers`, `keep_networks` |
 | `[macs]` | `oui` and `nic` independently, plus the `pool` prefix that `redact` writes |
@@ -320,6 +320,17 @@ default = "pseudo"           #  name CUST000000000123  ->  name vlname-f11e24
 Interface descriptions have `[interfaces]` for the same reason: they are the one
 piece of free text a TAC case cannot do without and a public post cannot
 include, so they take an action of their own rather than sharing `[text]`'s.
+
+Patch panel and pseudowire names have `[circuits]`, also `keep` by default. On a
+provider edge these are order references with a customer in them, and unlike a
+description they are cross-referenced — a `connector` line names a pseudowire
+another section defines — so `pseudo` substitutes both mentions consistently and
+the file still loads:
+
+```toml
+[circuits]
+default = "pseudo"           #  patch acme_ORD000000111222  ->  patch circuit-f11e24
+```
 
 ## Limitations
 

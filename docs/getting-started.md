@@ -98,9 +98,10 @@ The same fixture under `03-external-review` — same file, different policy:
 
 ```
   policy: secrets=redact, text=hash, identity=hash, platform=keep (per
-          rule), interfaces=hash, vlans=pseudo, domains=pseudo,
-          usernames=pseudo, emails=hash, ipv4=keep (per class), ipv6=keep
-          (per class), macs=keep/pseudo, everything else kept
+          rule), interfaces=hash, vlans=pseudo, circuits=pseudo,
+          domains=pseudo, usernames=pseudo, emails=hash, ipv4=keep (per
+          class), ipv6=keep (per class), macs=keep/pseudo, everything else
+          kept
   changes:
         19  username-secret, enable-secret, encoded-key ...
          5  ipv4 addresses
@@ -183,6 +184,6 @@ acceptable — only you can decide that.
 Read the output. netredact is rule-based: it knows the patterns it has been
 taught, and the verification pass is a net, not a proof. In particular check the
 names it never touches — ACLs, route-maps, VRFs — which on a real
-service-provider config often carry customer names. VLAN names and interface
-descriptions carry them too, and those it *can* reach: `[vlans]` and
-`[interfaces]`, both `keep` until you ask.
+service-provider config often carry customer names. VLAN names, interface
+descriptions and circuit names carry them too, and those it *can* reach:
+`[vlans]`, `[interfaces]` and `[circuits]`, all `keep` until you ask.

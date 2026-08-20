@@ -174,3 +174,129 @@ def test_a_banner_body_never_opens_a_block():
             ' description a vrf note\n')
     out = sanitise_text(text, section("text", "redact"), salt=SALT).text
     assert "a vrf note" not in out, out
+
+
+# -- circuits: the Arista patch panel and the LDP pseudowires ---------------
+#
+# Every identifier below is invented. A real patch or pseudowire name is an
+# order reference with a customer in it -- exactly what this family exists to
+# remove -- so none of them comes from a real config.
+
+CIRCUITS = """patch panel
+   patch acme_ORD000000111222
+      connector 1 pseudowire ldp acme_ORD000000111222_1 alternate acme_ORD000000111222_2
+      connector 2 interface Port-Channel1.100
+   !
+!
+mpls ldp
+   pseudowires
+      !
+      pseudowire NORTHWIND_XC_LAB1_A9
+      pseudowire acme_ORD000000111222_1
+!
+"""
+
+
+def test_a_definition_and_its_reference_render_as_the_same_name():
+    """THE contract for this family, and the reason `pseudo` is its action.
+
+    `acme_ORD000000111222_1` is *defined* under `mpls ldp` and *referenced*
+    from a `connector` line. If the two substitutions disagreed the output
+    would not load, so the pseudonym has to be a function of the value and of
+    nothing else -- not of which line it was found on.
+    """
+    out = sanitise_text(CIRCUITS, section("circuits", "pseudo"), salt=SALT).text
+    connector = next(ln for ln in out.splitlines() if "connector 1" in ln)
+    definition = out.splitlines()[-2]
+    primary = connector.split("pseudowire ldp ")[1].split(" alternate ")[0]
+    assert primary.startswith("circuit-")
+    assert definition.strip() == f"pseudowire {primary}", out
+    # ...and the alternate is a different circuit, not a collapsed duplicate
+    alternate = connector.split(" alternate ")[1].strip()
+    assert alternate.startswith("circuit-") and alternate != primary
+
+
+def test_one_rule_carries_the_definition_and_the_reference():
+    """So they can never be given two actions and left pointing nowhere.
+
+    A `connector` line references a pseudowire another section defines. Two
+    rules could be configured apart; two branches of one rule cannot, and this
+    is what pins that down.
+    """
+    rules = {r.name: r for r in R.build_rules()}
+    assert "pseudowire-name" in rules
+    assert R.family_of("pseudowire-name") == "circuits"
+    # three target groups: the connector's two, and the definition's one
+    assert rules["pseudowire-name"].targets == (1, 2, 3)
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("keep", "patch acme_ORD000000111222"),
+    ("pseudo", "patch circuit-"),
+    ("hash", "patch <CIRCUIT-"),
+    ("redact", "patch <REMOVED>"),
+])
+def test_circuits_family_end_to_end(action, expected):
+    out = sanitise_text(CIRCUITS, policy(circuits=action), salt=SALT).text
+    assert expected in out
+    # structure survives whatever the action: the block headers, the connector
+    # numbers and the interface a connector points at are not names
+    assert "patch panel" in out
+    assert "pseudowires" in out
+    assert "connector 2 interface Port-Channel1.100" in out
+    if action != "keep":
+        assert "acme" not in out and "NORTHWIND_XC" not in out
+
+
+def test_the_patch_panel_header_is_never_read_as_a_patch_name():
+    """An IOS-style block header is inside its own block, so `patch panel`
+    reaches `patch-name` and has to be refused by the pattern itself."""
+    out = sanitise_text(CIRCUITS, section("circuits", "redact"), salt=SALT).text
+    assert out.splitlines()[0] == "patch panel"
+
+
+def test_a_patch_outside_a_patch_panel_block_is_left_alone():
+    """The scope is the whole reason this rule is safe on another dialect.
+
+    `patch` is an ordinary word. What confines the rule is that it has to be
+    inside a `patch panel` block, and no grammar but Arista's opens one -- so
+    the rule is inert on a JunOS file by construction, not by asking a
+    detector what vendor the file is.
+    """
+    junos = ("system {\n"
+             "    services {\n"
+             "        patch acme_ORD000000111222;\n"
+             "    }\n"
+             "}\n")
+    out = sanitise_text(junos, section("circuits", "redact"), salt=SALT).text
+    assert "patch acme_ORD000000111222;" in out, out
+
+
+def test_a_vendor_label_never_gates_a_rule():
+    """A file the detector calls `juniper` still gets the Arista rules.
+
+    This is the fail-open path the advisory-only rule in `RULE_VENDORS` exists
+    to prevent: a provider dump can hold two dialects, detection returns one
+    answer for the whole file, and gating on it would ship the circuit names.
+    """
+    from netredact.vendors import detect_vendor
+
+    mixed = ("## Last changed: 2026-02-11 09:14:02 UTC\n"
+             "version 21.4R3-S4.9;\n"
+             "system {\n"
+             "    host-name edge-pe-01;\n"
+             "}\n") + CIRCUITS
+    assert detect_vendor(mixed) == "juniper"
+    result = sanitise_text(mixed, section("circuits", "redact"), salt=SALT)
+    assert result.vendor == "juniper"
+    assert "acme_ORD000000111222" not in result.text
+    assert result.counts["patch-name"] == 1
+
+
+def test_the_pseudowires_block_header_is_not_a_pseudowire_name():
+    """`pseudowires` cannot match: the keyword must be followed by whitespace,
+    and there it is followed by an `s`."""
+    out = sanitise_text("mpls ldp\n   pseudowires\n",
+                        section("circuits", "redact"), salt=SALT)
+    assert out.text == "mpls ldp\n   pseudowires\n"
+    assert not out.counts

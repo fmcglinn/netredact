@@ -47,11 +47,19 @@ names:
 * an IOS-style block -- ``interface Gi0/0`` and the indented lines under it --
   from :data:`BLOCK_SCOPES`.
 
-The names are JunOS's own, so one rule covers both dialects: an IOS
-``interface`` block is scope ``interfaces``, a ``vlan 905`` block is scope
-``vlans``. A JunOS ``set`` line carries its scope on the line itself
-(:data:`SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is inside
-``interfaces`` too.
+The names are JunOS's own wherever both dialects have the block, so one rule
+covers both: an IOS ``interface`` block is scope ``interfaces``, a ``vlan 905``
+block is scope ``vlans``. A JunOS ``set`` line carries its scope on the line
+itself (:data:`SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is
+inside ``interfaces`` too. A block only one vendor has keeps its own name --
+``patch-panel``.
+
+Scope is also how a vendor-specific rule is confined, and there is no other
+mechanism for it. :data:`RULE_VENDORS` labels the dialect a rule was written
+for, but nothing consults it when matching: a rule is held off another
+vendor's file by needing a block that vendor's grammar cannot open, which is
+evidence in the file rather than a guess about the file. The reasoning is at
+:data:`RULE_VENDORS`.
 
 Collections
 -----------
@@ -76,6 +84,7 @@ from dataclasses import dataclass
 
 __all__ = [
     "REMOVED", "DESC_REMOVED", "Rule", "build_rules", "rule_names", "family_of",
+    "vendor_of", "RULE_VENDORS",
     "BUILTIN", "BLOB_RULES", "BLOCK_STARTS", "DESCRIPTION_RULES", "BANNER_RE",
     "HOSTNAME_PATS", "DOMAIN_PATS", "USERNAME_PATS",
     "IPV4_RE", "IPV6_RE", "MAC_RE", "EMAIL_RE",
@@ -153,6 +162,10 @@ class Rule:
     outside: tuple[str, ...] = ()
     custom: bool = False
     handler: str | None = None   # "snmp-host" only; else None
+    #: ADVISORY ONLY: the dialect this rule's grammar comes from, or None for
+    #: a rule that is unlabelled. Nothing in the sanitiser reads it, and no
+    #: rule is ever skipped because of it -- see :data:`RULE_VENDORS`.
+    vendor: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +421,43 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
     # `interface Vlan905` block is scope `interfaces`, so its own description
     # belongs to the rule above and it has no `name` line at all.
     ("vlan-name", r"\s*(?:vlan\s+\d+\s+)?name\s+", "vlans", "vlans"),
+
+    # ---- what a cross-connect and a pseudowire are called -------------------
+    # Arista's `patch panel` and its `mpls ldp` -> `pseudowires` section. These
+    # names are NOT free text, which is why they are `circuits` and not `text`:
+    # the config refers to them BY NAME from more than one place, so the
+    # substitution has to preserve the equality relation. `pseudo` is the
+    # action to reach for -- a type-valid `circuit-f11e24` still loads, and two
+    # mentions of one name still read as one name.
+    #
+    # `patch <name>` is scoped to the block it sits in, and that scope is the
+    # whole reason the rule is harmless on another vendor's file: `patch` is an
+    # ordinary word, but no grammar except Arista's opens a `patch panel` block
+    # for a line to be inside. That is a gate on evidence in the file rather
+    # than on a guess about the file -- which is also why there is no vendor
+    # gate; see :data:`RULE_VENDORS`.
+    #
+    # The `panel` lookahead is not redundant with the scope. An IOS-style block
+    # header is inside its own block (see ``Sanitiser._enter``), so without it
+    # the rule reads `panel` off the `patch panel` line as a patch name. The
+    # leading `\s+` is the second guard: the header is at column zero and a
+    # patch is always indented under it.
+    ("patch-name", r"\s+patch\s+(?!panel(?![-\w]))", "circuits", "patch-panel"),
+    # ONE rule, three values, and therefore ONE action -- which is the point of
+    # writing it as two branches rather than two rules. The `connector` line
+    # REFERENCES a pseudowire that the `mpls ldp` section DEFINES, and a file
+    # with one of the pair substituted and the other kept does not load. Two
+    # rules could be given two actions; two branches of one rule cannot.
+    ("pseudowire-name",
+     _alt(r"^\s*connector\s+\d+\s+pseudowire\s+ldp\s+%VAL%"
+          r"(?:\s+alternate\s+%VAL%)?\s*$",
+          # the definition, always nested under `pseudowires`. The leading
+          # indent and NOT_BRACE are what keep this branch off a column-zero
+          # `pseudowire` line in some other dialect. `pseudowires` itself
+          # cannot match: `\s+` has to follow the keyword, and there an `s`
+          # does.
+          rf"^\s+pseudowire\s+{NOT_BRACE}%VAL%\s*$"),
+     "circuits", None),
 ]
 
 #: rule -> the blocks it must not fire inside, because a scoped rule of its own
@@ -416,6 +466,36 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
 #: ``interface-description`` and ``description``.
 OUTSIDE: dict[str, tuple[str, ...]] = {
     "description": ("interfaces",),
+}
+
+#: rule -> the dialect its grammar comes from. **ADVISORY ONLY.** Nothing in
+#: ``sanitise.py`` reads this, and no rule is ever skipped because of it.
+#:
+#: THE PRINCIPLE, and the reason this is a label rather than a gate: a rule is
+#: confined by evidence -- the shape of the line, and the block the line is
+#: inside -- and never by a guess about the file it came from. Vendor detection
+#: is a whole-file heuristic over exactly the material the ``platform`` family
+#: exists to delete (see ``vendors.py``), and it answers ``unknown`` for the
+#: input a redaction tool is most often handed: a pasted fragment with no
+#: header on it. A rule that fired only when the detector agreed would skip
+#: credential rules on a misread file, silently, and ``--strict`` would still
+#: exit 0 -- a fail-open path in a tool whose whole promise is fail-safe. So
+#: ``patch-name`` is kept off a JunOS file by requiring a ``patch panel`` block
+#: to be inside, which that grammar cannot produce, and not by asking what
+#: vendor the file is.
+#:
+#: What the table is for: grouping ``--list-rules`` and ``docs/rules.md``, and
+#: naming the dialect a test fixture has to be written in. Only rules whose
+#: vendor the pattern itself already asserts are listed. Absence is not a claim
+#: of portability -- it means unlabelled.
+RULE_VENDORS: dict[str, str] = {
+    "junos-community": "juniper",
+    "junos-location-body": "juniper",
+    "junos-password": "juniper",
+    "junos-type9": "juniper",
+    "patch-name": "arista",
+    "pseudowire-name": "arista",
+    "unsupported-transceiver": "arista",
 }
 
 #: rules whose value needs a code path rather than a plain span replacement
@@ -454,7 +534,8 @@ def _blob_rules() -> list[Rule]:
     out = []
     for name, pattern, family, flags in _BLOB:
         regex, targets = _compile(pattern, flags)
-        out.append(Rule(name=name, regex=regex, family=family, targets=targets))
+        out.append(Rule(name=name, regex=regex, family=family, targets=targets,
+                        vendor=RULE_VENDORS.get(name)))
     return out
 
 
@@ -510,6 +591,15 @@ def family_of(name: str) -> str:
         raise KeyError(f"unknown rule: {name!r}") from None
 
 
+def vendor_of(name: str) -> str | None:
+    """The dialect a rule's grammar comes from, or None if it is unlabelled.
+
+    Advisory: this answers a reporting question, never a matching one. See
+    :data:`RULE_VENDORS`.
+    """
+    return RULE_VENDORS.get(name)
+
+
 def build_rules(custom=()) -> list[Rule]:
     """Compile the keyword rule set.
 
@@ -520,7 +610,8 @@ def build_rules(custom=()) -> list[Rule]:
     rules = [
         Rule(name=name, regex=_COMPILED[name][0], family=family,
              targets=_COMPILED[name][1], stanza=stanza,
-             outside=OUTSIDE.get(name, ()), handler=_HANDLERS.get(name))
+             outside=OUTSIDE.get(name, ()), handler=_HANDLERS.get(name),
+             vendor=RULE_VENDORS.get(name))
         for name, _pattern, family, stanza in BUILTIN
     ]
     for c in custom:
@@ -602,6 +693,13 @@ STANZA_CLOSE = re.compile(r"^\s*\}\s*$")
 BLOCK_SCOPES = (
     ("interfaces", re.compile(r"^interface\s+\S", re.I)),
     ("vlans", re.compile(r"^vlan\s+(?:\d|database\b)", re.I)),
+    # Arista's L2 cross-connects. This is the one scope whose name is not
+    # JunOS's, because JunOS has no equivalent block to share it with. It is
+    # what makes `patch-name` inert on every other dialect: a rule that has to
+    # be inside a `patch panel` block cannot fire on a grammar that has none.
+    # Note that the header is inside its own block, so `patch-name` still needs
+    # its own `panel` lookahead.
+    ("patch-panel", re.compile(r"^patch\s+panel\b", re.I)),
 )
 
 #: a JunOS ``set`` line, whose scope is the word after ``set`` and lasts for

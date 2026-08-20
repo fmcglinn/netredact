@@ -31,6 +31,7 @@ from netredact.rules import (  # noqa: E402
     BUILTIN,
     ENC,
     OUTSIDE,
+    RULE_VENDORS,
     VAL,
     VAL_MACRO,
     family_of,
@@ -118,6 +119,13 @@ RULE_NOTES = {
     "vlan-name": "the `name` under a `vlan <id>` block, and the one-line "
                  "`vlan <id> name <name>` form. Never an SVI: `interface "
                  "Vlan905` is an interface",
+    "patch-name": "the name of a `patch` inside a `patch panel` block. The "
+                  "`patch panel` header itself is never the value",
+    "pseudowire-name": "a pseudowire name, both where it is defined under "
+                       "`mpls ldp` -> `pseudowires` and where a `connector` "
+                       "line refers to it (`pseudowire ldp X alternate Y`). "
+                       "One rule, so a definition and its references can "
+                       "never be given two different actions",
 }
 
 BLOB_NOTES = {
@@ -252,15 +260,35 @@ def rules_md() -> str:
            + " at column zero, plus the indented lines under it |",
            "| one JunOS `set` line | the word after `set`, for that line only |",
            "",
-           "The names are JunOS's own — `interfaces`, `vlans` — so one rule covers",
-           "every dialect: an IOS `interface Gi0/0` block, a JunOS",
-           "`interfaces { … }` stanza and a `set interfaces … description …` line",
-           "are all inside `interfaces`. Any other unindented line ends an",
-           "IOS-style block, including the bare `!`.\n",
+           "Where both dialects have the block the name is JunOS's own —",
+           "`interfaces`, `vlans` — so one rule covers every dialect: an IOS",
+           "`interface Gi0/0` block, a JunOS `interfaces { … }` stanza and a",
+           "`set interfaces … description …` line are all inside `interfaces`.",
+           "A block only one vendor has keeps its own name: `patch-panel`. Any",
+           "other unindented line ends an IOS-style block, including the bare",
+           "`!`.\n",
            "`interface Vlan905` is scope `interfaces`, not `vlans`: an SVI is a",
            "port, and only a `vlan <id>` block defines a VLAN.\n",
            "This is also what `[[custom]] stanza` sets, so a custom rule can be",
            "restricted to a block on any vendor, not only a JunOS stanza.\n",
+           "## Dialects are labelled, not gated\n",
+           "Some rules only make sense in one vendor's grammar, and the table",
+           "below says which — `arista` on `patch-name`, `juniper` on",
+           "`junos-type9`. That label is documentation. **Every rule is applied",
+           "to every file**, and nothing netredact does depends on the vendor it",
+           "reports.\n",
+           "That is deliberate, and the reason is the detector. Vendor detection",
+           "is a whole-file heuristic reading exactly the material the",
+           "`platform` family exists to delete, and it answers `unknown` for the",
+           "input a redaction tool is handed most often: a pasted fragment with",
+           "no header on it. A rule that fired only when the detector agreed",
+           "would skip credential rules on a misread file, silently, and",
+           "`--strict` would still exit 0 — a fail-open path in a tool whose",
+           "promise is fail-safe.\n",
+           "So a vendor-specific rule is confined by **evidence in the file**",
+           "instead. `patch-name` cannot fire on a JunOS config because it has",
+           "to be inside a `patch panel` block, and that grammar opens none.",
+           "Scope is the gate; the dialect column is a caption.\n",
            "## Keyword rules\n",
            "Matched from the start of a line.\n",
            "| Rule | Family | Matches | Pattern |",
@@ -271,6 +299,8 @@ def rules_md() -> str:
             note += f" -- only in scope `{stanza}`"
         for outside in OUTSIDE.get(name, ()):
             note += f" -- never in scope `{outside}`"
+        if RULE_VENDORS.get(name):
+            note += f" -- {RULE_VENDORS[name]} grammar"
         out.append(f"| `{name}` | `{family}` | {note} | `{pattern_cell(pattern)}` |")
 
     out += ["\n## Inline rules\n",

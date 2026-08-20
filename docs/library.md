@@ -46,9 +46,9 @@ from netredact import ACTIONS, ALLOWED, FAMILIES
 
 ACTIONS            # ("keep", "pseudo", "hash", "redact")
 FAMILIES           # ("secrets", "text", "identity", "platform", "interfaces",
-                   #  "vlans", "hostnames", "domains", "usernames", "emails",
-                   #  "ipv4", "ipv6", "macs")
-                   # the first six have a section each, one key per rule
+                   #  "vlans", "circuits", "hostnames", "domains", "usernames",
+                   #  "emails", "ipv4", "ipv6", "macs")
+                   # the first seven have a section each, one key per rule
                    # (config.RULE_FAMILIES); only the next four are [policy]
                    # keys (config.POLICY_FAMILIES).
 ALLOWED["secrets"] # ("keep", "hash", "redact") -- pseudo is illegal here
