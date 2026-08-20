@@ -36,7 +36,7 @@ cfg.ipv4.default = "keep"                 # every class not named
 cfg.ipv4.other_unicast = "pseudo"         # one class
 cfg.ipv4.pool = ["198.18.0.0/15"]
 cfg.macs.nic = "pseudo"                   # the two halves are independent
-cfg.overrides["serial-number"] = "keep"   # one rule, by name
+cfg.identity.serial_number = "keep"       # one rule, by name
 ```
 
 The actions and families are exported, so you can validate against them:
@@ -45,8 +45,12 @@ The actions and families are exported, so you can validate against them:
 from netredact import ACTIONS, ALLOWED, FAMILIES
 
 ACTIONS            # ("keep", "pseudo", "hash", "redact")
-FAMILIES           # ("secrets", "text", "identity", "hostnames", "domains",
-                   #  "usernames", "emails", "ipv4", "ipv6", "macs")
+FAMILIES           # ("secrets", "text", "identity", "platform", "interfaces",
+                   #  "vlans", "hostnames", "domains", "usernames", "emails",
+                   #  "ipv4", "ipv6", "macs")
+                   # the first six have a section each, one key per rule
+                   # (config.RULE_FAMILIES); only the next four are [policy]
+                   # keys (config.POLICY_FAMILIES).
 ALLOWED["secrets"] # ("keep", "hash", "redact") -- pseudo is illegal here
 ```
 
@@ -57,9 +61,10 @@ sanitiser itself calls:
 
 ```python
 cfg.action_for("emails")                  # a family -> "keep"
-cfg.action_for_rule("description")        # [overrides] if set, else the family
+cfg.action_for_rule("description")        # the [text] key, else [text] default
 cfg.ipv4.action("cgnat")                  # a class, with `default` applied
 cfg.ipv4.any_active()                     # True if any class is not "keep"
+cfg.platform.action("os-version")         # a rule, with `default` applied
 cfg.family_of("serial-number")            # "identity"
 ```
 
@@ -73,8 +78,9 @@ names the offender:
 ConfigError: [policy] secrets: pseudo is not available for secrets: use hash
 for an opaque marker, or redact
 
->>> Config.from_dict({"overrides": {"nosuch": "keep"}})
-ConfigError: [overrides]: unknown rule(s) nosuch. See netredact --list-rules
+>>> Config.from_dict({"identity": {"nosuch": "keep"}})
+ConfigError: [identity]: unknown key(s) nosuch. Expected: certificate-block,
+default, license-udi, pem-cert, serial-number, snmp-engineid, ssh-public-key
 
 >>> Config.from_dict({"policy": {"text": "shred"}})
 ConfigError: [policy] text: unknown action 'shred'. Expected one of keep,
@@ -127,7 +133,7 @@ another command-line tool without hijacking its output.
 | `kept_counts` | `Counter` | Rule or family name → occurrences deliberately left in place. The CLI report does not print this; see the recipe below. |
 | `families` | `dict[str, str]` | Every key used in `counts` / `kept_counts` → its family, so you can group without re-deriving the rule table. |
 | `policy_summary` | `str` | The policy in one line, e.g. `secrets=redact, everything else kept`. |
-| `redactions` | `int` | How many values were destroyed: the `secrets`, `text` and `identity` families only, since a substituted address or name still carries its equality relation. |
+| `redactions` | `int` | How many values were destroyed: the rule-named families only (`config.RULE_FAMILIES`), since a substituted address or name still carries its equality relation. |
 | `kept` | `dict[str, set[str]]` | Category → distinct values left in place, e.g. `{"ipv4.rfc1918": {"10.20.30.1"}}`. |
 | `collisions` | `set[str]` | Real addresses kept that fall inside a pseudonym pool. |
 | `findings` | `list[Finding]` | What the verification pass found. |

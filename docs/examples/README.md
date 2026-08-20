@@ -10,14 +10,14 @@ config, and the value is an **action** — `keep`, `pseudo`, `hash` or `redact`.
 The reasoning behind that model is in
 [design/actions-model.md](../design/actions-model.md).
 
-| File | Destination | `secrets` | `text` | `identity` | Names | Addresses | MACs |
-|---|---|---|---|---|---|---|---|
-| [`01-secrets-only.toml`](01-secrets-only.toml) | Inside the business | `redact` | `keep` | `keep` | kept | kept | kept |
-| [`02-vendor-support.toml`](02-vendor-support.toml) | Vendor TAC, under contract | `redact` | `keep` | `hash`, serial + UDI kept | users `pseudo`, e-mail `hash` | kept | kept |
-| [`03-external-review.toml`](03-external-review.toml) | Contractor, consultant, auditor | `redact` | `hash` | `hash` | hostnames kept, rest `pseudo`/`hash` | public + CGNAT `pseudo` | NIC half `pseudo` |
-| [`04-llm-analysis.toml`](04-llm-analysis.toml) | A hosted language model | `redact` | `hash` | `hash` | all `pseudo` | all `pseudo` but protocol constants | NIC half `pseudo` |
-| [`05-public-publication.toml`](05-public-publication.toml) | Forum, list, blog, slide | `redact` | `redact` | `redact` | all `pseudo` | all `pseudo` but protocol constants | OUI `redact`, NIC `pseudo` |
-| [`06-custom-rules.toml`](06-custom-rules.toml) | — (a demonstration) | `redact` | `hash` | `keep` | kept | kept | kept |
+| File | Destination | `[secrets]` | `[text]` | `[interfaces]` | `[vlans]` | `[identity]` | `[platform]` | Names | Addresses | MACs |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [`01-secrets-only.toml`](01-secrets-only.toml) | Inside the business | `redact` | `keep` | `keep` | `keep` | `keep` | `keep` | kept | kept | kept |
+| [`02-vendor-support.toml`](02-vendor-support.toml) | Vendor TAC, under contract | `redact` | `keep`, banner + contact `redact` | `keep` | `pseudo` | `hash`, serial + UDI kept | `keep` | users `pseudo`, e-mail `hash` | kept | kept |
+| [`03-external-review.toml`](03-external-review.toml) | Contractor, consultant, auditor | `redact` | `hash` | `hash` | `pseudo` | `hash` | `keep`, boot image `redact` | hostnames kept, rest `pseudo`/`hash` | public + CGNAT `pseudo` | NIC half `pseudo` |
+| [`04-llm-analysis.toml`](04-llm-analysis.toml) | A hosted language model | `redact` | `hash` | `hash` | `pseudo` | `hash` | `keep` | all `pseudo` | all `pseudo` but protocol constants | NIC half `pseudo` |
+| [`05-public-publication.toml`](05-public-publication.toml) | Forum, list, blog, slide | `redact` | `redact` | `redact` | `redact` | `redact` | `redact` | all `pseudo` | all `pseudo` but protocol constants | OUI `redact`, NIC `pseudo` |
+| [`06-custom-rules.toml`](06-custom-rules.toml) | — (a demonstration) | `redact` | `hash` | `keep` | `keep` | `keep` | `keep` | kept | kept | kept |
 
 Run `netredact -c <profile> config.txt --report` and read the `policy:` line:
 it is that profile in one sentence. Anything it does not name as acting was
@@ -31,13 +31,13 @@ given destination justifies.
 **Secrets-only spells out the defaults.** An empty file behaves identically.
 It is written out because the honest description of the default is narrow —
 credentials are destroyed, *nothing else is* — and that is much easier to
-believe when you can see the six `keep`s.
+believe when you can see the `keep`s written down.
 
 **Vendor TAC keeps the serial number.** A support engineer cannot open a case
 without it, and under the old two-section model no configuration could express
 "destroy identity but keep the serial" at all. Now `identity = "hash"` acts on
-certificates, SSH keys and the engine ID, and `[overrides] serial-number =
-"keep"` names the one exception. Addressing and descriptions stay too: nobody
+certificates, SSH keys and the engine ID, and `serial-number = "keep"` in the
+same section names the one exception. Addressing and descriptions stay too: nobody
 diagnoses a routing problem against substituted addresses, and the relationship
 is already contractual. What does go is the credential set, the personal
 contact line and the banner.
@@ -50,11 +50,31 @@ your subscribers sit in (`cgnat`). Free text becomes `<DESC-a1b2c3>`: two ports
 are still distinguishable, and the same port still correlates across files,
 without the text.
 
+**Port descriptions and VLAN names move separately from other free text.**
+`[interfaces]` and `[vlans]` are the two places a customer name reaches
+material the config depends on, and each has an audience the other does not.
+TAC needs the port descriptions and has no use for the VLAN names, so 02 keeps
+one and pseudonymises the other. A reviewer needs both to be *distinguishable*
+rather than readable, so 03 hashes the descriptions and pseudonymises the names.
+A public post needs neither, so 05 destroys both. VLAN names are `pseudo` and
+not `hash` wherever the file still has to load: the configuration refers to a
+VLAN by name elsewhere, and `<VLAN-a1b2c3>` is not a name a switch will accept.
+
 **LLM analysis pseudonymises rather than destroys.** `pseudo` preserves the
 equality relation *and* keeps the output type-valid, so subnet relationships,
 link adjacencies and ACL logic all still hold and the model can reason about
 them. Protocol constants — loopback, multicast, benchmark, reserved, the public
 resolvers — stay put, because moving them costs readability for no privacy gain.
+
+**Only public publication destroys the platform.** Model and release are
+`keep` in four of the five profiles, and the reasons are not the same reason:
+TAC cannot match a bug to your box without them, a reviewer cannot tell whether
+a stanza is even valid on that release, and a language model asked to rewrite a
+config will answer in the wrong syntax without them. What they do disclose is
+an attack surface — a model plus a release number is a CVE list — which is a
+fair trade under a support contract and a poor one on a public forum. If the
+release is the point of the post, put that one rule back with
+`os-version = "keep"` in the same `[platform]` section and say so.
 
 **Public publication destroys free text and identity rather than hashing them.**
 A stable `<DESC-a1b2c3>` still says which ports belong to the same customer and
@@ -65,7 +85,8 @@ which every other profile keeps.
 
 **Custom rules is a demonstration, not a destination.** It shows the three
 escape hatches: `[[custom]]` for a pattern netredact has never seen,
-`[overrides]` for a built-in rule that is wrong for your fleet, and
+a named key in a family section for a built-in rule that is wrong for your
+fleet, and
 `[verify] ignore_patterns` for a token shape of your own that is not a finding.
 
 ## A note on the pool

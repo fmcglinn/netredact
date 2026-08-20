@@ -8,26 +8,46 @@
 # details out of a case attachment that will sit in someone else's ticketing
 # system forever.
 #
-# The serial number is the interesting line here. It is `identity`, and this
-# profile acts on identity generally -- certificates, SSH keys and the SNMP
-# engine ID all become opaque markers -- but names the two values TAC actually
-# asks for in [overrides] and keeps them.
+# The serial number is the interesting line here. [identity] acts on identity
+# generally -- certificates, SSH keys and the SNMP engine ID all become opaque
+# markers -- and then names the two values TAC actually asks for and keeps them.
+
+[secrets]
+default = "redact"
+
+[identity]
+default       = "hash"     # <CERT-...>, <KEY-...>, <EID-...>
+serial-number = "keep"     # the first thing the support desk asks for
+license-udi   = "keep"     # and the second, for an entitlement question
+
+[text]
+default = "keep"           # remarks, location, login messages
+banner  = "redact"         # legal boilerplate, no diagnostic value
+contact = "redact"         # a name, a phone number, an e-mail address
+
+# Interface descriptions are the topology written down, and a support engineer
+# cannot follow a path without them. This is the section that says so; [text]
+# no longer covers them.
+[interfaces]
+default = "keep"
+
+# A VLAN name is not part of a TAC case, and on an access switch it is
+# frequently a service or customer identifier. pseudo rather than hash, so the
+# attachment still loads onto a lab device.
+[vlans]
+default = "pseudo"         # vlname-a1b2c3
+
+# Model and release are the case, not a leak: TAC cannot match a bug to your
+# box without them.
+[platform]
+default = "keep"
 
 [policy]
-secrets   = "redact"
-text      = "keep"     # TAC needs descriptions to follow your topology
-identity  = "hash"     # <CERT-...>, <KEY-...>, <EID-...>
 hostnames = "keep"     # needed to correlate with the logs you attach
 domains   = "keep"     # they know who you are
 usernames = "pseudo"   # an account name is half a credential
 emails    = "hash"     # <EMAIL-...>: personal addresses do not belong
                        # in a case file
-
-[overrides]
-serial-number = "keep" # the first thing the support desk asks for
-license-udi   = "keep" # and the second, for an entitlement question
-banner        = "redact"   # legal boilerplate, no diagnostic value
-contact       = "redact"   # a name, a phone number, an e-mail address
 
 # Addressing is untouched: [ipv4], [ipv6] and [macs] all stay at their
 # defaults, which is `keep`. A support engineer cannot diagnose a routing or

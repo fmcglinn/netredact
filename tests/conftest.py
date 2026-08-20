@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from netredact import Config, PolicyConfig
+from netredact.config import RULE_FAMILIES, RULE_SECTIONS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -91,8 +92,29 @@ def hermetic_config(tmp_path_factory, monkeypatch):
 # exercising and with which action; nothing else moves.
 
 def policy(**actions) -> Config:
-    """A config with the named ``[policy]`` families set, all else default."""
-    return Config(policy=PolicyConfig(**actions))
+    """A config with the named families set, all else default.
+
+    A rule-named family takes its section's ``default``; the four
+    collect-pass families take their ``[policy]`` key. The helper hides that
+    split deliberately: a test says which family it is exercising, not which
+    section that family happens to live in. Everything is built through the
+    dataclasses, so an illegal action still raises here.
+    """
+    names = {k: v for k, v in actions.items() if k not in RULE_FAMILIES}
+    sections = {k: RULE_SECTIONS[k](default=v)
+                for k, v in actions.items() if k in RULE_FAMILIES}
+    return Config(policy=PolicyConfig(**names), **sections)
+
+
+def section(family: str, action: str = "redact", **rules) -> Config:
+    """A config with one family's section set: ``default``, then named rules.
+
+    ``section("identity", "hash", serial_number="keep")`` is the vendor
+    support case in one line.
+    """
+    return Config(**{family: RULE_SECTIONS[family](
+        default=action,
+        **{r.replace("-", "_"): v for r, v in rules.items()})})
 
 
 def addresses(action: str = "pseudo", *, pool=("198.18.0.0/15",)) -> Config:
@@ -109,10 +131,15 @@ def addresses(action: str = "pseudo", *, pool=("198.18.0.0/15",)) -> Config:
 
 
 def maximal() -> Config:
-    """Everything acts: the strongest policy the model can express."""
-    cfg = policy(secrets="redact", text="redact", identity="redact",
-                 hostnames="pseudo", domains="pseudo",
-                 usernames="pseudo", emails="pseudo")
+    """Everything acts: the strongest policy the model can express.
+
+    The rule-named families are read off ``RULE_FAMILIES`` rather than listed,
+    so a new section is inside "everything" the day it exists -- which is the
+    only way a test called ``maximal`` can keep meaning what it says.
+    """
+    cfg = policy(hostnames="pseudo", domains="pseudo",
+                 usernames="pseudo", emails="pseudo",
+                 **{family: "redact" for family in RULE_FAMILIES})
     cfg.ipv4.default = "pseudo"
     cfg.ipv6.default = "pseudo"
     cfg.ipv4.pool = ["198.18.0.0/15"]

@@ -108,9 +108,12 @@ IDENTITY_GATED = ("ssh-key-left",)
 #: ``text`` rule was told to keep -- see :func:`_shape_blind`.
 SHAPE_CHECKS = ("ssh-key-left", "pem-left", "long-hex-left", "long-base64-left")
 
-#: the families whose kept material blinds the shape checks. ``secrets`` is
-#: deliberately absent: see :func:`_shape_blind`.
-SHAPE_BLIND_FAMILIES = ("identity", "text")
+#: the families whose kept material blinds the shape checks. Every family whose
+#: values are free text or device identity is here, ``interfaces`` and ``vlans``
+#: included: a description that is kept is kept whichever section kept it, and a
+#: shape check cannot tell one from a leak. ``secrets`` is deliberately absent:
+#: see :func:`_shape_blind`.
+SHAPE_BLIND_FAMILIES = ("identity", "text", "interfaces", "vlans")
 
 #: checks that only make sense when the policy acts on that family
 CONDITIONAL_CHECKS = ("email-left", "ipv4-left", "ipv6-left")

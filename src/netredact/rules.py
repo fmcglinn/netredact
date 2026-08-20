@@ -34,6 +34,25 @@ There is no ``mode`` field any more:
   token region of an ``snmp-server host`` line, which the handler walks so the
   known keywords survive and only the community / v3 user is acted on.
 
+Scope: the block a line is inside
+---------------------------------
+Some material is only recognisable from the block that encloses it. A bare
+``name CUST000000000123`` is a VLAN name under ``vlan 905`` and a route-map
+name under ``route-map``, and the line itself cannot tell you which. So a rule
+can name the block it needs (``stanza``) or the blocks it must stay out of
+(:data:`OUTSIDE`), and the sanitiser tracks two kinds of block under one set of
+names:
+
+* a JunOS brace stanza -- ``interfaces { … }`` -- from the stanza stack;
+* an IOS-style block -- ``interface Gi0/0`` and the indented lines under it --
+  from :data:`BLOCK_SCOPES`.
+
+The names are JunOS's own, so one rule covers both dialects: an IOS
+``interface`` block is scope ``interfaces``, a ``vlan 905`` block is scope
+``vlans``. A JunOS ``set`` line carries its scope on the line itself
+(:data:`SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is inside
+``interfaces`` too.
+
 Collections
 -----------
 * :func:`build_rules` -- line rules, matched with ``regex.match()`` from the
@@ -45,8 +64,9 @@ Collections
 * :data:`BANNER_RE`   -- the ``banner`` rule, driven by the delimiter state
   machine in ``sanitise.py`` rather than by a target group.
 
-Together these carry all 45 named rules; :func:`rule_names` lists them in
-report order and :func:`family_of` maps each to its family.
+Together these carry every named rule; :func:`rule_names` lists them in report
+order and :func:`family_of` maps each to its family. The count lives in
+``docs/rules.md``, which is generated, rather than in prose that goes stale.
 """
 
 from __future__ import annotations
@@ -60,7 +80,8 @@ __all__ = [
     "HOSTNAME_PATS", "DOMAIN_PATS", "USERNAME_PATS",
     "IPV4_RE", "IPV6_RE", "MAC_RE", "EMAIL_RE",
     "SNMP_HOST_KEYWORDS", "JUNOS_KEYWORDS", "IOS_KEYWORDS",
-    "STANZA_OPEN", "STANZA_CLOSE", "ENC", "VAL", "VAL_MACRO", "VAL_GROUP",
+    "STANZA_OPEN", "STANZA_CLOSE", "BLOCK_SCOPES", "SET_SCOPE", "OUTSIDE",
+    "ENC", "VAL", "VAL_MACRO", "VAL_GROUP",
 ]
 
 REMOVED = "<REMOVED>"
@@ -114,7 +135,12 @@ class Rule:
     regex: re.Pattern
     family: str
     targets: tuple[int, ...]     # capture-group indices to act on
+    #: the block this rule needs to be inside: a JunOS stanza name, or a name
+    #: from :data:`BLOCK_SCOPES` for an IOS-style block. None means anywhere.
     stanza: str | None = None
+    #: blocks this rule must NOT be inside, because a scoped rule owns that
+    #: material instead -- see :data:`OUTSIDE`
+    outside: tuple[str, ...] = ()
     custom: bool = False
     handler: str | None = None   # "snmp-host" only; else None
 
@@ -162,9 +188,67 @@ _JUNOS_LOCATION_KEYS = "|".join(sorted((
 ), key=_alt_order))
 
 
+#: keys that introduce a hardware model. The rule requires a ``:`` or ``=``
+#: after them, and that separator is the whole safety margin: every one of
+#: these words is also a configuration keyword -- ``platform qos ...``,
+#: Arista's ``service routing protocols model multi-agent`` -- and none of
+#: those carries one. Written out rather than sorted from a set, because the
+#: alternation text is rendered into ``docs/rules.md`` and has to be stable.
+_MODEL_KEYS = (r"hardware(?:\s+(?:model|version|revision))?"
+               r"|model(?:\s+(?:number|name))?"
+               r"|chassis(?:\s+type)?"
+               r"|product(?:\s+id)?"
+               r"|platform|pid")
+
+#: keys that introduce a software release or image, with the value separated
+#: by a colon *or* just a space. Cisco writes ``System image file is
+#: "flash:..."`` with no colon at all, so ``is`` belongs to the key rather
+#: than to the separator.
+_IMAGE_KEYS = (r"software\s+image\s+version"
+               r"|system\s+image\s+file(?:\s+is)?"
+               r"|(?:software|firmware|image|junos|eos|os)\s+version")
+
+#: the same, for keys that are a bare product name -- JunOS ``show version``
+#: prints ``Junos: 20.4R3.8``. A colon is required here and the space form is
+#: refused, because a bare ``eos`` or ``junos`` followed by a space is far too
+#: little evidence to rewrite a line on.
+_IMAGE_COLON_KEYS = r"junos|eos"
+
+
+#: a ``description`` line, in every dialect: IOS / EOS / NX-OS bare, JunOS
+#: ``description "…";`` and JunOS ``set … description …``.
+#:
+#: THE PRINCIPLE: which rule owns a description is decided by its **scope**, not
+#: by its pattern. Inside an interface it is ``interface-description`` in the
+#: ``interfaces`` family; everywhere else -- a VRF, a policy-map, a peer group --
+#: it is ``description`` in ``text``. One selector, split in two by
+#: :data:`OUTSIDE`, so the two can never both act on the same line and no
+#: description falls between them.
+_DESCRIPTION = r"\s*(?:set\s+\S.*?\s)?description\s+"
+
+#: everything up to the opening bracket of Arista's ``show running-config``
+#: header, ``! device: agg-sw-02 (DCS-7280SR-48C6-M, EOS-4.32.1F)``. The two
+#: values inside the brackets are introduced by no keyword at all -- position
+#: is their only grammar -- so each is reached by a second branch on the rule
+#: that owns that kind of value, rather than by a rule of its own. The
+#: hostname in front is left alone here: it belongs to ``hostnames``, which
+#: learns it from :data:`HOSTNAME_PATS` and substitutes it everywhere.
+_EOS_HEADER = r"^\s*!\s*device:\s*\S+\s*\("
+
+
 def _rest(prefix: str) -> str:
     """The whole remainder of the line is the value (the old ``rest`` mode)."""
     return rf"^{prefix}{NOT_BRACE}(.+?)(?:\s*;\s*(?:##.*)?)?$"
+
+
+def _alt(*shapes: str) -> str:
+    """One rule, several shapes, each with its own capture group.
+
+    A branch that did not take part in the match reports a span of ``-1`` and
+    is skipped by :meth:`Sanitiser._spans`, so exactly the group that matched
+    is the target.
+    """
+    return "(?:" + "|".join(shapes) + ")"
 
 
 def _compile(pattern: str, flags: int = re.I) -> tuple[re.Pattern, tuple[int, ...]]:
@@ -250,6 +334,38 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
      rf"^\s*service\s+unsupported-transceiver\s+{NOT_BRACE}%VAL%(?:\s+%VAL%)?\s*$",
      "secrets", None),
 
+    # ---- platform: what the box is and what it runs -----------------------
+    # Model, software release and boot image. Not a credential, and not an
+    # instance identity either -- every device off the same production line
+    # shares it. It is the attack surface: a model plus a release number is a
+    # CVE list, and a fleet-wide version is a fleet-wide one. Kept by default,
+    # because it is also the first thing a support engineer asks for and the
+    # thing a reviewer needs in order to read the config at all.
+    #
+    # These lines are also where the VENDOR DETECTOR gets its best evidence,
+    # which is why detection reads the input and never the output; see
+    # ``vendors.py``.
+    #
+    # Arista's `! device: <name> (<model>, <release>)` header carries three
+    # values of three different kinds on one line. It gets no rule of its own:
+    # a rule carries ONE family and ONE action, so a rule for the whole header
+    # would put the model and the release beyond the reach of
+    # `[platform] os-version` and `[platform] hardware-model`. Each of those
+    # two rules reads the header itself instead, and the hostname stays with
+    # `hostnames`.
+    ("hardware-model",
+     _alt(_rest(rf"\s*!?\s*(?:{_MODEL_KEYS})\s*[:=]\s*"),
+          # the Arista header, up to the last comma inside the brackets
+          rf"{_EOS_HEADER}([^)]+),"), "platform", None),
+    ("os-version",
+     _alt(_rest(r"\s*version\s+(?=\d)"),
+          # the Arista header, the token after the last comma
+          rf"{_EOS_HEADER}[^)]+,\s*([^\s,)]+)\s*\)\s*$"), "platform", None),
+    ("software-image",
+     _rest(rf"\s*!?\s*(?:(?:{_IMAGE_KEYS})(?:\s*[:=]\s*|\s+)"
+           rf"|(?:{_IMAGE_COLON_KEYS})\s*[:=]\s*)"), "platform", None),
+    ("boot-image", _rest(r"\s*!?\s*boot\s+system\s+"), "platform", None),
+
     # ---- free text ---------------------------------------------------------
     # location / contact are text, not secrets: they leak an org and a site,
     # not a credential. NOT_BRACE keeps `location {` a stanza opener.
@@ -260,11 +376,33 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
     # not a value). Stanza-scoped, so a `building` line elsewhere is untouched.
     ("junos-location-body",
      _rest(rf"\s*(?:{_JUNOS_LOCATION_KEYS})\s+"), "text", "location"),
-    ("description", _rest(r"\s*(?:set\s+\S.*?\s)?description\s+"), "text", None),
+    ("description", _rest(_DESCRIPTION), "text", None),
     ("acl-remark", _rest(r"\s*remark\s+"), "text", None),
     ("login-message",
      _rest(r"\s*(?:set\s+system\s+login\s+)?(?:message|announcement)\s+"), "text", None),
+
+    # ---- what a port and a VLAN are called ---------------------------------
+    # Both of these are only recognisable from the block they sit in, so both
+    # are scoped: see BLOCK_SCOPES. They are families of their own rather than
+    # part of `text` because they are the two places a customer name reaches
+    # material that has to survive -- a reviewer needs the ports to stay
+    # distinguishable, a VLAN name is a value the config elsewhere refers to,
+    # and a support case needs the descriptions the topology is written in.
+    ("interface-description", _rest(_DESCRIPTION), "interfaces", "interfaces"),
+    # `vlan 905` / `name CUST000000000123`, and the one-line Catalyst
+    # vlan-database form `vlan 905 name CUST000000000123`. NOT an SVI: an
+    # `interface Vlan905` block is scope `interfaces`, so its own description
+    # belongs to the rule above and it has no `name` line at all.
+    ("vlan-name", r"\s*(?:vlan\s+\d+\s+)?name\s+", "vlans", "vlans"),
 ]
+
+#: rule -> the blocks it must not fire inside, because a scoped rule of its own
+#: owns that material there. The pair is exhaustive and disjoint by
+#: construction: every description is matched by exactly one of
+#: ``interface-description`` and ``description``.
+OUTSIDE: dict[str, tuple[str, ...]] = {
+    "description": ("interfaces",),
+}
 
 #: rules whose value needs a code path rather than a plain span replacement
 _HANDLERS = {"snmp-host": "snmp-host"}
@@ -368,7 +506,7 @@ def build_rules(custom=()) -> list[Rule]:
     rules = [
         Rule(name=name, regex=_COMPILED[name][0], family=family,
              targets=_COMPILED[name][1], stanza=stanza,
-             handler=_HANDLERS.get(name))
+             outside=OUTSIDE.get(name, ()), handler=_HANDLERS.get(name))
         for name, _pattern, family, stanza in BUILTIN
     ]
     for c in custom:
@@ -432,3 +570,27 @@ EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 
 STANZA_OPEN = re.compile(r"^\s*([\w-]+)[^{}]*\{\s*$")
 STANZA_CLOSE = re.compile(r"^\s*\}\s*$")
+
+#: IOS / EOS / NX-OS block headers, and the scope each opens: ``(scope, regex)``.
+#: A block is a line at column zero plus the indented lines under it, so these
+#: are matched against unindented lines only and any other unindented line ends
+#: the block -- including the bare ``!`` Cisco and Arista separate them with.
+#:
+#: The names are JunOS's own stanza names, deliberately: a rule then says
+#: ``interfaces`` once and reaches an IOS ``interface Gi0/0`` block, a JunOS
+#: ``interfaces { … }`` stanza and a ``set interfaces …`` line alike.
+#:
+#: ``vlan`` needs a digit after it, which is the whole safety margin: it makes
+#: ``vlan 905`` and ``vlan 300,301`` blocks while leaving the commands that
+#: merely start with the word -- ``vlan internal allocation policy ascending``,
+#: ``vlan configuration 905`` -- outside any scope. ``interface Vlan905`` is
+#: scope ``interfaces``: an SVI is a port, not a VLAN definition.
+BLOCK_SCOPES = (
+    ("interfaces", re.compile(r"^interface\s+\S", re.I)),
+    ("vlans", re.compile(r"^vlan\s+(?:\d|database\b)", re.I)),
+)
+
+#: a JunOS ``set`` line, whose scope is the word after ``set`` and lasts for
+#: that line only -- ``set interfaces xe-0/0/0 description …`` is inside
+#: ``interfaces`` without any enclosing block to be inside of.
+SET_SCOPE = re.compile(r"\s*set\s+([\w-]+)\b", re.I)

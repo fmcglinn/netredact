@@ -17,7 +17,8 @@ So a new family, class or action is covered the moment it exists, and
 :func:`test_the_matrix_covers_every_option` fails until it is.
 
 The dimensions are read from the code's own tuples -- ``ACTIONS``,
-``POLICY_FAMILIES``, ``V4_CLASS_NAMES``, ``V6_CLASS_NAMES``, ``VENDORS``, the
+``POLICY_FAMILIES``, ``RULE_FAMILIES``, ``RULE_SECTIONS``,
+``V4_CLASS_NAMES``, ``V6_CLASS_NAMES``, ``VENDORS``, the
 dataclass fields -- and never transcribed, because a transcribed list is a list
 that goes stale without anything failing.
 """
@@ -28,12 +29,14 @@ from dataclasses import fields
 
 import pytest
 
-from netredact import Config, sanitise_text
+from netredact import Config, family_of, rule_names, sanitise_text
 from netredact.addresses import V4_CLASS_NAMES, V6_CLASS_NAMES
 from netredact.config import (
     ACTIONS,
     ALLOWED,
     POLICY_FAMILIES,
+    RULE_FAMILIES,
+    RULE_SECTIONS,
     VENDORS,
     IPv4Policy,
     IPv6Policy,
@@ -43,14 +46,14 @@ from netredact.config import (
 )
 from netredact.pseudonymise import DESC_REMOVED, REDACT_CONST, REMOVED
 
-from .conftest import SALT, policy
+from .conftest import SALT, policy, section
 
 #: any ``<PREFIX-tag>`` marker, whichever family produced it
 MARKER_RE = re.compile(r"<[A-Z0-9-]+-[0-9a-f]{1,6}>")
 
 
 # ---------------------------------------------------------------------------
-# [policy]: seven families, every action each one allows
+# [policy] and the family sections: every family, every action it allows
 # ---------------------------------------------------------------------------
 
 #: family -> (a line the rules match, the sensitive value inside it)
@@ -58,12 +61,19 @@ MARKER_RE = re.compile(r"<[A-Z0-9-]+-[0-9a-f]{1,6}>")
 #: Each line is the narrowest one that reaches its family and nothing else --
 #: ``snmp-server contact`` would reach ``emails`` too, but it is also the
 #: ``contact`` rule in ``text``, and then the sweep would be testing two
-#: families at once.
+#: families at once. For a family with a section, this is what its ``default``
+#: is judged on; the per-rule keys are swept separately below.
 POLICY_SAMPLE = {
     "secrets":   (" enable secret 5 $1$abc$0123456789abcdefghij\n",
                   "$1$abc$0123456789abcdefghij"),
     "text":      (" description a plain description\n", "a plain description"),
     "identity":  ("! Serial Number: FDO1234ABCD\n", "FDO1234ABCD"),
+    "platform":  ("version 15.7\n", "15.7"),
+    # the two scoped families need the block that scopes them, so their sample
+    # is two lines: the header is what tells the sanitiser where it is
+    "interfaces": ("interface GigabitEthernet0/1\n description a port note\n",
+                   "a port note"),
+    "vlans":     ("vlan 905\n name CUST000000000123\n", "CUST000000000123"),
     "hostnames": ("hostname core-rtr-01\n", "core-rtr-01"),
     "domains":   ("ip domain-name northwind.test\n", "northwind.test"),
     "usernames": ("username netops privilege 15\n", "netops"),
@@ -75,13 +85,19 @@ REDACT_EXPECTED = {
     "secrets": (REMOVED,),
     "text": (REMOVED, DESC_REMOVED),
     "identity": (REMOVED,),
+    "platform": (REMOVED,),
+    "interfaces": (DESC_REMOVED,),
+    "vlans": (REMOVED,),
     "hostnames": (REDACT_CONST["hostnames"],),
     "domains": (REDACT_CONST["domains"],),
     "usernames": (REDACT_CONST["usernames"],),
     "emails": (REDACT_CONST["emails"],),
 }
 
-POLICY_CELLS = [(family, action) for family in POLICY_FAMILIES
+#: every family that takes one action: the four in ``[policy]``, and the
+#: ``default`` of every family that has a section
+POLICY_CELLS = [(family, action)
+                for family in POLICY_FAMILIES + RULE_FAMILIES
                 for action in ALLOWED[family]]
 
 
@@ -278,6 +294,116 @@ def test_hash_on_one_mac_half_is_rejected(half):
 
 
 # ---------------------------------------------------------------------------
+# the per-rule keys of the family sections
+# ---------------------------------------------------------------------------
+#
+# The `default` of each section is swept above, on the family sample. What is
+# left to prove here is the OTHER axis: that naming one rule gives that rule
+# its own action and leaves the rest of the family on `default`. One
+# representative rule per family carries that -- the mechanism is shared, it
+# is generated once by `_rule_policy`, so proving it once per generated class
+# is proof for every key. `platform` is swept rule by rule as well, because
+# its four rules are four different line shapes and that is the family the
+# shapes were written for.
+
+#: family -> (rule, a line only that rule reaches, the value inside it)
+RULE_SAMPLE = {
+    "secrets": ("snmp-community", "snmp-server community s3cr3t ro\n", "s3cr3t"),
+    "text": ("acl-remark", " remark a plain remark\n", "a plain remark"),
+    "identity": ("serial-number", "! Serial Number: FDO1234ABCD\n", "FDO1234ABCD"),
+    "platform": ("os-version", "version 15.7\n", "15.7"),
+    "interfaces": ("interface-description",
+                   "interface GigabitEthernet0/1\n description a port note\n",
+                   "a port note"),
+    "vlans": ("vlan-name", "vlan 905\n name CUST000000000123\n",
+              "CUST000000000123"),
+}
+
+RULE_CELLS = [(f, a) for f in RULE_FAMILIES for a in ALLOWED[f] if a != "keep"]
+
+
+@pytest.mark.parametrize("family,action", RULE_CELLS,
+                         ids=[f"{f}-{a}" for f, a in RULE_CELLS])
+def test_naming_one_rule_opts_it_out_of_the_section_default(family, action):
+    """The rule named acts; the rest of the family stays on `default`."""
+    rule, text, value = RULE_SAMPLE[family]
+    cfg = section(family, "keep", **{rule: action})
+    out = sanitise_text(text, cfg, salt=SALT).text
+    assert value not in out, f"[{family}] {rule}={action} left the value behind"
+    assert cfg.action_for_rule(rule) == action
+    assert all(cfg.action_for_rule(r) == "keep"
+               for r in RULE_SECTIONS[family].RULES if r != rule)
+
+
+@pytest.mark.parametrize("family", RULE_FAMILIES)
+def test_a_rule_left_unset_inherits_the_section_default(family):
+    rule, text, value = RULE_SAMPLE[family]
+    cfg = section(family, "redact", **{rule: "keep"})
+    assert cfg.action_for_rule(rule) == "keep"
+    assert all(cfg.action_for_rule(r) == "redact"
+               for r in RULE_SECTIONS[family].RULES if r != rule)
+    assert cfg.platform.any_active() if family == "platform" else True
+    assert value in sanitise_text(text, cfg, salt=SALT).text
+
+
+#: rule -> (a line only that rule reaches, the value inside it). Only
+#: `platform` is swept this finely: see the note at the top of this block.
+PLATFORM_SAMPLE = {
+    "hardware-model": ("Model Number : WS-C3850-48P\n", "WS-C3850-48P"),
+    "os-version": ("version 15.7\n", "15.7"),
+    "software-image": ("Software image version: 4.32.1F\n", "4.32.1F"),
+    "boot-image": ("boot system flash:img.bin\n", "flash:img.bin"),
+}
+
+PLATFORM_CELLS = [(r, a) for r in RULE_SECTIONS["platform"].RULES
+                  for a in ALLOWED["platform"]]
+
+
+@pytest.mark.parametrize("rule,action", PLATFORM_CELLS,
+                         ids=[f"{r}-{a}" for r, a in PLATFORM_CELLS])
+def test_every_platform_rule_honours_every_action(rule, action):
+    text, value = PLATFORM_SAMPLE[rule]
+    cfg = section("platform", "keep", **{rule: action})
+    out = sanitise_text(text, cfg, salt=SALT).text
+
+    if action == "keep":
+        assert value in out
+        return
+    assert value not in out, f"[platform] {rule}={action} left the value behind"
+    if action == "hash":
+        assert MARKER_RE.search(out), out
+    elif action == "redact":
+        assert REMOVED in out, out
+    else:                                   # pseudo
+        assert out.strip() and out != text
+        assert sanitise_text(text, cfg, salt=SALT).text == out
+
+
+def test_every_platform_rule_has_a_representative_sample():
+    """A rule with no sample is a rule the sweep silently skips."""
+    assert set(PLATFORM_SAMPLE) == set(RULE_SECTIONS["platform"].RULES)
+
+
+@pytest.mark.parametrize("family", RULE_FAMILIES)
+def test_a_section_names_exactly_its_family_rules(family):
+    """The anti-drift check: the keys come from the rule table, both ways.
+
+    `declared` walks the generated dataclass; `covered` walks the rule table.
+    A rule added to a family with no key in its section, or a key that names
+    no rule, fails here rather than being silently unreachable.
+    """
+    declared = {f.name for f in fields(RULE_SECTIONS[family])} - {"default"}
+    covered = {name.replace("-", "_") for name in rule_names()
+               if family_of(name) == family}
+    assert declared == covered
+
+
+def test_an_unknown_rule_in_a_section_is_rejected():
+    with pytest.raises(ValueError, match="has no rule"):
+        Config().platform.action("no-such-rule")
+
+
+# ---------------------------------------------------------------------------
 # the scalar options: vendor, and the [verify] switches
 # ---------------------------------------------------------------------------
 
@@ -317,6 +443,8 @@ def test_verify_strict_is_carried_on_the_config(strict):
 #: actions. Named here so that adding one to the config is a deliberate act.
 NON_ENUM_OPTIONS = {
     "policy": set(),
+    "secrets": set(), "text": set(), "identity": set(), "platform": set(),
+    "interfaces": set(), "vlans": set(),
     "ipv4": {"pool", "well_known_resolvers", "keep_networks"},
     "ipv6": {"pool", "well_known_resolvers", "keep_networks"},
     "macs": {"pool"},
@@ -324,8 +452,20 @@ NON_ENUM_OPTIONS = {
 }
 
 
+def _rule_keys(family: str) -> set[str]:
+    """Every key a family section carries, read off the rule table."""
+    return {"default"} | {n.replace("-", "_") for n in rule_names()
+                          if family_of(n) == family}
+
+
 @pytest.mark.parametrize("section,cls,covered", [
-    ("policy", PolicyConfig, {f for f, _ in POLICY_CELLS}),
+    ("policy", PolicyConfig, set(POLICY_FAMILIES)),
+    ("secrets", RULE_SECTIONS["secrets"], _rule_keys("secrets")),
+    ("text", RULE_SECTIONS["text"], _rule_keys("text")),
+    ("identity", RULE_SECTIONS["identity"], _rule_keys("identity")),
+    ("platform", RULE_SECTIONS["platform"], _rule_keys("platform")),
+    ("interfaces", RULE_SECTIONS["interfaces"], _rule_keys("interfaces")),
+    ("vlans", RULE_SECTIONS["vlans"], _rule_keys("vlans")),
     ("ipv4", IPv4Policy, {k for k, _ in V4_CELLS} | {"default"}),
     ("ipv6", IPv6Policy, {k for k, _ in V6_CELLS} | {"default"}),
     ("macs", MacPolicy, {"oui", "nic"}),
@@ -347,6 +487,9 @@ def test_the_matrix_covers_every_action():
     assert {a for _, a in V4_CELLS} == set(ACTIONS)
     assert {a for _, a in V6_CELLS} == set(ACTIONS)
     assert {a for pair in MAC_PAIRS for a in pair} == set(ACTIONS)
+    for rule in RULE_SECTIONS["platform"].RULES:
+        exercised = {a for r, a in PLATFORM_CELLS if r == rule}
+        assert exercised == set(ALLOWED["platform"]), rule
 
 
 def test_every_address_class_has_a_representative_sample():

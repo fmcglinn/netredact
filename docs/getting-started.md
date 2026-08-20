@@ -50,8 +50,8 @@ This is the whole report for one of the test fixtures, at stock defaults:
   changes:
         19  username-secret, enable-secret, encoded-key ...
   VERIFY: clean (policy applied, no credential-shaped material left)
-  NOTE: never scrubbed -- VLAN names, ACL / route-map / prefix-list /
-        policy names, AS numbers, VRF names and interface numbering.
+  NOTE: never scrubbed -- ACL / route-map / prefix-list / policy names,
+        AS numbers, VRF names and interface numbering.
         Read the output before sending it anywhere.
 ```
 
@@ -97,14 +97,16 @@ netredact running-config.txt -c docs/examples/03-external-review.toml --report
 The same fixture under `03-external-review` — same file, different policy:
 
 ```
-  policy: secrets=redact, text=hash, identity=hash, domains=pseudo,
+  policy: secrets=redact, text=hash, identity=hash, platform=keep (per
+          rule), interfaces=hash, vlans=pseudo, domains=pseudo,
           usernames=pseudo, emails=hash, ipv4=keep (per class), ipv6=keep
           (per class), macs=keep/pseudo, everything else kept
   changes:
         19  username-secret, enable-secret, encoded-key ...
-         6  descriptions, ACL remarks, banners, contacts ...
          5  ipv4 addresses
          5  usernames
+         4  ACL remarks, banners, contacts, locations
+         2  interface descriptions
          2  ipv6 addresses
          1  certificates
          1  domain names
@@ -119,16 +121,17 @@ hostname is deliberate too — site and role naming is how the design reads.
 ## Turning one rule off
 
 When a built-in rule is wrong for your environment, do not fight it — give it
-the `keep` action by name:
+the `keep` action by name, in its own family's section:
 
 ```toml
-[overrides]
+[text]
+default  = "hash"
 location = "keep"        # this fleet's location lines hold a rack label
 ```
 
-`netredact --list-rules` prints every rule name with its family. A kept rule
-still matches — it is counted in `Result.kept_counts` — it simply is not
-substituted.
+`netredact --list-rules` prints every rule name next to the section it belongs
+to. A kept rule still matches — it is counted in `Result.kept_counts` — it
+simply is not substituted.
 
 ## Fleet-consistent output
 
@@ -179,5 +182,7 @@ acceptable — only you can decide that.
 
 Read the output. netredact is rule-based: it knows the patterns it has been
 taught, and the verification pass is a net, not a proof. In particular check the
-names it never touches — VLANs, ACLs, route-maps, VRFs — which on a real
-service-provider config often carry customer names.
+names it never touches — ACLs, route-maps, VRFs — which on a real
+service-provider config often carry customer names. VLAN names and interface
+descriptions carry them too, and those it *can* reach: `[vlans]` and
+`[interfaces]`, both `keep` until you ask.

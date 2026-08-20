@@ -31,17 +31,19 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, make_dataclass
 from pathlib import Path
 
 from . import rules
 from .addresses import V4_CLASS_NAMES, V6_CLASS_NAMES, describe
 
 __all__ = [
-    "ACTIONS", "FAMILIES", "ALLOWED", "POLICY_FAMILIES", "VENDORS",
-    "Config", "PolicyConfig", "IPv4Policy", "IPv6Policy", "MacPolicy",
-    "VerifyConfig", "CustomRule", "ConfigError", "find_config",
-    "DEFAULT_CONFIG_NAMES",
+    "ACTIONS", "FAMILIES", "ALLOWED", "POLICY_FAMILIES", "RULE_FAMILIES",
+    "RULE_SECTIONS", "VENDORS", "Config", "PolicyConfig", "IPv4Policy",
+    "IPv6Policy", "MacPolicy", "SecretsPolicy", "TextPolicy",
+    "IdentityPolicy", "PlatformPolicy", "InterfacesPolicy", "VlansPolicy",
+    "VerifyConfig", "CustomRule",
+    "ConfigError", "find_config", "DEFAULT_CONFIG_NAMES",
 ]
 
 DEFAULT_CONFIG_NAMES = ("netredact.toml", ".netredact.toml")
@@ -50,7 +52,7 @@ DEFAULT_CONFIG_NAMES = ("netredact.toml", ".netredact.toml")
 ACTIONS = ("keep", "pseudo", "hash", "redact")
 
 #: the families a rule -- or a bare regex match -- belongs to
-FAMILIES = ("secrets", "text", "identity",
+FAMILIES = ("secrets", "text", "identity", "platform", "interfaces", "vlans",
             "hostnames", "domains", "usernames", "emails",
             "ipv4", "ipv6", "macs")
 
@@ -58,9 +60,10 @@ FAMILIES = ("secrets", "text", "identity",
 ALLOWED: dict[str, tuple[str, ...]] = {f: ACTIONS for f in FAMILIES}
 ALLOWED["secrets"] = ("keep", "hash", "redact")
 
-#: the families named directly in ``[policy]``
-POLICY_FAMILIES = ("secrets", "text", "identity",
-                   "hostnames", "domains", "usernames", "emails")
+#: the families named directly in ``[policy]``: the four the collect pass
+#: learns. Every other family is a table of named rules and has a section of
+#: its own, where each rule is a key -- see :data:`RULE_FAMILIES`.
+POLICY_FAMILIES = ("hostnames", "domains", "usernames", "emails")
 
 VENDORS = ("auto", "cisco", "arista", "juniper")
 
@@ -98,18 +101,17 @@ def _check_action(where: str, family: str, action: object) -> str:
 
 @dataclass
 class PolicyConfig:
-    """What happens to each family of sensitive material.
+    """The families that have no rules.
 
-    ``secrets`` is the only one that is not ``keep`` by default: netredact
-    destroys credentials unless you tell it otherwise.
+    ``hostnames``, ``domains``, ``usernames`` and ``emails`` are not found by
+    a pattern table: the collect pass reads them off the lines that declare
+    them and then substitutes them wherever they appear. There is nothing to
+    name per rule, so they take one action each and stay here.
+
+    Every other family is a table of named rules, and each of those has a
+    section of its own -- see :func:`_rule_policy`.
     """
 
-    #: passwords, keys, community strings, password hashes
-    secrets: str = "redact"
-    #: descriptions, remarks, banners, login messages, location, contact
-    text: str = "keep"
-    #: serial numbers, UDIs, engine IDs, certificates, SSH public keys
-    identity: str = "keep"
     #: device names, discovered by the collect pass
     hostnames: str = "keep"
     domains: str = "keep"
@@ -271,6 +273,147 @@ class MacPolicy:
         return self.oui != "keep" or self.nic != "keep"
 
 
+def _field(rule: str) -> str:
+    """The dataclass field that holds the action for one rule name.
+
+    TOML allows a dash in a bare key and a Python identifier does not, so
+    ``[platform] os-version`` is stored on ``PlatformPolicy.os_version``. The
+    rule name is the spelling users see everywhere -- in its section, and in
+    ``netredact --list-rules`` -- so the translation stops here.
+    """
+    return rule.replace("-", "_")
+
+
+def _rule_post_init(self) -> None:
+    _check_action(f"[{self.FAMILY}] default", self.FAMILY, self.default)
+    for rule in self.RULES:
+        value = getattr(self, _field(rule))
+        if value is not None:
+            _check_action(f"[{self.FAMILY}] {rule}", self.FAMILY, value)
+
+
+def _rule_action(self, rule: str) -> str:
+    """The resolved action for one rule. Never ``None``."""
+    if rule not in self.RULES:
+        raise ConfigError(
+            f"[{self.FAMILY}] has no rule {rule!r}. "
+            f"Expected: {', '.join(self.RULES)}")
+    value = getattr(self, _field(rule))
+    return self.default if value is None else value
+
+
+def _rule_any_active(self) -> bool:
+    """True if any rule resolves to something other than keep."""
+    return any(self.action(r) != "keep" for r in self.RULES)
+
+
+def _rule_policy(family: str, default: str, doc: str) -> type:
+    """Build the section class for one rule-named family.
+
+    THE PRINCIPLE: the keys come from the rule table, never from a list
+    written out here. A rule added to a family gets a key in its section, a
+    line in ``--print-config`` and a cell in the option-matrix sweep, with
+    nothing to keep in step by hand -- and no way for the config to fall
+    silently out of date with the rules it configures.
+
+    ``default`` governs every rule in the family; naming a rule gives that
+    rule its own action, and a rule left unset (``None``) inherits
+    ``default``. This is the same shape as ``[ipv4]``, one section down: the
+    difference is only that its members are rules rather than a partition of
+    a value space.
+    """
+    names = tuple(n for n in rules.rule_names() if rules.family_of(n) == family)
+    cls = make_dataclass(
+        f"{family.capitalize()}Policy",
+        [("default", str, field(default=default))]
+        + [(_field(n), "str | None", field(default=None)) for n in names],
+        namespace={
+            "FAMILY": family,
+            "RULES": names,
+            "__doc__": doc,
+            "__post_init__": _rule_post_init,
+            "action": _rule_action,
+            "any_active": _rule_any_active,
+        },
+    )
+    cls.__module__ = __name__
+    return cls
+
+
+SecretsPolicy = _rule_policy(
+    "secrets", "redact",
+    """Passwords, keys, community strings and password hashes, per rule.
+
+    The one family whose ``default`` is not ``keep``: netredact destroys
+    credentials unless you tell it otherwise, and that is the whole of the
+    default promise. ``pseudo`` is refused here -- the substitute would be an
+    HMAC of the real credential.
+    """)
+
+TextPolicy = _rule_policy(
+    "text", "keep",
+    """Descriptions, remarks, banners, login messages, location, contact.
+
+    On a service-provider config this is where the customer names live.
+    ``hash`` is usually the right middle ground: ``<DESC-f11e24>`` still tells
+    two ports apart without saying whose they are.
+    """)
+
+IdentityPolicy = _rule_policy(
+    "identity", "keep",
+    """Serial numbers, license UDIs, SNMP engine IDs, certificates, SSH keys.
+
+    None of these is a credential, and all of them tie the file to one real
+    device. ``default = "hash"`` with ``serial-number = "keep"`` is the vendor
+    support case: destroy the identity, keep the one value the case needs.
+    """)
+
+PlatformPolicy = _rule_policy(
+    "platform", "keep",
+    """The hardware model, the software release and the boot image.
+
+    Neither a credential nor an instance identity -- every device off the
+    same production line carries it. What it discloses is the attack surface:
+    a model plus a release number is a CVE list. Kept by default, because it
+    is also the first thing a support desk asks for and the thing a reviewer
+    needs in order to judge a config at all.
+    """)
+
+InterfacesPolicy = _rule_policy(
+    "interfaces", "keep",
+    """What a port is called: the ``description`` on an interface.
+
+    The same selector as ``[text] description``, split off by the block it is
+    in -- see ``rules.BLOCK_SCOPES``. It is a section of its own because it is
+    the one piece of free text with two incompatible audiences: a TAC case is
+    unreadable without the descriptions the topology is written in, and a public
+    post is unpublishable with them. ``[text] default = "redact"`` with
+    ``[interfaces] default = "keep"`` says that in two lines.
+    """)
+
+VlansPolicy = _rule_policy(
+    "vlans", "keep",
+    """What a VLAN is called: the ``name`` under a ``vlan <id>`` block.
+
+    Not an SVI -- an ``interface Vlan905`` block is ``interfaces``. On a
+    service-provider access switch this is frequently a service or customer
+    identifier, and it was previously unreachable by any configuration, which
+    is why the report had to name VLAN names as something it never touched.
+
+    ``pseudo`` is the action to reach for: a VLAN name is referred to elsewhere
+    in the config, so a type-valid ``vlname-f11e24`` keeps it loadable.
+    """)
+
+#: the families whose members are named rules, and so have a section each
+RULE_FAMILIES = ("secrets", "text", "identity", "platform",
+                 "interfaces", "vlans")
+
+#: family -> its section class
+RULE_SECTIONS = {"secrets": SecretsPolicy, "text": TextPolicy,
+                 "identity": IdentityPolicy, "platform": PlatformPolicy,
+                 "interfaces": InterfacesPolicy, "vlans": VlansPolicy}
+
+
 @dataclass
 class CustomRule:
     """A user-supplied rule.
@@ -284,12 +427,17 @@ class CustomRule:
     ``family`` decides both the action (via ``[policy]``) and how the
     replacement is rendered.
 
+    ``action`` optionally gives this one rule its own action, the way a key
+    in ``[secrets]`` or ``[text]`` does for a built-in one. Left unset, the
+    rule takes its family's action.
+
     ``stanza`` optionally restricts the rule to a JunOS top-level stanza.
     """
 
     name: str
     pattern: str
     family: str = "secrets"
+    action: str | None = None
     stanza: str | None = None
 
     def __post_init__(self) -> None:
@@ -301,6 +449,9 @@ class CustomRule:
             raise ConfigError(
                 f"custom rule {self.name!r}: family must be one of "
                 f"{', '.join(FAMILIES)}, got {self.family!r}")
+        if self.action is not None:
+            _check_action(f"custom rule {self.name!r} action", self.family,
+                          self.action)
 
 
 @dataclass
@@ -322,8 +473,13 @@ class Config:
     ipv4: IPv4Policy = field(default_factory=IPv4Policy)
     ipv6: IPv6Policy = field(default_factory=IPv6Policy)
     macs: MacPolicy = field(default_factory=MacPolicy)
-    #: per-rule exceptions to [policy]: rule name -> action
-    overrides: dict[str, str] = field(default_factory=dict)
+    #: the four rule-named families, one section each
+    secrets: SecretsPolicy = field(default_factory=SecretsPolicy)
+    text: TextPolicy = field(default_factory=TextPolicy)
+    identity: IdentityPolicy = field(default_factory=IdentityPolicy)
+    platform: PlatformPolicy = field(default_factory=PlatformPolicy)
+    interfaces: InterfacesPolicy = field(default_factory=InterfacesPolicy)
+    vlans: VlansPolicy = field(default_factory=VlansPolicy)
     #: extra rules of your own
     custom: list[CustomRule] = field(default_factory=list)
     verify: VerifyConfig = field(default_factory=VerifyConfig)
@@ -340,30 +496,40 @@ class Config:
             raise ConfigError(f"vendor must be one of {VENDORS}, got {self.vendor!r}")
         self.custom = [c if isinstance(c, CustomRule) else CustomRule(**c)
                        for c in self.custom]
-        self._validate_overrides()
         self._validate_custom()
 
     # -- resolution -------------------------------------------------------
     def action_for_rule(self, rule_name: str) -> str:
         """The action for one named rule.
 
-        ``overrides[name]`` if present, else the action of the rule's family.
+        There is exactly one place a rule's action can come from: the section
+        for its family, which either names the rule or falls back to that
+        section's ``default``. A custom rule answers from its own ``action``
+        if it set one, else from its family.
         """
-        if rule_name in self.overrides:
-            return self.overrides[rule_name]
-        return self.action_for(self.family_of(rule_name))
+        for c in self.custom:
+            if c.name == rule_name:
+                return c.action or self.action_for(c.family)
+        family = self.family_of(rule_name)
+        section = RULE_SECTIONS.get(family)
+        if section is not None:
+            return getattr(self, family).action(rule_name)
+        return self.action_for(family)
 
     def action_for(self, family: str) -> str:
         """The family-level action.
 
-        The seven ``[policy]`` families answer from ``[policy]``. ``ipv4`` /
-        ``ipv6`` answer with their ``default`` -- per-class detail lives in
-        :meth:`IPv4Policy.action`. ``macs`` is per-half, so it answers
-        ``keep`` only when both halves are kept, and ``pseudo`` (i.e. active,
-        see ``[macs]``) when they differ.
+        The four ``[policy]`` families answer from ``[policy]``. The four
+        rule-named families, and ``ipv4`` / ``ipv6``, answer with their
+        section's ``default`` -- the per-rule and per-class detail lives in
+        :meth:`action_for_rule` and :meth:`IPv4Policy.action`. ``macs`` is
+        per-half, so it answers ``keep`` only when both halves are kept, and
+        ``pseudo`` (i.e. active, see ``[macs]``) when they differ.
         """
         if family in POLICY_FAMILIES:
             return getattr(self.policy, family)
+        if family in RULE_FAMILIES:
+            return getattr(self, family).default
         if family == "ipv4":
             return self.ipv4.default
         if family == "ipv6":
@@ -388,16 +554,6 @@ class Config:
                 f"See netredact --list-rules") from exc
 
     # -- validation -------------------------------------------------------
-    def _validate_overrides(self) -> None:
-        known = set(rules.rule_names()) | {c.name for c in self.custom}
-        unknown = sorted(set(self.overrides) - known)
-        if unknown:
-            raise ConfigError(
-                f"[overrides]: unknown rule(s) {', '.join(unknown)}. "
-                f"See netredact --list-rules")
-        for name, action in self.overrides.items():
-            _check_action(f"[overrides] {name}", self.family_of(name), action)
-
     def _validate_custom(self) -> None:
         for c in self.custom:
             _check_action(f"custom rule {c.name!r}", c.family,
@@ -440,9 +596,6 @@ class Config:
             if f.name not in raw:
                 continue
             value = raw[f.name]
-            if f.name == "overrides":
-                kwargs["overrides"] = _build_overrides(value)
-                continue
             if f.name == "custom":
                 kwargs["custom"] = _build_custom(value)
                 continue
@@ -450,7 +603,8 @@ class Config:
             if sub is not None:
                 if not isinstance(value, dict):
                     raise ConfigError(f"[{f.name}] must be a table")
-                kwargs[f.name] = _build(sub, value, f.name)
+                kwargs[f.name] = _build(sub, value, f.name,
+                                        kebab=f.name in RULE_FAMILIES)
             else:
                 kwargs[f.name] = value
         return cls(**kwargs)
@@ -467,23 +621,33 @@ class Config:
 def _dataclass_for(f) -> type | None:
     mapping = {
         "policy": PolicyConfig, "ipv4": IPv4Policy, "ipv6": IPv6Policy,
-        "macs": MacPolicy, "verify": VerifyConfig,
+        "macs": MacPolicy, "verify": VerifyConfig, **RULE_SECTIONS,
     }
     return mapping.get(f.name)
 
 
-def _build(cls: type, raw: dict, section: str):
-    known = {f.name for f in fields(cls)}
-    unknown = set(raw) - known
+def _build(cls: type, raw: dict, section: str, *, kebab: bool = False):
+    """Build one section from its TOML table.
+
+    ``kebab`` is for ``[platform]``, whose keys are rule names: the field is
+    ``os_version`` and the key is ``os-version``. Every message here speaks
+    the TOML spelling, so a typo is reported in the words the user wrote.
+    """
+    spell = (lambda name: name.replace("_", "-")) if kebab else (lambda name: name)
+    known = {spell(f.name): f.name for f in fields(cls)}
+    unknown = set(raw) - set(known)
     if unknown:
         raise ConfigError(
             f"[{section}]: unknown key(s) {', '.join(sorted(unknown))}. "
             f"Expected: {', '.join(sorted(known))}")
+    kwargs = {}
     for key, value in raw.items():
-        expected = next(f for f in fields(cls) if f.name == key)
+        name = known[key]
+        expected = next(f for f in fields(cls) if f.name == name)
         _check_type(section, key, value, expected)
+        kwargs[name] = value
     try:
-        return cls(**raw)
+        return cls(**kwargs)
     except TypeError as exc:
         raise ConfigError(f"[{section}]: {exc}") from exc
 
@@ -496,19 +660,6 @@ def _check_type(section: str, key: str, value, f) -> None:
         raise ConfigError(f"[{section}] {key} must be a string, got {value!r}")
     if ann.startswith("list") and not isinstance(value, list):
         raise ConfigError(f"[{section}] {key} must be a list, got {value!r}")
-
-
-def _build_overrides(raw) -> dict[str, str]:
-    if not isinstance(raw, dict):
-        raise ConfigError("[overrides] must be a table of rule name = action")
-    out: dict[str, str] = {}
-    for key, value in raw.items():
-        if not isinstance(value, str):
-            raise ConfigError(
-                f"[overrides] {key} must be an action string "
-                f"({' | '.join(ACTIONS)}), got {value!r}")
-        out[key] = value
-    return out
 
 
 def _build_custom(raw) -> list[CustomRule]:
@@ -536,19 +687,22 @@ def _build_custom(raw) -> list[CustomRule]:
 # ---------------------------------------------------------------------------
 
 _REMOVED_SECTIONS = {
-    "redact": f"[redact] was replaced by [policy] and [overrides]; {_DOCS}",
+    "overrides": "[overrides] is gone: a rule is set in the section for its "
+                 "own family, so every rule now has exactly one home. Each "
+                 f"key you had moves as follows -- {_DOCS}",
+    "redact": f"[redact] was replaced by the family sections; {_DOCS}",
     "scrub": f"[scrub] was replaced by [policy]; {_DOCS}",
     "ips": f"[ips] was replaced by [ipv4] and [ipv6]; {_DOCS}",
 }
 
 _REMOVED_KEYS = {
     ("redact", "descriptions"):
-        'now policy.text = "keep" | "pseudo" | "hash" | "redact"',
+        'now [text] default = "keep" | "pseudo" | "hash" | "redact"',
     ("redact", "banners"):
-        'now policy.text, or [overrides] banner = "redact" for banners alone',
+        'now [text] default, or [text] banner = "redact" for banners alone',
     ("redact", "disable"):
-        'disabling is an action now: set the family in [policy] or the rule '
-        'in [overrides] to "keep"',
+        'disabling is an action now: set the section default or the rule '
+        'itself to "keep"',
     ("redact", "custom"):
         "now top-level [[custom]] entries, each with a family",
     ("scrub", "ipv4"):
@@ -572,6 +726,23 @@ _REMOVED_KEYS = {
 }
 
 
+#: every rule that could have been named in ``[overrides]``, and the section
+#: it lives in now. Derived from the rule table, so a refiled rule cannot be
+#: pointed at the wrong section.
+_REMOVED_KEYS.update({
+    ("overrides", name): f"now [{rules.family_of(name)}] {name}"
+    for name in rules.rule_names()
+})
+
+#: keys whose *section* survived but which themselves moved. A family that
+#: became a section of its own left a hole in ``[policy]``, and landing in the
+#: generic "unknown key" message would not say where to look.
+_MOVED_KEYS = {
+    ("policy", family): f'now [{family}] default, plus one key per rule'
+    for family in RULE_FAMILIES
+}
+
+
 def _reject_removed(raw: dict) -> None:
     """Turn an old-style config into a migration message, not a puzzle."""
     for section, message in _REMOVED_SECTIONS.items():
@@ -585,6 +756,12 @@ def _reject_removed(raw: dict) -> None:
                 if hint:
                     lines.append(f"  {section}.{key}: {hint}")
         raise ConfigError("\n".join(lines))
+
+    moved = [(section, key) for section, key in _MOVED_KEYS
+             if isinstance(raw.get(section), dict) and key in raw[section]]
+    if moved:
+        raise ConfigError("\n".join(
+            [f"[{s}] {k}: {_MOVED_KEYS[(s, k)]}" for s, k in sorted(moved)]))
 
 
 def find_config(start: str | os.PathLike | None = None) -> Path | None:
@@ -631,9 +808,6 @@ _TOP_COMMENTS = {
 }
 
 _POLICY_COMMENTS = {
-    "secrets": "passwords, keys, community strings, hashes (no pseudo)",
-    "text": "descriptions, remarks, banners, login messages, location, contact",
-    "identity": "serials, UDIs, engine IDs, certificates, SSH public keys",
     "hostnames": "device names, from the collect pass",
     "domains": "domain names and search lists",
     "usernames": "local users, AAA users, JunOS login names",
@@ -659,6 +833,58 @@ _IP_COMMENTS = {
         "keep_networks": ("extra prefixes never to touch, whatever class they "
                           "fall into"),
     },
+}
+
+#: the header above each family section. The per-rule keys below it carry no
+#: gloss of their own: at 49 rules that would bury the guidance, and
+#: `netredact --list-rules` says what each one matches.
+_SECTION_INTROS = {
+    "secrets": [
+        "# Passwords, keys, community strings and password hashes. This is",
+        "# the one family that acts by default, and the whole of netredact's",
+        "# default promise: credentials are destroyed, nothing else is.",
+        "# `pseudo` is refused here -- the substitute would be an HMAC of the",
+        "# real credential, computable by anyone who can derive it.",
+    ],
+    "text": [
+        "# Descriptions, ACL remarks, banners, login messages, SNMP location",
+        "# and contact. On a service-provider config this is where the",
+        "# customer names live. `hash` is usually the right middle ground:",
+        "# <DESC-f11e24> still tells two ports apart and still correlates the",
+        "# same port across files, without saying whose it is.",
+    ],
+    "identity": [
+        "# Serial numbers, license UDIs, SNMP engine IDs, certificates and",
+        "# SSH public keys. None is a credential; all of them tie the file to",
+        "# one real device. `default = \"hash\"` with `serial-number = \"keep\"`",
+        "# is the vendor support case in two lines.",
+    ],
+    "platform": [
+        "# The hardware model, the software release and the boot image.",
+        "# Neither a credential nor an instance identity -- every device off",
+        "# the same production line carries it. What it discloses is the",
+        "# attack surface: a model plus a release number is a CVE list. Kept",
+        "# by default, because it is also the first thing a support desk asks",
+        "# for and the thing a reviewer needs to judge a config at all.",
+    ],
+    "interfaces": [
+        "# What a port is called: the `description` on an interface, and only",
+        "# there -- every other description belongs to `text` above. It is a",
+        "# section of its own because it is the one piece of free text with two",
+        "# incompatible audiences: a TAC case is unreadable without the",
+        "# descriptions your topology is written in, and a public post is",
+        "# unpublishable with them. `[text] redact` plus `[interfaces] keep`",
+        "# says exactly that.",
+    ],
+    "vlans": [
+        "# What a VLAN is called: the `name` under a `vlan <id>` block. NOT an",
+        "# SVI -- an `interface Vlan905` block is an interface, and its",
+        "# description belongs to `[interfaces]`. On an access switch a VLAN",
+        "# name is frequently a service or customer identifier.",
+        "#",
+        "# `pseudo` is the one to reach for here: the config refers to a VLAN",
+        "# by name elsewhere, so a type-valid `vlname-f11e24` still loads.",
+    ],
 }
 
 _MACS_COMMENTS = {
@@ -703,12 +929,41 @@ def _block(rows) -> list[str]:
 
 def _render_policy(policy: PolicyConfig) -> list[str]:
     out = [
-        "# What happens to each family of sensitive material. Per-rule",
-        "# exceptions live in [overrides]; addresses have their own sections.",
+        "# The four families that have no rules: the collect pass reads these",
+        "# names off the lines that declare them and then substitutes them",
+        "# wherever they appear, so there is nothing to name per rule. Every",
+        "# other family is a table of rules and has a section of its own.",
         "[policy]",
     ]
     out += _block((f.name, getattr(policy, f.name),
                    _POLICY_COMMENTS.get(f.name), False) for f in fields(policy))
+    out.append("")
+    return out
+
+
+def _render_rule_section(family: str, section) -> list[str]:
+    """One family section: `default`, then every rule in the family.
+
+    Same shape as an address section one level down -- a `default` plus the
+    members it governs -- and for the same reason: it is the only way to say
+    "all of this except that one" without spelling out every member.
+    """
+    out = list(_SECTION_INTROS[family])
+    out += [
+        "#",
+        "# `default` governs every rule; name a rule below to give it its own",
+        "# action. The keys are rule names: `netredact --list-rules` says what",
+        "# each one matches.",
+        f"[{family}]",
+    ]
+    out += _block([("default", section.default,
+                    "the action for every rule not named below", False)])
+    out.append("")
+    out.append("# Per-rule actions. Commented out means: inherit `default`.")
+    out += _block(
+        (rule, section.action(rule), None,
+         getattr(section, _field(rule)) is None)
+        for rule in section.RULES)
     out.append("")
     return out
 
@@ -758,25 +1013,6 @@ def _render_macs(macs: MacPolicy) -> list[str]:
     return out
 
 
-def _render_overrides(overrides: dict[str, str]) -> list[str]:
-    out = [
-        "# Per-rule exceptions to [policy]. The key is a rule name from",
-        "# `netredact --list-rules`, the value an action. A rule's family",
-        "# still decides how the replacement is rendered.",
-        "[overrides]",
-    ]
-    if overrides:
-        out += _block((key, value, None, False) for key, value in overrides.items())
-    else:
-        out += [
-            '# location      = "keep"',
-            '# serial-number = "keep"',
-            '# banner        = "redact"',
-        ]
-    out.append("")
-    return out
-
-
 def _render_verify(verify: VerifyConfig) -> list[str]:
     out = [
         "# The pass that re-scans the OUTPUT for anything still sensitive.",
@@ -800,7 +1036,9 @@ _CUSTOM_EXAMPLE = [
     '# name = "acme-shared-key"',
     "# pattern = '\\s*acme\\s+shared-key\\s+'",
     '# family = "secrets"    # ' + " | ".join(FAMILIES),
-    '# stanza = "snmp"       # optional, JunOS top-level stanza only',
+    '# action = "redact"     # optional; without it the family decides',
+    '# stanza = "snmp"       # optional: a JunOS stanza, or interfaces / vlans',
+    "#                       # for the IOS-style block of that name",
     "",
 ]
 
@@ -823,11 +1061,12 @@ def _render_toml(cfg: Config) -> str:
             line = f"{f.name} = {_toml_value(value)}"
             out.append(f"{line}  # {comment}" if comment else line)
     out.append("")
+    for family in RULE_FAMILIES:
+        out += _render_rule_section(family, getattr(cfg, family))
     out += _render_policy(cfg.policy)
     out += _render_ip("ipv4", cfg.ipv4)
     out += _render_ip("ipv6", cfg.ipv6)
     out += _render_macs(cfg.macs)
-    out += _render_overrides(cfg.overrides)
     out += _render_verify(cfg.verify)
     out += _CUSTOM_EXAMPLE
     return "\n".join(out)

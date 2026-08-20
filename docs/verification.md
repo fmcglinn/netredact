@@ -54,7 +54,7 @@ The full table, with the gate on each check, is in the
 parameter block.
 
 These fire **regardless of policy**. If you set `[policy] secrets = "keep"`, or
-`[overrides] enable-secret = "keep"`, the output still fails `--strict`:
+`[secrets] enable-secret = "keep"`, the output still fails `--strict`:
 
 ```
 $ netredact config.txt --strict        # with [policy] secrets = "keep"
@@ -179,8 +179,10 @@ Findings are advisory, and some need judgement:
 - A secret with no recognisable shape. A short plaintext password with no keyword
   near it is indistinguishable from a hostname.
 - Anything in the categories that are
-  [never touched](README.md#what-is-never-touched). A VLAN named
-  `ACME-CORP-DATA` will never be reported.
+  [never touched](README.md#never-touched). An ACL named `ACME-CORP-IN` will
+  never be reported. Nor will a VLAN name or an interface description that
+  `[vlans]` / `[interfaces]` were told to keep -- a value the policy kept on
+  purpose is not a miss.
 - Meaning. `description Bob's Bakery` is a customer name to you and ordinary
   text to a regex.
 

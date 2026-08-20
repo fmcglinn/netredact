@@ -16,8 +16,8 @@ and Juniper JunOS configurations.
 
 - **[Address classes](address-classes.md)** — the IPv4 and IPv6 taxonomy that
   `[ipv4]` and `[ipv6]` act on. *Generated from source.*
-- **[Rule reference](rules.md)** — all 45 rules with their families, and every
-  verification check. *Generated from source.*
+- **[Rule reference](rules.md)** — every rule with its family and the block it
+  is scoped to, and every verification check. *Generated from source.*
 - **[Verification](verification.md)** — what the output pass catches, what it
   structurally cannot, and how to read its findings.
 - **[Library use](library.md)** — the module API.

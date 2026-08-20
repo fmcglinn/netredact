@@ -12,16 +12,18 @@ from netredact.addresses import V4_CLASS_NAMES, V6_CLASS_NAMES
 from netredact.pseudonymise import is_mask_like
 
 
-def test_there_are_forty_five_uniquely_named_rules():
+def test_every_rule_name_is_unique():
+    """A rule is named once, globally: its name is a config key."""
     names = rule_names()
-    assert len(names) == 45
-    assert len(set(names)) == 45
+    assert len(set(names)) == len(names)
 
 
 def test_every_rule_has_a_family_and_the_split_is_as_designed():
     names = rule_names()
     counts = Counter(family_of(name) for name in names)
-    assert counts == {"secrets": 32, "text": 7, "identity": 6}
+    assert counts == {"secrets": 32, "text": 7, "identity": 6, "platform": 4,
+                      "interfaces": 1, "vlans": 1}
+    assert sum(counts.values()) == len(names)
     assert set(counts) <= set(FAMILIES)
 
 
@@ -54,6 +56,16 @@ def test_family_of_rejects_an_unknown_name():
     ("license-udi", "identity"),
     ("certificate-block", "identity"),
     ("pem-cert", "identity"),
+    # what the box is and what it runs: shared by every device of the type,
+    # so neither a credential nor an instance identity
+    ("hardware-model", "platform"),
+    ("os-version", "platform"),
+    ("software-image", "platform"),
+    ("boot-image", "platform"),
+    # only recognisable from the block they sit in, and each with an audience
+    # of its own: see rules.BLOCK_SCOPES
+    ("interface-description", "interfaces"),
+    ("vlan-name", "vlans"),
 ])
 def test_rule_families(name, family):
     assert family_of(name) == family
@@ -127,9 +139,27 @@ def test_only_snmp_host_has_a_handler():
     assert handlers == {"snmp-host": "snmp-host"}
 
 
-def test_stanza_scoped_rules():
+def test_scoped_rules_name_the_block_they_need():
+    """A scope is a JunOS stanza or an IOS-style block, under one set of names."""
     stanzas = {r.name: r.stanza for r in build_rules() if r.stanza}
-    assert stanzas == {"junos-community": "snmp", "junos-location-body": "location"}
+    assert stanzas == {"junos-community": "snmp",
+                       "junos-location-body": "location",
+                       "interface-description": "interfaces",
+                       "vlan-name": "vlans"}
+
+
+def test_the_generic_description_rule_is_scoped_out_of_interfaces():
+    """The two description rules must partition, not overlap.
+
+    They share one pattern, so if the exclusion were dropped both would act on
+    the same span: the second would render the first's marker again, count it
+    twice, and let `[text]` override a `keep` that `[interfaces]` asked for.
+    """
+    rules = {r.name: r for r in build_rules()}
+    assert rules["description"].outside == ("interfaces",)
+    assert rules["interface-description"].stanza == "interfaces"
+    assert rules["description"].regex.pattern == \
+        rules["interface-description"].regex.pattern
 
 
 def test_junos_keywords_are_exported_and_used_as_a_negative_lookahead():

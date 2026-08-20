@@ -10,8 +10,9 @@ from netredact.cli import EXIT_FINDINGS, EXIT_OK, EXIT_USAGE, main
 def test_print_config_is_valid_toml_and_shows_the_defaults(capsys):
     assert main(["--print-config"]) == EXIT_OK
     parsed = tomllib.loads(capsys.readouterr().out)
-    assert parsed["policy"]["secrets"] == "redact"
-    assert parsed["policy"]["text"] == "keep"
+    assert parsed["secrets"]["default"] == "redact"
+    assert parsed["text"]["default"] == "keep"
+    assert parsed["policy"]["hostnames"] == "keep"
     assert parsed["ipv4"]["default"] == "keep"
     assert parsed["ipv6"]["default"] == "keep"
     assert parsed["macs"] == {"oui": "keep", "nic": "keep", "pool": "00:00:5e"}
@@ -94,7 +95,7 @@ def test_config_file_is_honoured(fixtures, tmp_path, capsys):
 
 def test_bad_config_is_a_usage_error(fixtures, tmp_path, capsys):
     cfg = tmp_path / "bad.toml"
-    cfg.write_text('[policy]\nsecrets = "pseudo"\n')
+    cfg.write_text('[secrets]\ndefault = "pseudo"\n')
     assert main([str(fixtures / "cisco.cfg"), "-c", str(cfg)]) == EXIT_USAGE
     err = capsys.readouterr().err
     assert "config error" in err
@@ -216,7 +217,7 @@ def test_report_lists_findings_and_truncates_a_long_run(tmp_path, capsys):
     src = tmp_path / "leaky.cfg"
     src.write_text("".join(f"enable secret 5 PlainText{i}\n" for i in range(8)))
     cfg = tmp_path / "netredact.toml"
-    cfg.write_text('[policy]\nsecrets = "keep"\n')
+    cfg.write_text('[secrets]\ndefault = "keep"\n')
     assert main([str(src), "-c", str(cfg), "--strict", "--report"]) == EXIT_FINDINGS
     err = capsys.readouterr().err
     assert "VERIFY: 8 line(s) a human should look at" in err
@@ -234,7 +235,7 @@ def test_findings_reach_stderr_without_report(tmp_path, capsys):
     src = tmp_path / "leaky.cfg"
     src.write_text("enable secret 5 PlainText\n")
     cfg = tmp_path / "netredact.toml"
-    cfg.write_text('[policy]\nsecrets = "keep"\n')
+    cfg.write_text('[secrets]\ndefault = "keep"\n')
     assert main([str(src), "-c", str(cfg), "--strict"]) == EXIT_FINDINGS
     out, err = capsys.readouterr()
     assert "VERIFY: 1 line(s) a human should look at" in err
@@ -248,7 +249,7 @@ def test_findings_reach_stderr_without_strict(tmp_path, capsys):
     src = tmp_path / "leaky.cfg"
     src.write_text("enable secret 5 PlainText\n")
     cfg = tmp_path / "netredact.toml"
-    cfg.write_text('[policy]\nsecrets = "keep"\n')
+    cfg.write_text('[secrets]\ndefault = "keep"\n')
     assert main([str(src), "-c", str(cfg)]) == EXIT_OK
     assert "VERIFY: 1 line(s)" in capsys.readouterr().err
 

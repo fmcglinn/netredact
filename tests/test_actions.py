@@ -7,15 +7,22 @@ tools read the markers -- so it is asserted literally.
 import pytest
 
 from netredact import Config, Pseudonymiser, Result, sanitise_text
+from netredact.config import RULE_FAMILIES
 from netredact.pseudonymise import PREFIX, REDACT_CONST
 
-from .conftest import SALT, policy
+from .conftest import SALT, policy, section
 
 #: (key, pseudo, hash, redact) -- ``None`` means the cell is illegal.
 #: Tags are the HMAC of the value under conftest.SALT, so they are fixed.
 TABLE = [
     ("secrets",           None,                    "<SECRET-ced7b7>", "<REMOVED>"),
     ("description",       "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
+    # an interface description is a description: the marker says what was taken
+    # out, not which section took it out
+    ("interface-description", "desc-3cc015",        "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
+    # the pseudo token is `vlname`, never `vlan`: `VLAN-100` is a plausible real
+    # VLAN name and would then read as already sanitised
+    ("vlan-name",         "vlname-7ae0e1",         "<VLAN-7ae0e1>",   "<REMOVED>"),
     ("acl-remark",        "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
     ("login-message",     "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
     ("location",          "desc-3cc015",           "<DESC-3cc015>",   "<DESCRIPTION-REMOVED>"),
@@ -38,6 +45,7 @@ TABLE = [
 VALUE = {
     "secrets": "hunter2",
     "description": "a description", "acl-remark": "a description",
+    "interface-description": "a description", "vlan-name": "ACME-CORP-DATA",
     "login-message": "a description", "location": "a description",
     "contact": "a description", "banner": "a description",
     "serial-number": "FDO123", "license-udi": "PID:X,SN:Y",
@@ -120,8 +128,18 @@ def test_addresses_and_macs_render_per_class_and_per_half():
 
 # -- end to end -------------------------------------------------------------
 
-TEXTY = ('interface Gi0/0\n description UPLINK TO ACME PTY LTD\n'
+#: free text that is NOT on an interface: a VRF description, an ACL remark and
+#: an SNMP location. The description deliberately sits under `vrf definition`
+#: rather than an interface -- inside an interface block it belongs to the
+#: `interfaces` family, which is the point of IFACE_TEXT below.
+TEXTY = ('vrf definition CUST\n description UPLINK TO ACME PTY LTD\n'
          ' remark allow noc\nsnmp-server location Level 5 Example St\n')
+
+#: the same description, on a port
+IFACE_TEXT = 'interface Gi0/0\n description UPLINK TO ACME PTY LTD\n'
+
+#: a VLAN name, which is only a VLAN name because of the line above it
+VLAN_TEXT = 'vlan 905\n name ACME-CORP-DATA\n'
 
 
 @pytest.mark.parametrize("action,expected", [
@@ -135,6 +153,45 @@ def test_text_family_end_to_end(action, expected):
     assert expected in out
     if action != "keep":
         assert "ACME" not in out
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("keep", "UPLINK TO ACME PTY LTD"),
+    ("pseudo", "description desc-"),
+    ("hash", "description <DESC-"),
+    ("redact", "description <DESCRIPTION-REMOVED>"),
+])
+def test_interfaces_family_end_to_end(action, expected):
+    """An interface description renders as a description: same markers, own key."""
+    out = sanitise_text(IFACE_TEXT, policy(interfaces=action), salt=SALT).text
+    assert expected in out
+    if action != "keep":
+        assert "ACME" not in out
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("keep", "name ACME-CORP-DATA"),
+    ("pseudo", "name vlname-"),
+    ("hash", "name <VLAN-"),
+    ("redact", "name <REMOVED>"),
+])
+def test_vlans_family_end_to_end(action, expected):
+    out = sanitise_text(VLAN_TEXT, policy(vlans=action), salt=SALT).text
+    assert expected in out
+    assert "vlan 905" in out, "the VLAN id is structure, not a name"
+    if action != "keep":
+        assert "ACME" not in out
+
+
+def test_the_two_description_families_never_both_act():
+    """One selector, split by scope: each description is claimed exactly once."""
+    both = policy(text="redact", interfaces="hash")
+    result = sanitise_text(TEXTY + IFACE_TEXT, both, salt=SALT)
+    lines = result.text.splitlines()
+    assert lines[1] == " description <DESCRIPTION-REMOVED>"      # the VRF one
+    assert lines[-1].startswith(" description <DESC-")           # the port one
+    assert result.counts["description"] == 1
+    assert result.counts["interface-description"] == 1
 
 
 @pytest.mark.parametrize("action,expected", [
@@ -161,11 +218,11 @@ def test_secrets_family_end_to_end(cisco, action, expected):
 def test_a_kept_rule_is_still_counted(cisco):
     """The report promises a count of what was left, so keep still matches."""
     result = sanitise_text(cisco, Config(), salt=SALT)
-    assert result.kept_counts["description"] == 2
+    assert result.kept_counts["interface-description"] == 2
     assert result.kept_counts["location"] == 1
     assert result.kept_counts["certificate-block"] == 1
     assert result.counts["enable-secret"] == 2
-    assert "description" not in result.counts
+    assert "interface-description" not in result.counts
 
 
 # -- Result -----------------------------------------------------------------
@@ -199,7 +256,7 @@ def test_redactions_counts_only_destroyed_material(cisco):
     assert result.counts["ipv4"] > 0 and result.counts["hostnames"] > 0
     assert result.redactions == sum(
         n for k, n in result.counts.items()
-        if result.families[k] in ("secrets", "text", "identity"))
+        if result.families[k] in RULE_FAMILIES)
 
 
 def test_policy_summary_names_what_acts():
@@ -227,20 +284,19 @@ def test_policy_summary_reports_a_mixed_address_policy():
     assert "ipv4=keep (per class)" in summary
 
 
-def test_policy_summary_truncates_a_long_override_list():
-    cfg = Config(overrides={n: "keep" for n in
-                            ("location", "contact", "banner", "description",
-                             "acl-remark")})
+def test_policy_summary_reports_a_mixed_family_as_per_rule():
+    """A family whose rules disagree cannot be named by one action."""
+    cfg = section("text", "redact", banner="keep")
     summary = sanitise_text("hostname x\n", cfg, salt=SALT).policy_summary
-    assert "more override(s)" in summary
+    assert "text=redact (per rule)" in summary
 
 
 # -- idempotence ------------------------------------------------------------
 
 def _every_family(action: str) -> Config:
-    cfg = policy(secrets=action, text=action, identity=action,
-                 hostnames=action, domains=action, usernames=action,
-                 emails=action)
+    cfg = policy(hostnames=action, domains=action, usernames=action,
+                 emails=action,
+                 **{family: action for family in RULE_FAMILIES})
     cfg.ipv4.default = action
     cfg.ipv6.default = action
     cfg.macs.oui = cfg.macs.nic = action

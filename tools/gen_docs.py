@@ -21,13 +21,16 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from netredact import Config  # noqa: E402
 from netredact.addresses import V4_CLASSES, V6_CLASSES  # noqa: E402
+from netredact.config import RULE_FAMILIES  # noqa: E402
 from netredact.rules import (  # noqa: E402
     BANNER_RE,
     BANNER_RULE,
     BLOB_RULES,
+    BLOCK_SCOPES,
     BLOCK_STARTS,
     BUILTIN,
     ENC,
+    OUTSIDE,
     VAL,
     VAL_MACRO,
     family_of,
@@ -89,9 +92,31 @@ RULE_NOTES = {
     "unsupported-transceiver": "Arista `service unsupported-transceiver "
                                "<label> <code>`: a TAC-issued code, and a "
                                "label that in practice carries a project name",
-    "description": "an interface / peer / policy `description`",
+    "hardware-model": "a `Model:` / `Hardware:` / `Chassis type:` / `PID:` "
+                      "line, where the `:` or `=` is required so the "
+                      "`platform` and `model` config keywords are not "
+                      "touched; and the model in Arista's `! device: <name> "
+                      "(<model>, <release>)` header",
+    "os-version": "a line that is just `version <digits...>`: IOS `version "
+                  "15.7`, NX-OS `version 9.3(5)`, JunOS `version "
+                  "21.4R3-S4.9;`; and the release in Arista's `! device:` "
+                  "header",
+    "software-image": "`Software image version:`, `System image file is ...`, "
+                      "`Software version:`; and the bare `Junos:` / `EOS:` "
+                      "forms, where a colon is required",
+    "boot-image": "`boot system <image>`, commented out or not",
+    "description": "a `description` anywhere EXCEPT on an interface -- a VRF, "
+                   "a policy, a peer group. The interface case is its own rule "
+                   "in its own family, one row down",
     "acl-remark": "an ACL `remark`",
     "login-message": "`banner login`-style `message` and `announcement` text",
+    "interface-description": "the same `description` line, when it is inside an "
+                             "interface: `interface Gi0/0`, JunOS "
+                             "`interfaces { … }`, `set interfaces … "
+                             "description …`",
+    "vlan-name": "the `name` under a `vlan <id>` block, and the one-line "
+                 "`vlan <id> name <name>` form. Never an SVI: `interface "
+                 "Vlan905` is an interface",
 }
 
 BLOB_NOTES = {
@@ -170,8 +195,7 @@ def pattern_cell(pattern: str) -> str:
 
 def family_counts() -> str:
     counts = Counter(family_of(name) for name in rule_names())
-    return ", ".join(f"{counts[f]} `{f}`"
-                     for f in ("secrets", "text", "identity") if counts[f])
+    return ", ".join(f"{counts[f]} `{f}`" for f in RULE_FAMILIES if counts[f])
 
 
 def rules_md() -> str:
@@ -187,10 +211,11 @@ def rules_md() -> str:
            "- 1 banner handler",
            f"- {len(VERIFY_RULES) + len(CONDITIONAL_CHECKS)} verification checks\n",
            "A rule does not decide what happens to what it finds. Its **family**",
-           "does: the action comes from `[policy] <family>`, unless the rule is",
-           "named in `[overrides]`, which takes precedence. So switching one rule",
-           "off is `[overrides] <rule> = \"keep\"`, and `netredact --list-rules`",
-           "prints the same names.\n",
+           "does, and every family of rules is a section: the action is",
+           "`[<family>] <rule>` if that key is set, otherwise `[<family>]",
+           "default`. So switching one rule off is `[secrets] enable-secret =",
+           "\"keep\"`, and `netredact --list-rules` prints the same names next",
+           "to the section each belongs to.\n",
            "## Placeholders used in the patterns\n",
            "| Token | Expands to |",
            "|---|---|",
@@ -213,6 +238,28 @@ def rules_md() -> str:
            "One rule needs code rather than a span: `snmp-host` walks the tokens of",
            "an `snmp-server host` line, so the keywords survive and only the",
            "community or v3 user name is acted on.\n",
+           "## Scope: the block a line is inside\n",
+           "Some material is only recognisable from what encloses it. A bare",
+           "`name CUST000000000123` is a VLAN name under `vlan 905` and a",
+           "route-map name under `route-map`, and the line itself cannot tell you",
+           "which. So a rule may name the block it needs, or the blocks it must",
+           "stay out of, and two kinds of block share one set of names:\n",
+           "| Scope | Opened by |", "|---|---|",
+           "| a JunOS stanza | `interfaces {`, `snmp {`, `location {` — the brace stack |",
+           "| an IOS-style block | " + ", ".join(
+               f"`{name}`: `{md_cell(pat.pattern)}`" for name, pat in BLOCK_SCOPES)
+           + " at column zero, plus the indented lines under it |",
+           "| one JunOS `set` line | the word after `set`, for that line only |",
+           "",
+           "The names are JunOS's own — `interfaces`, `vlans` — so one rule covers",
+           "every dialect: an IOS `interface Gi0/0` block, a JunOS",
+           "`interfaces { … }` stanza and a `set interfaces … description …` line",
+           "are all inside `interfaces`. Any other unindented line ends an",
+           "IOS-style block, including the bare `!`.\n",
+           "`interface Vlan905` is scope `interfaces`, not `vlans`: an SVI is a",
+           "port, and only a `vlan <id>` block defines a VLAN.\n",
+           "This is also what `[[custom]] stanza` sets, so a custom rule can be",
+           "restricted to a block on any vendor, not only a JunOS stanza.\n",
            "## Keyword rules\n",
            "Matched from the start of a line.\n",
            "| Rule | Family | Matches | Pattern |",
@@ -220,7 +267,9 @@ def rules_md() -> str:
     for name, pattern, family, stanza in BUILTIN:
         note = md_cell(RULE_NOTES.get(name, ""))
         if stanza:
-            note += f" -- only inside the JunOS `{stanza}` stanza"
+            note += f" -- only in scope `{stanza}`"
+        for outside in OUTSIDE.get(name, ()):
+            note += f" -- never in scope `{outside}`"
         out.append(f"| `{name}` | `{family}` | {note} | `{pattern_cell(pattern)}` |")
 
     out += ["\n## Inline rules\n",
@@ -264,7 +313,8 @@ def rules_md() -> str:
             ", ".join(f"`{c}`" for c in SHAPE_CHECKS) + ". A long base64 run is",
             "an authorised SSH key or a leaked one, and the check cannot tell",
             "which, so those four are blinded to the spans that a kept",
-            "`identity` / `text` rule matched -- including the body of a kept",
+            " / ".join(f"`{f}`" for f in SHAPE_BLIND_FAMILIES)
+            + " rule matched -- including the body of a kept",
             "block. A kept `secrets` rule never blinds anything.\n",
             "| Check | Fires when | Gated by |", "|---|---|---|"]
     for name, _ in VERIFY_RULES:

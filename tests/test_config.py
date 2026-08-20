@@ -12,6 +12,7 @@ from netredact import (
     find_config,
     rule_names,
 )
+from netredact.config import RULE_SECTIONS
 
 from .conftest import SALT, policy
 
@@ -26,8 +27,10 @@ def load(tmp_path, body: str) -> Config:
 
 def test_actions_and_families():
     assert ACTIONS == ("keep", "pseudo", "hash", "redact")
-    assert FAMILIES == ("secrets", "text", "identity", "hostnames", "domains",
-                        "usernames", "emails", "ipv4", "ipv6", "macs")
+    assert FAMILIES == ("secrets", "text", "identity", "platform",
+                        "interfaces", "vlans",
+                        "hostnames", "domains", "usernames", "emails",
+                        "ipv4", "ipv6", "macs")
 
 
 def test_pseudo_on_secrets_is_the_only_illegal_cell():
@@ -38,15 +41,19 @@ def test_pseudo_on_secrets_is_the_only_illegal_cell():
 
 def test_defaults_act_on_secrets_only():
     cfg = Config()
-    assert cfg.policy.secrets == "redact"
-    for family in ("text", "identity", "hostnames", "domains", "usernames",
-                   "emails"):
+    assert cfg.secrets.default == "redact"
+    assert all(cfg.action_for_rule(r) == "redact"
+               for r in RULE_SECTIONS["secrets"].RULES)
+    for family in ("text", "identity", "platform", "hostnames", "domains",
+                   "usernames", "emails"):
         assert cfg.action_for(family) == "keep", family
+    for family in ("text", "identity", "platform"):
+        assert not getattr(cfg, family).any_active(), family
     assert cfg.ipv4.default == "keep" and not cfg.ipv4.any_active()
     assert cfg.ipv6.default == "keep" and not cfg.ipv6.any_active()
     assert cfg.macs.oui == cfg.macs.nic == "keep"
     assert not cfg.macs.any_active()
-    assert cfg.overrides == {} and cfg.custom == []
+    assert cfg.custom == []
 
 
 def test_every_ipv4_class_inherits_default():
@@ -74,10 +81,12 @@ def test_action_for_rule_follows_the_family():
     assert cfg.action_for_rule("serial-number") == "hash"       # identity
 
 
-def test_overrides_beat_the_family():
-    cfg = Config(overrides={"location": "redact", "enable-secret": "keep"})
+def test_a_named_rule_beats_its_section_default():
+    cfg = Config(text=RULE_SECTIONS["text"](default="keep", location="redact"),
+                 secrets=RULE_SECTIONS["secrets"](default="redact",
+                                                  enable_secret="keep"))
     assert cfg.action_for_rule("location") == "redact"
-    assert cfg.action_for_rule("contact") == "keep"             # family default
+    assert cfg.action_for_rule("contact") == "keep"             # section default
     assert cfg.action_for_rule("enable-secret") == "keep"
 
 
@@ -106,9 +115,8 @@ def test_load_from_toml(tmp_path):
 vendor = "juniper"
 salt_file = "/tmp/netredact-salt"
 
-[policy]
-secrets = "hash"
-text    = "redact"
+[secrets]
+default = "hash"
 
 [ipv4]
 default = "pseudo"
@@ -119,17 +127,18 @@ pool    = ["198.18.0.0/15"]
 oui = "keep"
 nic = "pseudo"
 
-[overrides]
+[text]
+default  = "redact"
 location = "keep"
 """)
     assert cfg.vendor == "juniper"
-    assert cfg.policy.secrets == "hash"
-    assert cfg.policy.text == "redact"
+    assert cfg.secrets.default == "hash"
+    assert cfg.text.default == "redact"
     assert cfg.ipv4.action("other_unicast") == "pseudo"
     assert cfg.ipv4.action("rfc1918") == "keep"
     assert cfg.ipv4.pool == ["198.18.0.0/15"]
     assert cfg.macs.nic == "pseudo"
-    assert cfg.overrides == {"location": "keep"}
+    assert cfg.action_for_rule("location") == "keep"
     assert cfg.salt_path().name == "netredact-salt"
     assert cfg.source == str(tmp_path / "netredact.toml")
 
@@ -140,7 +149,7 @@ def test_partial_config_keeps_other_defaults(tmp_path):
     assert cfg.ipv4.pool == ["198.18.0.0/15", "100.64.0.0/10"]
     assert cfg.ipv4.well_known_resolvers[0] == "8.8.8.8"
     assert cfg.ipv6.well_known_resolvers[0] == "2001:4860:4860::8888"
-    assert cfg.policy.secrets == "redact"
+    assert cfg.secrets.default == "redact"
     assert cfg.verify.enabled is True
 
 
@@ -162,21 +171,26 @@ def test_custom_rule_family_drives_its_action():
     cfg = Config(custom=[CustomRule(name="site-notes", pattern=r"\s*site-notes\s+",
                                     family="text")])
     assert cfg.action_for_rule("site-notes") == "keep"          # text is kept
-    cfg = Config(policy=policy(text="redact").policy,
+    cfg = Config(text=RULE_SECTIONS["text"](default="redact"),
                  custom=[CustomRule(name="site-notes", pattern=r"\s*site-notes\s+",
                                     family="text")])
     assert cfg.action_for_rule("site-notes") == "redact"
 
 
-def test_custom_rule_can_be_overridden_by_name():
-    cfg = Config(custom=[CustomRule(name="acme-key", pattern="x")],
-                 overrides={"acme-key": "hash"})
-    assert cfg.action_for_rule("acme-key") == "hash"
+def test_a_custom_rule_can_carry_its_own_action():
+    cfg = Config(custom=[CustomRule(name="acme-key", pattern="x",
+                                    action="hash")])
+    assert cfg.action_for_rule("acme-key") == "hash"            # not <REMOVED>
+    assert cfg.action_for_rule("enable-secret") == "redact"     # family default
 
 
 @pytest.mark.parametrize("body,message", [
-    ('[policy]\nsecrets = "pseudo"\n', "pseudo is not available for secrets"),
-    ('[policy]\nsecrets = "destroy"\n', "unknown action 'destroy'"),
+    ('[secrets]\ndefault = "pseudo"\n', "pseudo is not available for secrets"),
+    ('[secrets]\ndefault = "destroy"\n', "unknown action 'destroy'"),
+    ('[secrets]\nno-such-rule = "keep"\n', r"unknown key\(s\) no-such-rule"),
+    ('[secrets]\nenable-secret = "pseudo"\n',
+     "pseudo is not available for secrets"),
+    ('[text]\nlocation = true\n', "must be a string"),
     ('[policy]\nnope = "keep"\n', r"unknown key\(s\) nope"),
     ('[nope]\nx = 1\n', "unknown top-level section"),
     ('[ipv4]\nrfc1917 = "keep"\n', r"unknown key\(s\) rfc1917"),
@@ -185,10 +199,6 @@ def test_custom_rule_can_be_overridden_by_name():
     ('[ipv6]\ndefault = true\n', r"\[ipv6\] default must be a string"),
     ('[macs]\noui = "hash"\nnic = "pseudo"\n',
      "hash applies to the whole address"),
-    ('[overrides]\nno-such-rule = "keep"\n', r"unknown rule\(s\) no-such-rule"),
-    ('[overrides]\nenable-secret = "pseudo"\n',
-     "pseudo is not available for secrets"),
-    ('[overrides]\nlocation = true\n', "must be an action string"),
     ('[[custom]]\nname = "x"\npattern = "y"\nfamily = "nope"\n',
      "family must be one of"),
     ('[[custom]]\nname = "x"\n', "missing 1 required positional argument"),
@@ -205,10 +215,16 @@ def test_invalid_config_is_rejected(tmp_path, body, message):
 
 def test_unknown_key_error_names_the_expected_keys(tmp_path):
     with pytest.raises(ConfigError) as exc:
-        load(tmp_path, '[policy]\nsecret = "redact"\n')
-    assert "unknown key(s) secret" in str(exc.value)
+        load(tmp_path, '[policy]\nhostname = "redact"\n')
+    assert "unknown key(s) hostname" in str(exc.value)
     assert "Expected: " in str(exc.value)
-    assert "secrets" in str(exc.value)
+    assert "hostnames" in str(exc.value)
+
+    # a rule section names its rules the same way, in their own spelling
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, '[identity]\nserial_number = "keep"\n')
+    assert "unknown key(s) serial_number" in str(exc.value)
+    assert "serial-number" in str(exc.value)
 
 
 # -- migration off the old model --------------------------------------------
@@ -216,7 +232,9 @@ def test_unknown_key_error_names_the_expected_keys(tmp_path):
 @pytest.mark.parametrize("body,message", [
     ('[scrub]\nhostnames = true\n', r"\[scrub\] was replaced by \[policy\]"),
     ('[redact]\ndescriptions = "hash"\n',
-     r"\[redact\] was replaced by \[policy\] and \[overrides\]"),
+     r"\[redact\] was replaced by the family sections"),
+    ('[overrides]\nlocation = "keep"\n', r"\[overrides\] is gone"),
+    ('[policy]\nsecrets = "redact"\n', r"now \[secrets\] default"),
     ('[ips]\npools_v4 = ["198.18.0.0/15"]\n',
      r"\[ips\] was replaced by \[ipv4\] and \[ipv6\]"),
     ('[[custom]]\nname = "x"\npattern = "y"\nmode = "value"\n',
@@ -230,7 +248,8 @@ def test_removed_keys_give_a_migration_message(tmp_path, body, message):
 @pytest.mark.parametrize("body,hint", [
     ('[scrub]\nipv4 = true\n', "now [ipv4] default"),
     ('[scrub]\nmacs = "oui"\n', "now [macs] oui / nic"),
-    ('[redact]\nbanners = "redact"\n', '[overrides] banner = "redact"'),
+    ('[redact]\nbanners = "redact"\n', '[text] banner = "redact"'),
+    ('[overrides]\nserial-number = "keep"\n', "now [identity] serial-number"),
     ('[redact]\ndisable = ["location"]\n', "disabling is an action now"),
     ('[redact]\ncustom = []\n', "now top-level [[custom]] entries"),
     ('[ips]\npool_v6 = "2001:db8::/32"\n', "now [ipv6] pool"),
@@ -266,8 +285,8 @@ def test_custom_rule_bad_regex_is_reported():
 
 def test_custom_rule_cannot_pseudonymise_a_secret():
     with pytest.raises(ConfigError, match="pseudo is not available for secrets"):
-        Config(custom=[CustomRule(name="x", pattern="y", family="secrets")],
-               overrides={"x": "pseudo"})
+        Config(custom=[CustomRule(name="x", pattern="y", family="secrets",
+                                  action="pseudo")])
 
 
 # -- pools ------------------------------------------------------------------
@@ -303,10 +322,13 @@ def test_round_trips_through_print_config(tmp_path):
 
 def test_to_toml_documents_every_rule_family_key():
     body = Config().to_toml()
-    for family in ("secrets", "text", "identity", "hostnames", "domains",
-                   "usernames", "emails"):
+    for family in ("secrets", "text", "identity", "hostnames",
+                   "domains", "usernames", "emails"):
         assert f"{family} " in body or f"{family}=" in body
     assert "[ipv4]" in body and "[ipv6]" in body and "[macs]" in body
+    assert "[platform]" in body
+    for rule in RULE_SECTIONS['platform'].RULES:
+        assert rule in body, rule
     assert "well_known_resolvers" in body
     assert "[[custom]]" in body
 
@@ -317,8 +339,14 @@ def test_find_config_prefers_cwd(tmp_path, monkeypatch):
     assert find_config() == tmp_path / "netredact.toml"
 
 
-def test_overrides_accept_every_builtin_rule_name():
-    """A user can name any rule; nothing is unreachable from the config."""
-    keepable = {name: "keep" for name in rule_names()}
-    cfg = Config(overrides=keepable)
+def test_every_builtin_rule_is_reachable_from_its_section():
+    """Nothing is unreachable: every rule has a key, and exactly one."""
+    sections = {family: RULE_SECTIONS[family](
+        default="keep",
+        **{n.replace("-", "_"): "keep" for n in RULE_SECTIONS[family].RULES})
+        for family in RULE_SECTIONS}
+    cfg = Config(**sections)
     assert all(cfg.action_for_rule(name) == "keep" for name in rule_names())
+    homes = [f for name in rule_names()
+             for f in RULE_SECTIONS if name in RULE_SECTIONS[f].RULES]
+    assert len(homes) == len(rule_names())

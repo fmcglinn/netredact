@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT_CONFIG_NAMES, Config, ConfigError
-from .rules import BUILTIN, family_of, rule_names
+from .rules import BUILTIN, OUTSIDE, family_of, rule_names
 from .sanitise import Result, sanitise_text
 from .verify import check_names
 
@@ -37,7 +37,7 @@ EXIT_USAGE = 1
 EXIT_FINDINGS = 2
 
 #: what to call a count key in the report. Rules not listed keep their rule
-#: name, which is what you would put in ``[overrides]``.
+#: name, which is what you would put in its family's section.
 LABELS = {
     "ipv4": "ipv4 addresses",
     "ipv6": "ipv6 addresses",
@@ -47,6 +47,8 @@ LABELS = {
     "usernames": "usernames",
     "emails": "e-mail addresses",
     "description": "descriptions",
+    "interface-description": "interface descriptions",
+    "vlan-name": "VLAN names",
     "acl-remark": "ACL remarks",
     "login-message": "login messages",
     "banner": "banners",
@@ -57,6 +59,10 @@ LABELS = {
     "license-udi": "license UDIs",
     "snmp-engineid": "SNMP engine IDs",
     "ssh-public-key": "SSH public keys",
+    "hardware-model": "hardware models",
+    "os-version": "software versions",
+    "software-image": "software images",
+    "boot-image": "boot images",
     "certificate-block": "certificates",
     "pem-cert": "PEM certificates",
     "key-string-block": "key-string blocks",
@@ -68,7 +74,7 @@ def label_for(key: str, family: str) -> str:
 
     A whole family gets its plural English name; a named rule keeps its rule
     name unless a friendlier plural is worth having, because the rule name is
-    what you would write in ``[overrides]``.
+    what you would write in its family's section.
     """
     return LABELS.get(key, key if key != family else family)
 
@@ -211,8 +217,11 @@ def report(stream, label: str, result: Result, cfg: Config) -> None:
     _problems(w, result)
     if not result.findings and cfg.verify.enabled:
         w("  VERIFY: clean (policy applied, no credential-shaped material left)\n")
-    w("  NOTE: never scrubbed -- VLAN names, ACL / route-map / prefix-list /\n"
-      "        policy names, AS numbers, VRF names and interface numbering.\n"
+    # VLAN names used to head this list. They have a section now -- [vlans] --
+    # so they are no longer out of reach, only kept by default like everything
+    # else the policy line already accounts for.
+    w("  NOTE: never scrubbed -- ACL / route-map / prefix-list / policy names,\n"
+      "        AS numbers, VRF names and interface numbering.\n"
       "        Read the output before sending it anywhere.\n")
 
 
@@ -230,14 +239,18 @@ def _destination(args, label: str, path: str) -> str | None:
 def list_rules() -> None:
     """Every rule with its family, then every verification check."""
     stanzas = {name: stanza for name, _pattern, _family, stanza in BUILTIN}
-    print('rules (act on one by name in [overrides], e.g. location = "hash"):')
-    print(f"  {'rule':24} {'family':10} where it applies")
+    print('rules (set one by name in its family\'s section, e.g. '
+          '[text] location = "hash"):')
+    print(f"  {'rule':24} {'section':12} where it applies")
     for name in rule_names():
         stanza = stanzas.get(name)
         extra = f"[stanza: {stanza}]" if stanza else ""
-        print(f"  {name:24} {family_of(name):10} {extra}".rstrip())
-    print("\nThe family decides the action: a rule's action is [overrides] <rule>"
-          "\nif it is set, otherwise [policy] <family>.")
+        for out in OUTSIDE.get(name, ()):
+            extra += f"[outside: {out}]"
+        print(f"  {name:24} {family_of(name):12} {extra}".rstrip())
+    print("\nA rule's action comes from one place: the section named above,"
+          "\nwhich either names the rule or falls back to that section's"
+          "\n`default`. The family also decides how the replacement renders.")
     print("\nverification checks (disable by name in verify.disable):")
     for name in check_names():
         print(f"  {name}")

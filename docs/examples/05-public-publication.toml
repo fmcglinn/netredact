@@ -12,14 +12,29 @@
 # post nobody can follow is not worth publishing -- pseudonyms keep the subnet
 # and adjacency structure that makes the example make sense.
 #
-# Read the output line by line before you post it. VLAN names, ACL and
-# route-map names, AS numbers and VRF names are NEVER touched, and on a real
-# config those frequently carry customer names.
+# Read the output line by line before you post it. ACL and route-map names, AS
+# numbers and VRF names are NEVER touched, and on a real config those
+# frequently carry customer names. VLAN names and interface descriptions have
+# sections of their own, and this profile destroys both.
+
+[secrets]
+default = "redact"
+
+[text]
+default = "redact"       # <DESCRIPTION-REMOVED>
+
+# Destroyed, not hashed: a stable <DESC-a1b2c3> still leaks how many distinct
+# customers sit on a device, and which ports belong to the same one.
+[interfaces]
+default = "redact"
+
+[vlans]
+default = "redact"       # <REMOVED>: a public post needs no VLAN names
+
+[identity]
+default = "redact"       # serials, UDIs, engine IDs, certificates, SSH keys
 
 [policy]
-secrets   = "redact"
-text      = "redact"   # <DESCRIPTION-REMOVED>
-identity  = "redact"   # serials, UDIs, engine IDs, certificates, SSH keys
 hostnames = "pseudo"
 domains   = "pseudo"
 usernames = "pseudo"
@@ -47,6 +62,12 @@ multicast   = "keep"
 [macs]
 oui = "redact"         # discard the vendor prefix too: 00:00:5e
 nic = "pseudo"
+
+# A model plus a release number is a CVE list, and a public post is usually
+# attributable to its author. If the release IS the question -- "why does this
+# not work on 4.32.1F" -- set os-version = "keep" here and say so in the post.
+[platform]
+default = "redact"
 
 [verify]
 strict = true

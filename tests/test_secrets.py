@@ -9,7 +9,7 @@ import pytest
 from netredact import Config, sanitise_text
 from netredact.cli import EXIT_OK, main
 
-from .conftest import SALT, policy
+from .conftest import SALT, policy, section
 
 # literal secrets planted in the fixtures -- none may survive
 PLANTED = [
@@ -60,7 +60,7 @@ def test_verification_is_clean_at_defaults(fixtures, name):
 
 def test_secrets_go_even_though_nothing_else_does(cisco):
     cfg = Config()
-    assert cfg.policy.text == "keep" and not cfg.ipv4.any_active()
+    assert cfg.text.default == "keep" and not cfg.ipv4.any_active()
     out = sanitise_text(cisco, cfg, salt=SALT).text
     assert "enable secret 5 <REMOVED>" in out
     assert "snmp-server community <REMOVED> RO MGMT" in out
@@ -108,8 +108,7 @@ def test_certificate_block_acts_once_per_block(cisco, action, expected):
 
 def test_a_kept_certificate_block_can_be_asked_for_by_name(cisco):
     """[overrides] certificate-block = "keep" prints a whole certificate."""
-    cfg = Config(policy=policy(identity="redact").policy,
-                 overrides={"certificate-block": "keep"})
+    cfg = section("identity", "redact", certificate_block="keep")
     result = sanitise_text(cisco, cfg, salt=SALT)
     assert "30820330 30820218" in result.text
     assert result.findings == []
@@ -130,7 +129,7 @@ def test_banner_is_kept_by_default_and_counted(cisco):
 
 def test_banner_can_be_acted_on_alone(cisco):
     """The banner is the one text rule people want on its own."""
-    cfg = Config(overrides={"banner": "redact"})
+    cfg = section("text", "keep", banner="redact")
     out = sanitise_text(cisco, cfg, salt=SALT).text
     assert "Unauthorised access" not in out
     assert "UPLINK TO ACME PTY LTD" in out       # other text still kept
@@ -174,7 +173,7 @@ def test_a_kept_pem_private_key_still_reports(tmp_path):
     src = tmp_path / "key.cfg"
     src.write_text(PEM)
     conf = tmp_path / "netredact.toml"
-    conf.write_text('[policy]\nsecrets = "keep"\n')
+    conf.write_text('[secrets]\ndefault = "keep"\n')
     assert main([str(src), "-c", str(conf), "--strict"]) == 2
 
 
@@ -200,3 +199,21 @@ def test_secrets_keep_still_leaves_the_credential_findings(cisco):
     checks = {f.check for f in result.findings}
     assert "credential-left" in checks
     assert "crypt-hash-left" in checks
+
+
+def test_single_qualifier_lines_are_unchanged_by_the_run():
+    """The common one-hint form must keep working exactly as before."""
+    for line, secret in [(" password 7 070C285F4D06", "070C285F4D06"),
+                         (" enable secret 5 $1$abc$def", "$1$abc$def"),
+                         (" key-string 7 0822455D0A16", "0822455D0A16")]:
+        out = sanitise_text(line + "\n", Config(), salt=SALT).text
+        assert secret not in out, f"regressed: {out.strip()!r}"
+
+
+def test_a_numeric_secret_is_not_eaten_as_a_hint():
+    """`\\d+` is a hint AND a plausible secret; the last token is the secret."""
+    out = sanitise_text(" password 0 12345678\n", Config(), salt=SALT).text
+    assert "12345678" not in out, out
+    assert "password" in out, "the keyword itself must survive"
+
+

@@ -13,10 +13,24 @@
 
 salt_file = "~/.config/netredact/salt"
 
+[secrets]
+default = "redact"
+
+[text]
+default = "hash"
+
+# A model reasons about the topology from the port descriptions, so keep them
+# distinguishable rather than removing them.
+[interfaces]
+default = "hash"
+
+[vlans]
+default = "pseudo"     # vlname-a1b2c3, and the config still loads
+
+[identity]
+default = "hash"
+
 [policy]
-secrets   = "redact"
-text      = "hash"
-identity  = "hash"
 hostnames = "pseudo"   # device-abc123, consistent everywhere it appears
 domains   = "pseudo"
 usernames = "pseudo"
@@ -48,6 +62,11 @@ well_known  = "keep"
 [macs]
 oui = "keep"
 nic = "pseudo"
+
+# The language model has to know the platform to answer in the right syntax,
+# and a product line identifies a vendor, not you.
+[platform]
+default = "keep"
 
 [verify]
 strict = true

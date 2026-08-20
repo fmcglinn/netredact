@@ -53,9 +53,7 @@ def test_junos_terminators_and_quoting_preserved(juniper):
 
 def test_a_quoted_value_keeps_its_quotes_under_every_action(juniper):
     for action, marker in (("hash", "<SECRET-"), ("redact", "<REMOVED>")):
-        cfg = Config()
-        cfg.policy.secrets = action
-        out = sanitise_text(juniper, cfg, salt=SALT).text
+        out = sanitise_text(juniper, policy(secrets=action), salt=SALT).text
         assert f'encrypted-password "{marker}' in out
 
 
@@ -82,9 +80,20 @@ def test_quoted_key_rule_does_not_eat_descriptions(qk):
     assert 'key "<REMOVED>"' in out          # the real one still goes
 
 
-def test_vlan_and_policy_names_untouched(edge):
+def test_a_vlan_name_moves_only_when_asked_and_takes_nothing_with_it(edge):
+    """A VLAN name has a section now; the names around it still do not.
+
+    `route-map SET-COMM` and the `name` line under a route-map are structure
+    that other lines refer to, and no policy reaches them -- the VLAN rule is
+    scoped to a `vlan <id>` block precisely so that a bare `name` line
+    elsewhere is never mistaken for one.
+    """
+    kept = sanitise_text(edge, Config(), salt=SALT).text
+    assert "name ACME-CORP-DATA" in kept          # default is still keep
+
     out = sanitise_text(edge, maximal(), salt=SALT).text
-    assert "name ACME-CORP-DATA" in out
+    assert "ACME-CORP-DATA" not in out
+    assert "vlan 300" in out                      # the id is structure
     assert "route-map SET-COMM permit 10" in out
 
 

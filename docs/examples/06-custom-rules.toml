@@ -1,20 +1,20 @@
 # Profile: extending netredact for gear it does not know
 #
 # Not a destination profile -- a demonstration of the three escape hatches:
-# [[custom]] for patterns netredact has never seen, [overrides] for a built-in
-# rule that is wrong for your environment, and [verify] for a token shape of
-# your own that is not a finding.
+# [[custom]] for patterns netredact has never seen, a named key in a family
+# section for a built-in rule that is wrong for your environment, and [verify]
+# for a token shape of your own that is not a finding.
 #
 # Use single-quoted TOML strings so backslashes reach the regex engine intact.
 
-[policy]
-secrets = "redact"
-text    = "hash"       # so the custom `text` rule below has something to do
+[secrets]
+default = "redact"
 
-[overrides]
 # A built-in rule you disagree with is not disabled, it is given the `keep`
-# action. Here: this fleet's `location` lines hold a rack label, not a street
-# address, and the reviewer needs them.
+# action, by name, in its own family's section. Here: this fleet's `location`
+# lines hold a rack label, not a street address, and the reviewer needs them.
+[text]
+default  = "hash"      # so the custom `text` rule below has something to do
 location = "keep"
 
 # `pattern` with NO capture groups is a PREFIX -- everything up to and
@@ -25,6 +25,14 @@ location = "keep"
 name    = "acme-shared-key"
 pattern = '\s*acme\s+shared-key\s+'
 family  = "secrets"    # -> <REMOVED>, and pseudo is refused for secrets
+
+# `action` gives one custom rule its own action, the way a named key does for
+# a built-in one. Without it the rule takes its family's action.
+[[custom]]
+name    = "acme-debug-token"
+pattern = '\s*debug-token\s+'
+family  = "secrets"
+action  = "hash"       # <SECRET-a1b2c3>, not <REMOVED>, for this one rule
 
 [[custom]]
 name    = "api-token"
@@ -46,8 +54,10 @@ name    = "acme-vault-ref"
 pattern = '^\s*vault-ref\s+%VAL%\s+for\s+%VAL%\s*$'
 family  = "secrets"    # both groups are targets
 
-# stanza restricts a rule to one JunOS top-level stanza, exactly like the
-# built-in junos-community rule.
+# stanza restricts a rule to the block it applies in: a JunOS top-level stanza,
+# exactly like the built-in junos-community rule -- or `interfaces` / `vlans`,
+# which also match the IOS-style block of that name, so one rule covers every
+# vendor.
 [[custom]]
 name    = "acme-snmp-token"
 pattern = '\s*acme-token\s+'

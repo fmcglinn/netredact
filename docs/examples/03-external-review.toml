@@ -10,10 +10,33 @@
 # ports apart and still correlates the same port across files, without saying
 # whose it is.
 
+[secrets]
+default = "redact"
+
+[text]
+default = "hash"       # <DESC-a1b2c3>
+
+# Per-port structure is what a reviewer reads, so the descriptions become
+# markers rather than disappearing: <DESC-a1b2c3> still tells two ports apart
+# and still correlates the same port across files.
+[interfaces]
+default = "hash"
+
+# A VLAN name carries the customer on an access switch, and the config refers
+# to it elsewhere -- pseudo keeps both facts true.
+[vlans]
+default = "pseudo"
+
+[identity]
+default = "hash"       # serials, certificates and keys become markers
+
+# A reviewer cannot judge a config without knowing which release it has to be
+# valid on. The boot image adds nothing to that and names a filesystem path.
+[platform]
+default    = "keep"
+boot-image = "redact"
+
 [policy]
-secrets   = "redact"
-text      = "hash"     # <DESC-a1b2c3>
-identity  = "hash"     # serials, certificates and keys become markers
 hostnames = "keep"     # site/role naming is how the design reads
 domains   = "pseudo"
 usernames = "pseudo"

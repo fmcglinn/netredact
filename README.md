@@ -26,7 +26,7 @@ Full docs live in [`docs/`](docs/):
 - [Configuration reference](docs/configuration.md) — every section and key
 - [Example configurations](docs/examples/) — six profiles, from secrets-only to public publication
 - [Address classes](docs/address-classes.md) — the IPv4 / IPv6 taxonomy
-- [Rule reference](docs/rules.md) — all 45 rules and every verification check
+- [Rule reference](docs/rules.md) — every rule and every verification check
 - [Verification](docs/verification.md) — what the output pass catches, and what it cannot
 - [Library use](docs/library.md) — the module API
 - [The actions model](docs/design/actions-model.md) — why the configuration looks like this
@@ -61,17 +61,27 @@ real credential. Use `hash` for an audit-visible marker, or `redact`.
 Only `secrets`, and it redacts. Everything else is kept until you ask for it:
 
 ```toml
+[secrets]
+default = "redact"    # passwords, keys, community strings, hashes (no pseudo)
+
+[text]
+default = "keep"      # descriptions, remarks, banners, login messages, location, contact
+
+[identity]
+default = "keep"      # serials, UDIs, engine IDs, certificates, SSH public keys
+
+[platform]
+default = "keep"      # hardware model, software release, boot image
+
 [policy]
-secrets   = "redact"  # passwords, keys, community strings, hashes (no pseudo)
-text      = "keep"    # descriptions, remarks, banners, login messages, location, contact
-identity  = "keep"    # serials, UDIs, engine IDs, certificates, SSH public keys
 hostnames = "keep"    # device names, from the collect pass
 domains   = "keep"    # domain names and search lists
 usernames = "keep"    # local users, AAA users, JunOS login names
 emails    = "keep"    # e-mail addresses, wherever they appear
 ```
 
-That block is verbatim from `netredact --print-config`. It is a narrow promise,
+(`--print-config` writes those four sections out in full, one key per rule.)
+It is a narrow promise,
 deliberately: default output still contains every address, hostname and customer
 description, so it was never publishable anyway. `--report` opens with the
 effective policy, so what is *not* being acted on is stated up front:
@@ -102,17 +112,27 @@ The sections are the selectors:
 
 | Section | Selects |
 |---|---|
-| `[policy]` | the seven families that are *not* a partition: `secrets`, `text`, `identity`, `hostnames`, `domains`, `usernames`, `emails` |
+| `[secrets]` / `[text]` / `[identity]` / `[platform]` / `[interfaces]` / `[vlans]` | one action per named rule, plus a `default` for the family — between them, every rule |
+| `[policy]` | the four families with no rules: `hostnames`, `domains`, `usernames`, `emails` |
 | `[ipv4]` / `[ipv6]` | one action per address class, plus `default`, `pool`, `well_known_resolvers`, `keep_networks` |
 | `[macs]` | `oui` and `nic` independently, plus the `pool` prefix that `redact` writes |
-| `[overrides]` | one named rule, by name — the escape hatch when a family is too broad |
 | `[[custom]]` | rules of your own |
 | `[verify]` | the pass that re-scans the output |
 
-A family gets its own section when its members **exhaustively partition** a
-value space — the ten IPv4 classes, the eleven IPv6 classes, the two halves of
-a MAC. Named patterns are not a partition, so they get one `[policy]` key plus
-`[overrides]`.
+**Every rule has exactly one home.** A family whose members are named rules is
+a section, and inside it each rule is a key alongside a `default` for the
+family. There is no flat `[overrides]` table: a rule is set where it lives, and
+`--print-config` prints every rule key at its default rather than three
+commented examples.
+
+```toml
+[identity]
+default       = "hash"       # serials, certs, keys -> markers
+serial-number = "keep"       # except this one: TAC asks for it first
+```
+
+The four families with no rules at all — the names the collect pass learns —
+stay one key each in `[policy]`.
 
 Here is a **hardened profile** — not the default, and not what `--print-config`
 prints:
@@ -120,10 +140,21 @@ prints:
 ```toml
 salt_file = "~/.config/netredact/salt"
 
+[secrets]
+default = "redact"
+
+[text]
+default = "hash"             # <DESC-a1b2c3>: tells ports apart, not who they are
+
+[identity]
+default       = "hash"
+serial-number = "keep"       # the support desk asks for it first
+
+[platform]
+default    = "keep"          # a reviewer needs the model
+os-version = "redact"        # the release names your CVEs
+
 [policy]
-secrets   = "redact"
-text      = "hash"           # <DESC-a1b2c3>: tells ports apart, not who they are
-identity  = "hash"
 hostnames = "keep"           # site/role naming is how the design reads
 domains   = "pseudo"
 usernames = "pseudo"
@@ -139,9 +170,6 @@ benchmark     = "pseudo"     # 198.18/15 is pool space; move any real use of it
 [macs]
 oui = "keep"                 # vendor prefix identifies hardware, not you
 nic = "pseudo"
-
-[overrides]
-serial-number = "keep"       # the support desk asks for it first
 
 [verify]
 strict = true                # exit 2 if anything is still suspicious
@@ -170,15 +198,19 @@ substituting `255.255.255.0` would break the config.
 
 ### Per-rule escape hatches
 
-All 45 rule names are globally unique and none collides with an address class,
-so `[overrides]` is flat: you can name a rule without knowing its family, which
-is exactly the state you are in when a false positive bites you.
+Every rule is a key in its family's section. `netredact --list-rules` prints
+each name next to the section it belongs to, and a key in the wrong section is
+rejected with the section it belongs to rather than silently ignored.
 
 ```toml
-[overrides]
-location      = "keep"       # this fleet's location lines hold a rack label
+[text]
+default  = "hash"            # <DESC-a1b2c3> everywhere in the family...
+location = "keep"            # ...except here: this fleet's location lines
+                             #    hold a rack label, not a street address
+banner   = "redact"          # ...and here: destroy it outright
+
+[identity]
 serial-number = "keep"       # TAC asks for it
-banner        = "redact"     # act on the banner alone, not all of `text`
 ```
 
 `netredact --list-rules` prints every name with its family.
@@ -214,8 +246,8 @@ There is no `mode` field: the shape of the pattern says where the value is.
   is kept verbatim, so one rule can carry several values on one line. `%VAL%`
   expands to the value matcher as a capturing group.
 
-`family` is what decides the action (via `[policy]`, or `[overrides]` under the
-rule's own name) and how the replacement is rendered.
+`family` is what decides the action — via that family's section, or the rule's
+own `action` key — and how the replacement is rendered.
 
 See [docs/rules.md](docs/rules.md) for the full inventory and
 [docs/configuration.md](docs/configuration.md#custom) for the details.
@@ -271,10 +303,23 @@ Pass `salt=` for reproducible substitutes across calls. Full API in
 
 ## Never touched
 
-VLAN names, ACL / route-map / prefix-list / policy / key-chain / VRF names, AS
-numbers, and interface numbering. These are usually what makes the config worth
-sharing, and BGP communities in particular must survive intact. If your VLAN or
-policy names encode customer names, handle that yourself.
+ACL / route-map / prefix-list / policy / key-chain / VRF names, AS numbers, and
+interface numbering. These are usually what makes the config worth sharing, and
+BGP communities in particular must survive intact. If your policy names encode
+customer names, handle that yourself.
+
+VLAN names used to head that list. They have a section now — `[vlans]`, `keep`
+by default — because on an access switch a VLAN name is frequently a service or
+customer identifier, and nothing in the configuration could reach it:
+
+```toml
+[vlans]
+default = "pseudo"           #  name CUST000000000123  ->  name vlname-f11e24
+```
+
+Interface descriptions have `[interfaces]` for the same reason: they are the one
+piece of free text a TAC case cannot do without and a public post cannot
+include, so they take an action of their own rather than sharing `[text]`'s.
 
 ## Limitations
 

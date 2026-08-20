@@ -34,7 +34,7 @@ import re
 from collections import OrderedDict
 
 from .addresses import classify_v4, classify_v6
-from .config import Config
+from .config import FAMILIES, Config
 
 __all__ = ["Pseudonymiser", "PoolExhausted", "is_mask_like", "PREFIX",
            "REDACT_CONST", "REMOVED", "DESC_REMOVED"]
@@ -76,12 +76,27 @@ DESC_REMOVED = "<DESCRIPTION-REMOVED>"
 PREFIX: dict[str, tuple[str, str | None]] = {
     "secrets": ("SECRET", None),          # None => pseudo illegal
     "text": ("DESC", "desc"),
+    # an interface description is a description: it renders as one, so a
+    # reader of the output learns what was taken out rather than which section
+    # took it out. The two families never see the same span -- one is scoped to
+    # an interface block and the other is scoped out of it.
+    "interfaces": ("DESC", "desc"),
+    # the pseudo token is deliberately NOT `vlan`: `VLAN-100` is a plausible
+    # real VLAN name, and `is_rendered` would then read it as already
+    # sanitised and leave it standing.
+    "vlans": ("VLAN", "vlname"),
     "serial-number": ("SERIAL", "SN"),
     "license-udi": ("UDI", "udi"),
     "snmp-engineid": ("EID", "eid"),
     "ssh-public-key": ("KEY", "key"),
     "certificate-block": ("CERT", "cert"),
     "pem-cert": ("CERT", "cert"),
+    # platform. The pseudo token is never the rule's own keyword: `version
+    # version-1a2b3c` reads as a parser error, `version ver-1a2b3c` does not.
+    "hardware-model": ("MODEL", "model"),
+    "os-version": ("VERSION", "ver"),
+    "software-image": ("IMAGE", "image"),
+    "boot-image": ("IMAGE", "image"),
     "hostnames": ("HOST", None), "domains": ("DOMAIN", None),
     "usernames": ("USER", None), "emails": ("EMAIL", None),
     "ipv4": ("IP", None), "ipv6": ("IP6", None), "macs": ("MAC", None),
@@ -101,12 +116,13 @@ REDACT_CONST = {
 _TEXT_REDACT = {"banner": REMOVED}
 _TEXT_DEFAULT_REDACT = DESC_REMOVED
 
-#: family names, for :meth:`Pseudonymiser._family`
-_FAMILIES = frozenset((
-    "secrets", "text", "identity",
-    "hostnames", "domains", "usernames", "emails",
-    "ipv4", "ipv6", "macs",
-))
+#: families whose values are free text, so ``redact`` leaves the description
+#: marker rather than the generic one
+_DESC_FAMILIES = ("text", "interfaces")
+
+#: family names, for :meth:`Pseudonymiser._family`. Read off the config's own
+#: tuple so a new family cannot be renderable but unknown here.
+_FAMILIES = frozenset(FAMILIES)
 
 #: rule -> family for every rule this module renders by name. Secrets rules
 #: fall through to ``rules.family_of`` (lazily imported, to keep this module
@@ -114,14 +130,19 @@ _FAMILIES = frozenset((
 _KEY_FAMILY = {
     "description": "text", "acl-remark": "text", "login-message": "text",
     "banner": "text", "location": "text", "contact": "text",
+    "interface-description": "interfaces", "vlan-name": "vlans",
     "serial-number": "identity", "license-udi": "identity",
     "snmp-engineid": "identity", "ssh-public-key": "identity",
     "certificate-block": "identity", "pem-cert": "identity",
+    "hardware-model": "platform", "os-version": "platform",
+    "software-image": "platform", "boot-image": "platform",
 }
 
-#: only used if someone renders the ``identity`` family itself rather than one
-#: of its rules; the spec's table is per-rule, so there is no documented marker.
-_FAMILY_FALLBACK = {"identity": ("ID", "id")}
+#: only used if someone renders the ``identity`` or ``platform`` family itself
+#: rather than one of its rules; the spec's table is per-rule, so there is no
+#: documented marker for the family as a whole.
+_FAMILY_FALLBACK = {"identity": ("ID", "id"),
+                    "platform": ("PLATFORM", "platform")}
 
 _TAG_RE = "[0-9a-f]{1,6}"
 
@@ -137,7 +158,10 @@ _PSEUDO_RE["emails"] = f"{_PSEUDO_RE['usernames']}@{_PSEUDO_RE['domains']}"
 _REDACTED_CONSTS = {
     "secrets": (REMOVED,),
     "identity": (REMOVED,),
+    "platform": (REMOVED,),
     "text": (REMOVED, DESC_REMOVED),
+    "interfaces": (REMOVED, DESC_REMOVED),
+    "vlans": (REMOVED,),
     "hostnames": ("redacted",),
     "domains": ("example.invalid",),
     "usernames": ("user",),
@@ -299,7 +323,7 @@ class Pseudonymiser:
     def _redact_const(self, key: str, family: str) -> str:
         if family in REDACT_CONST:
             return REDACT_CONST[family]
-        if family == "text":
+        if family in _DESC_FAMILIES:
             return _TEXT_REDACT.get(key, _TEXT_DEFAULT_REDACT)
         return REMOVED
 

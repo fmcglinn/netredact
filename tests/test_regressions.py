@@ -13,7 +13,7 @@ from netredact import Config, CustomRule, sanitise_text
 from netredact.cli import EXIT_OK, main
 from netredact.vendors import detect_vendor
 
-from .conftest import SALT, policy
+from .conftest import SALT, policy, section
 
 # --------------------------------------------------------------------------
 # 1 + 2: `location` used to eat a JunOS stanza opener
@@ -209,7 +209,7 @@ def test_keeping_one_rule_still_fails_the_credential_check(tmp_path, capsys):
     unconditional check asks *is credential-shaped material present*, and no
     configuration can switch that off by keeping the rule.
     """
-    cfg = Config(overrides={"enable-secret": "keep"})
+    cfg = section("secrets", "redact", enable_secret="keep")
     result = sanitise_text(PLAINTEXT, cfg, salt=SALT)
     assert "PlainTextSecret" in result.text
     assert result.kept_counts["enable-secret"] == 1
@@ -218,7 +218,7 @@ def test_keeping_one_rule_still_fails_the_credential_check(tmp_path, capsys):
     leaky = tmp_path / "leaky.cfg"
     leaky.write_text(PLAINTEXT)
     conf = tmp_path / "netredact.toml"
-    conf.write_text('[overrides]\nenable-secret = "keep"\n')
+    conf.write_text('[secrets]\nenable-secret = "keep"\n')
     assert main([str(leaky), "-c", str(conf), "--strict"]) == 2
 
 

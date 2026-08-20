@@ -5,9 +5,12 @@ Two passes over the input:
 1. :meth:`Sanitiser.collect` learns the identities this device uses -- its
    hostnames, domains and usernames -- because those are only recognisable
    from the lines that declare them. Nothing is rewritten here.
-2. :meth:`Sanitiser.run` transforms line by line, tracking the JunOS stanza
-   stack (so ``community`` is an SNMP secret inside ``snmp { … }`` and never a
-   BGP community) and the delimiter state of a multi-line banner.
+2. :meth:`Sanitiser.run` transforms line by line, tracking which blocks the
+   line is inside (so ``community`` is an SNMP secret inside ``snmp { … }`` and
+   never a BGP community, and a ``description`` under ``interface Gi0/0`` is an
+   interface description and not any other kind) and the delimiter state of a
+   multi-line banner. Both kinds of block share one set of names: see
+   :meth:`Sanitiser._enter` and ``rules.BLOCK_SCOPES``.
 
 A rule only ever *selects* a span. What happens to the span comes from the
 policy, resolved once per rule name in :meth:`Config.action_for_rule`, and is
@@ -25,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from . import rules as R
-from .config import Config
+from .config import RULE_FAMILIES, Config
 from .pseudonymise import Pseudonymiser, is_mask_like
 from .vendors import detect_vendor
 
@@ -37,8 +40,9 @@ __all__ = ["Sanitiser", "Result", "sanitise_text", "policy_summary"]
 #: families whose substitution leaves nothing of the original: what
 #: :attr:`Result.redactions` counts. Addresses and names are excluded because
 #: ``pseudo`` there preserves the equality relation -- a substitution, not a
-#: destruction.
-_DESTRUCTIVE = ("secrets", "text", "identity")
+#: destruction. That is exactly the set of rule-named families, so it is read
+#: off :data:`config.RULE_FAMILIES` rather than transcribed.
+_DESTRUCTIVE = RULE_FAMILIES
 
 #: the four families the collect pass discovers, and the ``kept`` category each
 #: is recorded under (singular, as the report and the tests expect)
@@ -78,9 +82,10 @@ class Result:
     def redactions(self) -> int:
         """How many secrets were destroyed.
 
-        Every substitution whose original is gone: the ``secrets``, ``text``
-        and ``identity`` families. Pseudonymised addresses and names are not
-        counted -- their equality relation survives, so nothing was destroyed.
+        Every substitution whose original is gone: the ``secrets``, ``text``,
+        ``identity`` and ``platform`` families. Pseudonymised addresses and
+        names are not counted -- their equality relation survives, so nothing
+        was destroyed.
         """
         return sum(n for name, n in self.counts.items()
                    if self.families.get(name, "secrets") in _DESTRUCTIVE)
@@ -93,8 +98,19 @@ def policy_summary(cfg: Config) -> str:
     """
     parts: list[str] = []
     kept: list[str] = []
-    for family in ("secrets", "text", "identity", "hostnames", "domains",
-                   "usernames", "emails"):
+
+    # the four rule-named families: per rule, the way a section is per class
+    for family in RULE_FAMILIES:
+        section = getattr(cfg, family)
+        actions = {section.action(r) for r in section.RULES}
+        if actions == {"keep"}:
+            kept.append(family)
+        elif len(actions) == 1:
+            parts.append(f"{family}={actions.pop()}")
+        else:
+            parts.append(f"{family}={section.default} (per rule)")
+
+    for family in ("hostnames", "domains", "usernames", "emails"):
         action = cfg.policy.action(family)
         (parts if action != "keep" else kept).append(f"{family}={action}")
 
@@ -115,10 +131,10 @@ def policy_summary(cfg: Config) -> str:
     else:
         parts.append(f"macs={macs.oui}/{macs.nic}")
 
-    overrides = [f"{n}={a}" for n, a in sorted(cfg.overrides.items())]
-    if len(overrides) > 3:
-        overrides = overrides[:3] + [f"+{len(overrides) - 3} more override(s)"]
-    parts.extend(overrides)
+    custom = [f"{c.name}={c.action}" for c in cfg.custom if c.action]
+    if len(custom) > 3:
+        custom = custom[:3] + [f"+{len(custom) - 3} more custom rule(s)"]
+    parts.extend(custom)
 
     if not parts:
         return "everything kept"
@@ -161,6 +177,11 @@ class Sanitiser:
         self.usernames: list[str] = []
         self._name_res: list[tuple[re.Pattern, str]] = []
         self.stanza: list[str] = []
+        #: the IOS-style block the current line is in, from R.BLOCK_SCOPES
+        self.block: str | None = None
+        #: every block the current line is inside, JunOS stanzas and IOS blocks
+        #: together, resolved once per line by :meth:`_enter`
+        self.inside: tuple[str, ...] = ()
 
         # name -> family for everything that can be counted, and name -> action
         # for every rule. Resolving the action once means a bad override is an
@@ -270,6 +291,8 @@ class Sanitiser:
                     banner.body.append(raw)
                 continue
 
+            self._enter(raw)
+
             hit = False
             for start, end, name, _family in R.BLOCK_STARTS:
                 if start.search(raw):
@@ -305,6 +328,42 @@ class Sanitiser:
         if banner is not None:
             self._flush_banner(banner, out)
         return out
+
+    # -- scope: which blocks this line is inside ---------------------------
+    def _enter(self, raw: str) -> None:
+        """Resolve the blocks ``raw`` is inside, before it is transformed.
+
+        Two kinds of block, one set of names (see ``rules.BLOCK_SCOPES``):
+
+        * the JunOS brace stack, maintained in :meth:`run` *after* each line,
+          because a stanza opener is not inside itself -- ``location {`` is a
+          stanza opener, not a location;
+        * an IOS-style block, which is a line at column zero plus the indented
+          lines under it. Here the header IS part of its own block, and any
+          other unindented line -- including the bare ``!`` -- ends it. So this
+          is resolved before the line, not after.
+
+        A JunOS ``set`` line brings its own scope for that one line, so
+        ``set interfaces xe-0/0/0 description …`` is inside ``interfaces``
+        without any enclosing block at all.
+
+        Block bodies and banner bodies never reach here: their content is
+        arbitrary text, and a banner that mentions an interface must not open a
+        scope.
+        """
+        if raw.strip() and not raw[:1].isspace():
+            self.block = next((name for name, pat in R.BLOCK_SCOPES
+                               if pat.match(raw)), None)
+        m = R.SET_SCOPE.match(raw)
+        line_scope = (m.group(1).lower(),) if m else ()
+        self.inside = tuple(self.stanza) + (
+            (self.block,) if self.block else ()) + line_scope
+
+    def _in_scope(self, rule: R.Rule) -> bool:
+        """True if this rule may act on the line :meth:`_enter` last saw."""
+        if rule.stanza and rule.stanza not in self.inside:
+            return False
+        return not any(name in self.inside for name in rule.outside)
 
     # -- multi-line material ----------------------------------------------
     def _flush_block(self, block: _Block, out: list[str]) -> None:
@@ -370,7 +429,7 @@ class Sanitiser:
     # -- one line ----------------------------------------------------------
     def line(self, text: str) -> str:
         for rule in self.rules:
-            if rule.stanza and rule.stanza not in self.stanza:
+            if not self._in_scope(rule):
                 continue
             m = rule.regex.match(text)
             if m:

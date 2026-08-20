@@ -22,6 +22,8 @@ def test_a_random_salt_differs_between_runs(cisco):
 def test_public_api_is_exported():
     for name in ("Config", "ConfigError", "CustomRule", "PolicyConfig",
                  "IPv4Policy", "IPv6Policy", "MacPolicy", "VerifyConfig",
+                 "SecretsPolicy", "TextPolicy", "IdentityPolicy",
+                 "PlatformPolicy",
                  "ACTIONS", "FAMILIES", "ALLOWED", "sanitise_text",
                  "Sanitiser", "Result", "Pseudonymiser", "detect_vendor",
                  "verify", "Finding", "check_names", "build_rules",
@@ -61,7 +63,7 @@ def test_a_pseudonymiser_can_be_shared_between_files(cisco, arista):
 
 def test_config_can_be_built_in_python_without_a_file():
     cfg = Config()
-    cfg.policy.text = "hash"
+    cfg.text.default = "hash"
     cfg.ipv4.rfc1918 = "pseudo"
     assert cfg.action_for_rule("description") == "hash"
     assert cfg.ipv4.any_active()
@@ -105,7 +107,7 @@ def test_a_pool_that_cannot_be_filled_raises_rather_than_prints(capsys):
 def test_a_bad_config_raises_rather_than_prints(tmp_path, capsys):
     from netredact import ConfigError
     bad = tmp_path / "netredact.toml"
-    bad.write_text('[policy]\nsecrets = "obliterate"\n')
+    bad.write_text('[secrets]\ndefault = "obliterate"\n')
     try:
         Config.load(str(bad))
     except ConfigError as exc:

@@ -4,6 +4,182 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **`[overrides]` is gone, and every rule now has exactly one home.** A family
+  whose members are named rules is a section, and inside it each rule is a key
+  alongside a `default` for the family. `[secrets]` (32 rules), `[text]` (7),
+  `[identity]` (6) and `[platform]` (4) carry all 49 between them; the four
+  families that have no rules — the names the collect pass learns — stay one
+  key each in `[policy]`.
+
+  ```toml
+  [identity]
+  default       = "hash"     # serials, certs, keys -> markers
+  serial-number = "keep"     # except this one: TAC asks for it first
+  ```
+
+  The flat table went for two reasons. A rule became settable from two places
+  the moment `[platform]` existed, with a precedence to remember. And a flat
+  table is invisible: `--print-config` could only ever show a few commented
+  examples of it, so the granularity existed and nobody found it — all 49 keys
+  are printed at their defaults now. The cost, priced in deliberately, is that
+  a rule's family is part of the config surface: refiling a rule between
+  families breaks a config that names it, where before it broke nothing.
+
+  Old configs are rejected with the move spelled out per key, not with a
+  generic "unknown section":
+
+  ```
+  [overrides] is gone: a rule is set in the section for its own family ...
+    overrides.serial-number: now [identity] serial-number
+    overrides.banner: now [text] banner
+  ```
+
+  The section classes are **generated from the rule table**, so a rule added to
+  a family gets a key, a line in `--print-config` and a cell in the option
+  sweep with nothing to keep in step by hand.
+
+- `[[custom]]` gained an optional **`action`** key, which is what `[overrides]`
+  used to do for a custom rule. Without it the rule still takes its family's
+  action.
+
+- `netredact --list-rules` prints the **section** each rule belongs to, and a
+  rule named in the wrong section is rejected with the right one. It also prints
+  the block a rule is scoped to, and the block a rule is scoped *out* of.
+
+- **`[text] description` no longer reaches interface descriptions.** They moved
+  to `[interfaces]` (see below), so a config that set `[text]` expecting to act
+  on port descriptions now needs to say so:
+
+  ```toml
+  [text]
+  default = "hash"
+  [interfaces]
+  default = "hash"     # this line is the new part
+  ```
+
+  The two rules **partition** the descriptions in a file rather than
+  overlapping: they share one pattern, so if both could act on a line the
+  second would render the first's marker again, count it twice, and let
+  `[text]` override a `keep` that `[interfaces]` asked for. Every shipped
+  example profile was updated, and the change is priced in on the same grounds
+  as the `[overrides]` removal: a rule's family is part of the config surface,
+  and this split is exactly the distinction a config wanted to draw.
+
+- **The report no longer claims VLAN names are never scrubbed**, because they
+  are no longer out of reach. The `NOTE:` line lists ACL, route-map,
+  prefix-list and policy names, AS numbers, VRF names and interface numbering —
+  and `[vlans]` accounts for what left it.
+
+### Added
+
+- **A `[vlans]` section, and the `vlan-name` rule.** The `name` under a
+  `vlan <id>` block — and the one-line Catalyst `vlan <id> name <name>` form —
+  is now something a configuration can reach. On a service-provider access
+  switch a VLAN name is frequently a service or customer identifier, and until
+  now nothing could touch it: the report had to list VLAN names among the things
+  netredact never looks at, and that line is gone.
+
+  ```toml
+  [vlans]
+  default = "pseudo"       #  name CUST000000000123  ->  name vlname-f11e24
+  ```
+
+  `pseudo` is the action to reach for. The configuration refers to a VLAN by
+  name elsewhere, so a type-valid substitute keeps the output loadable where
+  `<VLAN-f11e24>` would not. The pseudo token is `vlname-…` and deliberately not
+  `vlan-…`: substitutions are idempotent, netredact recognises its own output,
+  and `VLAN-100` is a name a real switch really has.
+
+  **An SVI is not a VLAN definition.** `interface Vlan905` is an interface
+  block, so its description belongs to `[interfaces]` below and this rule never
+  looks at it. Only a `vlan <id>` block is in scope, which is also what keeps a
+  bare `name` line under a `route-map` or a `class-map` untouched.
+
+- **An `[interfaces]` section, and the `interface-description` rule.** The
+  `description` on an interface is no longer part of `[text]`. It is the same
+  selector, split off by the block it sits in, because it is the one piece of
+  free text with two incompatible audiences: a vendor TAC case is unreadable
+  without the port descriptions — they are how the path through the box is
+  written down — and a public post is unpublishable with them.
+
+  ```toml
+  [text]
+  default = "redact"       # every other description goes
+  [interfaces]
+  default = "keep"         # except the ones the topology is written in
+  ```
+
+  It reaches an interface description in every dialect, because scope rather
+  than syntax picks it out: IOS / EOS / NX-OS `interface Gi0/0` blocks, JunOS
+  `interfaces { … }` stanzas and `set interfaces … description …` lines alike.
+  Rendering follows `text` — a description is a description — so `hash` still
+  writes `<DESC-f11e24>` and `redact` still writes `<DESCRIPTION-REMOVED>`.
+
+- **Scope: a rule can name the block it applies to, on any vendor.** Two kinds
+  of block now answer that question under one set of names — a JunOS brace
+  stanza, and an IOS-style header at column zero plus the indented lines under
+  it (any other unindented line ends it, including the bare `!`). The names are
+  JunOS's own, `interfaces` and `vlans`, which is what lets one rule cover three
+  dialects instead of three patterns.
+
+  This is what makes `vlan-name` possible at all: a bare `name` line is a VLAN
+  name in one block and a route-map name in another, and only the enclosing
+  block can tell them apart. It also generalises `[[custom]] stanza`, which
+  reached JunOS only — `stanza = "interfaces"` now scopes a custom rule to an
+  IOS interface block too.
+
+- **A `[platform]` section**, and four rules to feed it: the hardware model,
+  the software release and the boot image. `os-version` takes a line that is
+  nothing but `version …`, across IOS `15.7`, NX-OS `9.3(5)` and JunOS
+  `21.4R3-S4.9;`; `boot-image` takes `boot system …` whether or not it is
+  commented out; `hardware-model` and `software-image` take the `Model:` /
+  `PID:` / `Software image version:` / `System image file is …` lines people
+  paste in front of a config.
+
+  ```toml
+  [platform]
+  default    = "keep"      # the model a reviewer needs
+  os-version = "redact"    # the release that names your CVEs
+  boot-image = "redact"
+  ```
+
+  The keys are rule names, so they read the same in `[platform]` and in
+  `--list-rules`.
+
+  Arista's `! device: agg-sw-02 (DCS-7280SR-48C6-M, EOS-4.32.1F)` header gets
+  **no rule of its own**. It carries three values of three kinds on one line,
+  introduced by nothing but their position, and a rule carries one family and
+  one action — so a header rule would put the model and the release out of
+  reach of `[overrides]`. `hardware-model` and `os-version` each read the
+  header themselves, and the hostname stays with `hostnames`.
+
+  It is a family of its own rather than part of `identity` because it does not
+  identify a *device*: every box off the same production line carries the same
+  model, and a well-run fleet the same release. What it discloses is an attack
+  surface — a model plus a release number is a CVE list. `keep` by default,
+  since it is also the first thing a support desk asks for and the thing a
+  reviewer or a language model needs in order to judge a config at all.
+
+  `hardware-model` requires a `:` or `=` after the keyword. That separator is
+  the whole safety margin: `platform qos map-mode` and Arista's
+  `service routing protocols model multi-agent` are commands, not disclosures.
+
+### Changed
+
+- **Vendor detection no longer rests on a single marker per vendor.** The
+  decisive Arista evidence — the `EOS-4.32.1F` release string, the `.swi` boot
+  image — is exactly the material the new `platform` family destroys, so each
+  vendor gained independent hints that survive it: the `! device:` header shape
+  on its own, `! Command: show …`, `daemon TerminAttr` for Arista;
+  `Building configuration` / `Current configuration :`, `! Last configuration
+  change` and the NX-OS `9.3(5)` version shape for Cisco; the JunOS release
+  string and `jinstall` / `junos-*` image names for Juniper. Detection reads
+  the input and never the output, and now says so in the module.
+
 ## [0.1.0] - 2026-08-19
 
 First release.

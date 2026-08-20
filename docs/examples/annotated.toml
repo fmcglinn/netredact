@@ -18,16 +18,154 @@
 # salt_file = "~/.config/netredact/salt"
 vendor = "auto"  # auto | cisco | arista | juniper
 
-# What happens to each family of sensitive material. Per-rule
-# exceptions live in [overrides]; addresses have their own sections.
+# Passwords, keys, community strings and password hashes. This is
+# the one family that acts by default, and the whole of netredact's
+# default promise: credentials are destroyed, nothing else is.
+# `pseudo` is refused here -- the substitute would be an HMAC of the
+# real credential, computable by anyone who can derive it.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[secrets]
+default = "redact"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# enable-secret           = "redact"
+# username-secret         = "redact"
+# bare-password           = "redact"
+# bare-secret             = "redact"
+# encoded-key             = "redact"
+# aaa-server-key          = "redact"
+# quoted-key              = "redact"
+# key-string              = "redact"
+# key-hash                = "redact"
+# license-entitlement-key = "redact"
+# snmp-community          = "redact"
+# junos-community         = "redact"
+# snmp-host               = "redact"
+# snmp-v3-auth            = "redact"
+# snmp-v3-priv            = "redact"
+# isakmp-key              = "redact"
+# pre-shared-key          = "redact"
+# auth-key                = "redact"
+# message-digest-key      = "redact"
+# bgp-neighbor-password   = "redact"
+# hsrp-vrrp-auth          = "redact"
+# isis-password           = "redact"
+# ntp-auth-key            = "redact"
+# ppp-credential          = "redact"
+# wpa-psk                 = "redact"
+# ftp-password            = "redact"
+# junos-password          = "redact"
+# unsupported-transceiver = "redact"
+# junos-type9             = "redact"
+# crypt-hash              = "redact"
+# key-string-block        = "redact"
+# pem-key                 = "redact"
+
+# Descriptions, ACL remarks, banners, login messages, SNMP location
+# and contact. On a service-provider config this is where the
+# customer names live. `hash` is usually the right middle ground:
+# <DESC-f11e24> still tells two ports apart and still correlates the
+# same port across files, without saying whose it is.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[text]
+default = "keep"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# location            = "keep"
+# contact             = "keep"
+# junos-location-body = "keep"
+# description         = "keep"
+# acl-remark          = "keep"
+# login-message       = "keep"
+# banner              = "keep"
+
+# Serial numbers, license UDIs, SNMP engine IDs, certificates and
+# SSH public keys. None is a credential; all of them tie the file to
+# one real device. `default = "hash"` with `serial-number = "keep"`
+# is the vendor support case in two lines.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[identity]
+default = "keep"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# snmp-engineid     = "keep"
+# ssh-public-key    = "keep"
+# license-udi       = "keep"
+# serial-number     = "keep"
+# certificate-block = "keep"
+# pem-cert          = "keep"
+
+# The hardware model, the software release and the boot image.
+# Neither a credential nor an instance identity -- every device off
+# the same production line carries it. What it discloses is the
+# attack surface: a model plus a release number is a CVE list. Kept
+# by default, because it is also the first thing a support desk asks
+# for and the thing a reviewer needs to judge a config at all.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[platform]
+default = "keep"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# hardware-model = "keep"
+# os-version     = "keep"
+# software-image = "keep"
+# boot-image     = "keep"
+
+# What a port is called: the `description` on an interface, and only
+# there -- every other description belongs to `text` above. It is a
+# section of its own because it is the one piece of free text with two
+# incompatible audiences: a TAC case is unreadable without the
+# descriptions your topology is written in, and a public post is
+# unpublishable with them. `[text] redact` plus `[interfaces] keep`
+# says exactly that.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[interfaces]
+default = "keep"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# interface-description = "keep"
+
+# What a VLAN is called: the `name` under a `vlan <id>` block. NOT an
+# SVI -- an `interface Vlan905` block is an interface, and its
+# description belongs to `[interfaces]`. On an access switch a VLAN
+# name is frequently a service or customer identifier.
+#
+# `pseudo` is the one to reach for here: the config refers to a VLAN
+# by name elsewhere, so a type-valid `vlname-f11e24` still loads.
+#
+# `default` governs every rule; name a rule below to give it its own
+# action. The keys are rule names: `netredact --list-rules` says what
+# each one matches.
+[vlans]
+default = "keep"  # the action for every rule not named below
+
+# Per-rule actions. Commented out means: inherit `default`.
+# vlan-name = "keep"
+
+# The four families that have no rules: the collect pass reads these
+# names off the lines that declare them and then substitutes them
+# wherever they appear, so there is nothing to name per rule. Every
+# other family is a table of rules and has a section of its own.
 [policy]
-secrets   = "redact"  # passwords, keys, community strings, hashes (no pseudo)
-text      = "keep"    # descriptions, remarks, banners, login messages, location, contact
-identity  = "keep"    # serials, UDIs, engine IDs, certificates, SSH public keys
-hostnames = "keep"    # device names, from the collect pass
-domains   = "keep"    # domain names and search lists
-usernames = "keep"    # local users, AAA users, JunOS login names
-emails    = "keep"    # e-mail addresses, wherever they appear
+hostnames = "keep"  # device names, from the collect pass
+domains   = "keep"  # domain names and search lists
+usernames = "keep"  # local users, AAA users, JunOS login names
+emails    = "keep"  # e-mail addresses, wherever they appear
 
 # IPv4 addressing. `default` governs every address class; name a
 # class below to give it its own action. Classes are mutually
@@ -109,14 +247,6 @@ oui  = "keep"      # the 24-bit vendor prefix; redact writes `pool`
 nic  = "keep"      # the 24-bit device half
 pool = "00:00:5e"  # the OUI that redact writes -- 00:00:5e is IANA-reserved
 
-# Per-rule exceptions to [policy]. The key is a rule name from
-# `netredact --list-rules`, the value an action. A rule's family
-# still decides how the replacement is rendered.
-[overrides]
-# location      = "keep"
-# serial-number = "keep"
-# banner        = "redact"
-
 # The pass that re-scans the OUTPUT for anything still sensitive.
 [verify]
 enabled         = true
@@ -134,5 +264,7 @@ ignore_patterns = []     # regexes to treat as expected, not as findings
 # [[custom]]
 # name = "acme-shared-key"
 # pattern = '\s*acme\s+shared-key\s+'
-# family = "secrets"    # secrets | text | identity | hostnames | domains | usernames | emails | ipv4 | ipv6 | macs
-# stanza = "snmp"       # optional, JunOS top-level stanza only
+# family = "secrets"    # secrets | text | identity | platform | interfaces | vlans | hostnames | domains | usernames | emails | ipv4 | ipv6 | macs
+# action = "redact"     # optional; without it the family decides
+# stanza = "snmp"       # optional: a JunOS stanza, or interfaces / vlans
+#                       # for the IOS-style block of that name

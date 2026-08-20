@@ -36,10 +36,13 @@ Select a part of the config, choose an action. The action is a *value*, so
 sections are free to organise by selector instead.
 
 ```toml
+[secrets]
+default = "redact"
+
+[text]
+default = "keep"
+
 [policy]
-secrets   = "redact"
-text      = "keep"
-identity  = "keep"
 hostnames = "keep"
 ```
 
@@ -80,7 +83,10 @@ choice:
 |---|---|---|---|
 | `secrets` | *illegal* | `<SECRET-4f2a1c>` | `<REMOVED>` |
 | `text` | `desc-f11e24` | `<DESC-f11e24>` | `<DESCRIPTION-REMOVED>` |
+| `interfaces` | `desc-f11e24` | `<DESC-f11e24>` | `<DESCRIPTION-REMOVED>` |
+| `vlans` | `vlname-f11e24` | `<VLAN-f11e24>` | `<REMOVED>` |
 | `identity` | `SN-f11e24` | `<SERIAL-f11e24>` | `<REMOVED>` |
+| `platform` | `model-f11e24` | `<MODEL-f11e24>` | `<REMOVED>` |
 | `hostnames` | `device-abc123` | `<HOST-abc123>` | `redacted` |
 | `domains` | `d1a2b.example.com` | `<DOMAIN-abc123>` | `example.invalid` |
 | `usernames` | `user-ab12` | `<USER-abc123>` | `user` |
@@ -91,6 +97,19 @@ choice:
 
 The reserved constants are RFC-assigned where one exists: 5737 for IPv4, 3849
 for IPv6, 2606 for domains, and the IANA `00:00:5e` prefix for MACs.
+
+`interfaces` renders exactly as `text` does, deliberately: an interface
+description *is* a description, and the marker's job is to say what was taken
+out, not which section took it out. The two families are separable in the
+configuration and identical in the output.
+
+`vlans` does not, and the reason is worth stating: its `pseudo` token is
+`vlname-…` rather than `vlan-…`. Every substitution here is idempotent —
+netredact recognises its own output so a second pass is a no-op — and
+`VLAN-100` is a name a real switch really has, which the tool would then read
+as something it had already sanitised and leave standing. A marker prefix is
+safe from that (`<VLAN-a1b2c3>` collides with nothing); a bare token is not.
+The same reasoning already picked `ver-…` over `version-…` for `os-version`.
 
 ## One illegal cell
 
@@ -113,14 +132,37 @@ value space: the ten IPv4 classes, the eleven IPv6 classes, the two halves of a
 MAC. Those are taxonomy, they are mutually exclusive, and a `default` key
 covers the rest of the partition.
 
-A selector whose members are *named patterns* gets one key in `[policy]` plus
-named escape hatches in `[overrides]`, because patterns are not a partition —
-a line can match several, and users add their own via `[[custom]]`.
+A selector whose members are *named rules* gets a section too, on the same
+shape: a `default`, plus one key per rule. Rules are not a partition — a line
+can match several, and Arista's `! device:` header matches two `platform`
+rules at once — but the ergonomics of a `default` are the same either way, and
+without one "all of this except that one" means listing everything else.
 
-All 43 rule names are globally unique and none collides with an address class
-name, so `[overrides]` is flat: you can write `location = "keep"` without
-knowing which family `location` belongs to. That matters, because not knowing
-is exactly the state you are in when a false positive bites you.
+### Why the flat `[overrides]` table went
+
+There used to be one table holding every per-rule exception, flat, because
+every rule name is globally unique and none collides with an address class
+name. You could write `location = "keep"` without knowing which family
+`location` belongs to, and not knowing is exactly the state you are in when a
+false positive bites you. That was a real argument and it lost to two others.
+
+**A rule had two homes.** Once `platform` had a section, `[platform]
+os-version` and `[overrides] os-version` were both legal and one had to win.
+One key, one place is worth more than the convenience of not knowing a family.
+
+**A flat table is invisible.** `--print-config` prints every key at its
+default, which is what makes the file a starting point rather than a puzzle.
+It could never do that for `[overrides]` — only show three commented examples
+— so the granularity existed and nobody found it. Every rule key is printed
+now.
+
+The cost is that a rule's family is part of the config surface: refiling a
+rule between families breaks any config that names it, where before it broke
+nothing. That is a genuine loss and it is priced in, on the grounds that
+refiling also changes how the value renders (`<SECRET-…>` becomes `<DESC-…>`),
+so a config that named the rule probably wanted to hear about it. The error
+message routes: a rule named in the wrong section is rejected with the section
+it belongs to, and `--list-rules` prints that section next to every name.
 
 ## Refilings
 
@@ -131,10 +173,54 @@ Four rules moved, because the old filing was an accident of implementation:
 - `snmp-engineid` → **identity**. An engine ID identifies a device. It assists
   offline attack on localised SNMPv3 keys, but it is not itself a credential.
 - `ssh-public-key` → **identity**. A public key is not a secret.
+- the model / release / boot-image rules → **platform**, not `identity`. They
+  do identify something, but not a *device*: every box off the same production
+  line carries them. What they disclose is an attack surface, which is why
+  they are separable from a serial number that names one machine.
 - `pem-block` **splits** into `pem-key` (secrets) and `pem-cert` (identity). A
   private key is a credential; a certificate is public data whose payload is
   identity — the CN is a hostname, the O is an organisation. Treating them
   identically meant a certificate could never be kept for a PKI support case.
+
+## Scope, and splitting one selector into two families
+
+Two families arrived later than the rest — `interfaces` and `vlans` — and they
+are the first that are picked out by **where a line is** rather than by what is
+on it.
+
+`vlans` needs that. A VLAN name is a bare `name CUST000000000123` line, and the
+identical line under a `route-map` is a route-map name that nothing may touch.
+Only the enclosing block tells them apart, so the rule names the block it
+requires and the sanitiser tracks two kinds of block — a JunOS brace stanza and
+an IOS-style "column-zero header plus its indented lines" — under **one set of
+names**. Using JunOS's own plural spellings (`interfaces`, `vlans`) is what
+lets one rule cover `interface Gi0/0`, `interfaces { … }` and
+`set interfaces …` without three patterns. It also generalises the
+`[[custom]] stanza` key, which used to reach JunOS only.
+
+`interfaces` is the more interesting case, because the *selector* was never in
+doubt — an interface description was already matched by the `description` rule
+in `text`. What was wrong was that one action had to serve two audiences:
+
+- a vendor TAC case is unreadable without the port descriptions, because they
+  are how the path through the box is written down;
+- a public post is unpublishable *with* them, because they name the customer on
+  each port.
+
+Under a single `text` action you had to pick one, and the loser was whichever
+mattered less that day. So the rule splits in two — one selector, one pattern,
+partitioned by scope — and `[text] redact` with `[interfaces] keep` says the
+thing that could not be said before. The two rules must partition rather than
+overlap: they share a pattern, so if both could act on one line the second
+would render the first's marker again, count it twice, and let `[text]`
+override a `keep` that `[interfaces]` had asked for. `description` is therefore
+scoped *out* of `interfaces` explicitly, in a table next to the rule.
+
+The cost is the same one `[overrides]` paid: `[text] description = "hash"` no
+longer reaches interface descriptions, so a config that relied on it changes
+behaviour. That is priced in for the same reason — the family is part of the
+config surface, and the split is exactly the distinction the config wanted to
+draw.
 
 ## Defaults, and why the report carries the weight
 
