@@ -20,16 +20,16 @@ stdout carries the sanitised configuration and nothing else.
 
 ## Documentation
 
-Full docs live in [`docs/`](docs/):
+Full docs live in [`docs/`](https://github.com/fmcglinn/netredact/tree/main/docs/):
 
-- [Getting started](docs/getting-started.md) — install, first run, reading the report
-- [Configuration reference](docs/configuration.md) — every section and key
-- [Example configurations](docs/examples/) — six profiles, from secrets-only to public publication
-- [Address classes](docs/address-classes.md) — the IPv4 / IPv6 taxonomy
-- [Rule reference](docs/rules.md) — every rule and every verification check
-- [Verification](docs/verification.md) — what the output pass catches, and what it cannot
-- [Library use](docs/library.md) — the module API
-- [The actions model](docs/design/actions-model.md) — why the configuration looks like this
+- [Getting started](https://github.com/fmcglinn/netredact/blob/main/docs/getting-started.md) — install, first run, reading the report
+- [Configuration reference](https://github.com/fmcglinn/netredact/blob/main/docs/configuration.md) — every section and key
+- [Example configurations](https://github.com/fmcglinn/netredact/tree/main/docs/examples/) — six profiles, from secrets-only to public publication
+- [Address classes](https://github.com/fmcglinn/netredact/blob/main/docs/address-classes.md) — the IPv4 / IPv6 taxonomy
+- [Rule reference](https://github.com/fmcglinn/netredact/blob/main/docs/rules.md) — every rule and every verification check
+- [Verification](https://github.com/fmcglinn/netredact/blob/main/docs/verification.md) — what the output pass catches, and what it cannot
+- [Library use](https://github.com/fmcglinn/netredact/blob/main/docs/library.md) — the module API
+- [The actions model](https://github.com/fmcglinn/netredact/blob/main/docs/design/actions-model.md) — why the configuration looks like this
 
 ## Selector, then action
 
@@ -175,7 +175,7 @@ nic = "pseudo"
 strict = true                # exit 2 if anything is still suspicious
 ```
 
-Six ready-made profiles are in [docs/examples/](docs/examples/).
+Six ready-made profiles are in [docs/examples/](https://github.com/fmcglinn/netredact/tree/main/docs/examples/).
 
 ### Addresses
 
@@ -191,7 +191,7 @@ IPv6: `unspecified`, `loopback`, `ula`, `link_local`, `multicast`,
 
 `pseudo` keeps the IPv4 host octet and prefix length — only the /24 moves — and
 the IPv6 interface identifier. Full table with prefixes, RFCs and pool
-collisions in **[docs/address-classes.md](docs/address-classes.md)**.
+collisions in **[docs/address-classes.md](https://github.com/fmcglinn/netredact/blob/main/docs/address-classes.md)**.
 
 **Netmasks and wildcard masks are never touched**, whatever you set —
 substituting `255.255.255.0` would break the config.
@@ -249,8 +249,8 @@ There is no `mode` field: the shape of the pattern says where the value is.
 `family` is what decides the action — via that family's section, or the rule's
 own `action` key — and how the replacement is rendered.
 
-See [docs/rules.md](docs/rules.md) for the full inventory and
-[docs/configuration.md](docs/configuration.md#custom) for the details.
+See [docs/rules.md](https://github.com/fmcglinn/netredact/blob/main/docs/rules.md) for the full inventory and
+[docs/configuration.md](https://github.com/fmcglinn/netredact/blob/main/docs/configuration.md#custom) for the details.
 
 ## Verification
 
@@ -265,7 +265,7 @@ miss.
 Verify therefore **cannot flag a policy choice**; the `policy:` line at the top
 of `--report` is what states it. A clean report means "nothing known was left
 behind", not "this file is safe to publish" — see
-[docs/verification.md](docs/verification.md).
+[docs/verification.md](https://github.com/fmcglinn/netredact/blob/main/docs/verification.md).
 
 ## Two behaviours worth knowing
 
@@ -299,7 +299,7 @@ result.mapping           # category -> {original: pseudonym}
 ```
 
 Pass `salt=` for reproducible substitutes across calls. Full API in
-[docs/library.md](docs/library.md).
+[docs/library.md](https://github.com/fmcglinn/netredact/blob/main/docs/library.md).
 
 ## Never touched
 
