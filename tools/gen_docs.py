@@ -82,7 +82,8 @@ RULE_NOTES = {
     "message-digest-key": "`message-digest-key N md5 X` (OSPF)",
     "bgp-neighbor-password": "`neighbor A password X`",
     "hsrp-vrrp-auth": "`standby N` / `vrrp N` `authentication text|md5 ... X`",
-    "isis-password": "`lsp-password`, `area-password`, `domain-password`",
+    "isis-password": "`lsp-password`, `area-password`, `domain-password`, "
+                     "and the interface-level `isis password`",
     "ntp-auth-key": "`ntp authentication-key N <alg> X`",
     "ppp-credential": "`ppp chap|pap|eap password|secret|sent-username U "
                       "password X`",

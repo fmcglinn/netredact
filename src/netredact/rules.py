@@ -81,7 +81,7 @@ __all__ = [
     "IPV4_RE", "IPV6_RE", "MAC_RE", "EMAIL_RE",
     "SNMP_HOST_KEYWORDS", "JUNOS_KEYWORDS", "IOS_KEYWORDS",
     "STANZA_OPEN", "STANZA_CLOSE", "BLOCK_SCOPES", "SET_SCOPE", "OUTSIDE",
-    "ENC", "VAL", "VAL_MACRO", "VAL_GROUP",
+    "ENC", "ENC_RUN", "VAL", "VAL_MACRO", "VAL_GROUP",
 ]
 
 REMOVED = "<REMOVED>"
@@ -100,6 +100,16 @@ VAL_GROUP = r"""("[^"]*"|'[^']*'|[^\s;]+)"""
 #: encoding / algorithm hints that sit between the keyword and the secret
 ENC = (r"(?:\d+|sha512|sha256|sha1|md5|encrypted|clear|ascii|ascii-text|hex|"
        r"hexadecimal|plain-text)")
+
+#: a RUN of those hints, because several commands stack two of them. Cisco's
+#: autonomous-AP ``wpa-psk {ascii|hex} [0|7] <key>`` is the plain case: an
+#: encoding *format* and an encoding *type*, in that order, before the secret.
+#: Admitting only one consumed the type as if it were the key and emitted a
+#: marker over it, so the line read as handled while the credential stayed in
+#: cleartext -- and ``--strict`` exited 0. Each repetition must end in
+#: ``\s+``, so the final token can never be eaten: ``password 0 12345678``
+#: still yields ``12345678``, not nothing.
+ENC_RUN = rf"(?:{ENC}\s+)*"
 
 #: A value is never a brace-only token: ``location {`` opens a JunOS stanza,
 #: it does not carry a location. Eating the brace unbalanced the config and
@@ -272,10 +282,10 @@ def _compile(pattern: str, flags: int = re.I) -> tuple[re.Pattern, tuple[int, ..
 
 BUILTIN: list[tuple[str, str, str, str | None]] = [
     # ---- enable / user credentials -------------------------------------
-    ("enable-secret", rf"\s*enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?(?:{ENC}\s+)?", "secrets", None),
-    ("username-secret", rf"\s*username\s+\S+\s+(?:\S+\s+)*?(?:password|secret)\s+(?:{ENC}\s+)?", "secrets", None),
-    ("bare-password", rf"\s*(?:password|passwd)\s+(?:{ENC}\s+)?", "secrets", None),
-    ("bare-secret", rf"\s*(?:set\s+\S.*?\s)?secret\s+(?:{ENC}\s+)?", "secrets", None),
+    ("enable-secret", rf"\s*enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?{ENC_RUN}", "secrets", None),
+    ("username-secret", rf"\s*username\s+\S+\s+(?:\S+\s+)*?(?:password|secret)\s+{ENC_RUN}", "secrets", None),
+    ("bare-password", rf"\s*(?:password|passwd)\s+{ENC_RUN}", "secrets", None),
+    ("bare-secret", rf"\s*(?:set\s+\S.*?\s)?secret\s+{ENC_RUN}", "secrets", None),
 
     # ---- AAA / shared keys ----------------------------------------------
     ("encoded-key",
@@ -285,9 +295,9 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
     ("aaa-server-key",
      r".*\b(?:tacacs|radius|ldap|server-private|server)\b.*?\bkey\s+"
      + _not_keyword(IOS_KEYWORDS)
-     + rf"(?:{ENC}\s+)?", "secrets", None),
+     + rf"{ENC_RUN}", "secrets", None),
     ("quoted-key", r"\s*(?:set\s+\S.*?\s)?key\s+(?=\")", "secrets", None),
-    ("key-string", rf"\s*key-string\s+(?:{ENC}\s+)?", "secrets", None),
+    ("key-string", rf"\s*key-string\s+{ENC_RUN}", "secrets", None),
     ("key-hash", r"\s*(?:key-hash|hash)\s+\S+\s+", "secrets", None),
     ("license-entitlement-key", r"\s*(?:set\s+system\s+)?license\s+keys\s+key\s+", "secrets", None),
 
@@ -302,24 +312,28 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
     ("snmp-engineid", r"\s*snmp-server\s+engineID\s+\S+\s+", "identity", None),
 
     # ---- crypto / VPN -----------------------------------------------------
-    ("isakmp-key", rf"\s*crypto\s+isakmp\s+key\s+(?:{ENC}\s+)?", "secrets", None),
-    ("pre-shared-key", rf".*\bpre-shared-key\s+(?:address\s+\S+\s+)?(?:key\s+)?(?:{ENC}\s+)?", "secrets", None),
+    ("isakmp-key", rf"\s*crypto\s+isakmp\s+key\s+{ENC_RUN}", "secrets", None),
+    ("pre-shared-key", rf".*\bpre-shared-key\s+(?:address\s+\S+\s+)?(?:key\s+)?{ENC_RUN}", "secrets", None),
     ("auth-key",
      r"\s*(?:set\s+\S.*?\s)?(?:authentication-key|encryption-key)\s+"
      + _not_keyword(JUNOS_KEYWORDS, digits=True)
-     + rf"(?:{ENC}\s+)?", "secrets", None),
+     + rf"{ENC_RUN}", "secrets", None),
 
     # ---- routing / redundancy protocol authentication ---------------------
-    ("message-digest-key", rf".*\bmessage-digest-key\s+\d+\s+md5\s+(?:{ENC}\s+)?", "secrets", None),
-    ("bgp-neighbor-password", rf".*\bneighbor\s+\S+\s+password\s+(?:{ENC}\s+)?", "secrets", None),
-    ("hsrp-vrrp-auth", rf"\s*(?:standby\s+\d+\s+|vrrp\s+\d+\s+)?authentication\s+(?:text|md5\s+key-string|md5\s+key-chain)\s+(?:{ENC}\s+)?", "secrets", None),
-    ("isis-password", rf"\s*(?:lsp|area|domain)-password\s+(?:{ENC}\s+)?", "secrets", None),
+    ("message-digest-key", rf".*\bmessage-digest-key\s+\d+\s+md5\s+{ENC_RUN}", "secrets", None),
+    ("bgp-neighbor-password", rf".*\bneighbor\s+\S+\s+password\s+{ENC_RUN}", "secrets", None),
+    ("hsrp-vrrp-auth", rf"\s*(?:standby\s+\d+\s+|vrrp\s+\d+\s+)?authentication\s+(?:text|md5\s+key-string|md5\s+key-chain)\s+{ENC_RUN}", "secrets", None),
+    ("isis-password",
+     # `area-password` / `domain-password` / `lsp-password` are the IS-IS
+     # authentication commands; `isis password <key>` is the interface-level
+     # form and is spelled with a space, not a hyphen.
+     rf"\s*(?:(?:lsp|area|domain)-password|isis\s+password)\s+{ENC_RUN}", "secrets", None),
     ("ntp-auth-key", r"\s*ntp\s+authentication-key\s+\d+\s+\S+\s+", "secrets", None),
 
     # ---- PPP / L2 / wireless ---------------------------------------------
-    ("ppp-credential", rf"\s*ppp\s+(?:chap|pap|eap)\s+(?:password|secret|sent-username\s+\S+\s+password)\s+(?:{ENC}\s+)?", "secrets", None),
-    ("wpa-psk", rf".*\bwpa-psk\s+(?:{ENC}\s+)?", "secrets", None),
-    ("ftp-password", rf"\s*ip\s+(?:ftp|tftp|http\s+client)\s+password\s+(?:{ENC}\s+)?", "secrets", None),
+    ("ppp-credential", rf"\s*ppp\s+(?:chap|pap|eap)\s+(?:password|secret|sent-username\s+\S+\s+password)\s+{ENC_RUN}", "secrets", None),
+    ("wpa-psk", rf".*\bwpa-psk\s+{ENC_RUN}", "secrets", None),
+    ("ftp-password", rf"\s*ip\s+(?:ftp|tftp|http\s+client)\s+password\s+{ENC_RUN}", "secrets", None),
 
     # ---- Juniper specifics -------------------------------------------------
     ("junos-password", r".*\b(?:encrypted-password|plain-text-password-value)\s+", "secrets", None),

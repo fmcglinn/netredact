@@ -201,6 +201,46 @@ def test_secrets_keep_still_leaves_the_credential_findings(cisco):
     assert "crypt-hash-left" in checks
 
 
+# ---------------------------------------------------------------------------
+# Multi-qualifier credential lines.
+#
+# ENC covers the encoding / algorithm hints that sit between a keyword and its
+# secret. Several vendor commands stack TWO of them -- Cisco's autonomous-AP
+# `wpa-psk {ascii|hex} [0|7] <key>` is the clearest -- and a pattern that
+# admits only one consumes the encoding-type flag as if it were the secret.
+# That is worse than a miss: it emits a marker, so the line reads as handled
+# and `--strict` exits clean over a cleartext credential.
+# ---------------------------------------------------------------------------
+
+#: (line, the secret that must not survive)
+MULTI_QUALIFIER = [
+    (" wpa-psk ascii 0 Tr0ub4dor&3", "Tr0ub4dor&3"),
+    (" wpa-psk hex 0 0123456789abcdef", "0123456789abcdef"),
+    (" wpa-psk ascii 7 070C285F4D06", "070C285F4D06"),
+    (" password ascii 0 PlainWord", "PlainWord"),
+    (" key-string ascii 0 KeyStringVal", "KeyStringVal"),
+]
+
+
+@pytest.mark.parametrize("line,secret", MULTI_QUALIFIER)
+def test_a_second_encoding_hint_does_not_shield_the_secret(line, secret):
+    out = sanitise_text(line + "\n", Config(), salt=SALT).text
+    assert secret not in out, f"leaked through a second hint: {out.strip()!r}"
+
+
+@pytest.mark.parametrize("line,secret", MULTI_QUALIFIER)
+def test_a_multi_qualifier_leak_is_never_silent(line, secret):
+    """Belt and braces: if the rule ever regresses, verify must still speak.
+
+    The marker is what makes this dangerous -- a half-redacted line looks
+    finished. Whatever else changes, the tool must not report success over a
+    surviving credential.
+    """
+    res = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in res.text or res.findings, (
+        f"silent leak: {res.text.strip()!r} with no finding")
+
+
 def test_single_qualifier_lines_are_unchanged_by_the_run():
     """The common one-hint form must keep working exactly as before."""
     for line, secret in [(" password 7 070C285F4D06", "070C285F4D06"),
@@ -217,3 +257,8 @@ def test_a_numeric_secret_is_not_eaten_as_a_hint():
     assert "password" in out, "the keyword itself must survive"
 
 
+def test_isis_interface_password_is_a_secret():
+    """`isis password X` is the interface-level form; the rule only had the
+    `lsp-/area-/domain-password` spellings."""
+    out = sanitise_text(" isis password IsisSecret99\n", Config(), salt=SALT).text
+    assert "IsisSecret99" not in out, out

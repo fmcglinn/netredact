@@ -53,9 +53,13 @@ class Finding:
 #: tokens allowed between a credential keyword and its placeholder
 VTOK = ENC[:-1] + r"|type|value|key|level\s+\d+)"
 
-#: keywords that introduce a credential wherever they appear
+#: keywords that introduce a credential wherever they appear.
+#: ``wpa-psk`` earns its place the hard way: the rule that handles it
+#: once redacted the encoding type instead of the key, and because no
+#: check named the keyword, a cleartext passphrase left the tool with
+#: ``--strict`` reporting success.
 _CRED_KEYWORDS = (r"password|passwd|secret|pre-shared-key|key-string|"
-                  r"authentication-key|encrypted-password")
+                  r"authentication-key|encrypted-password|wpa-psk")
 
 #: ``community`` only where it is an SNMP community: after ``snmp-server`` /
 #: ``snmp`` / ``set snmp``, or first on the line (the JunOS ``snmp { community

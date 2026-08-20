@@ -198,6 +198,39 @@ All notable changes to this project are documented here. The format follows
   string and `jinstall` / `junos-*` image names for Juniper. Detection reads
   the input and never the output, and now says so in the module.
 
+### Fixed
+
+- **A second encoding hint no longer shields the secret behind it.** The rules
+  that take a credential allow an encoding or algorithm hint between the keyword
+  and the value — `password 7 …`, `enable secret 5 …`. Several commands stack
+  *two*, an encoding format and an encoding type, and Cisco's autonomous-AP
+  `wpa-psk {ascii|hex} [0|7] <key>` is the plain case. Admitting only one
+  consumed the type as though it were the key:
+
+  ```
+  wpa-psk ascii 0 Tr0ub4dor&3   ->   wpa-psk ascii <REMOVED> Tr0ub4dor&3
+  ```
+
+  Which is worse than a miss. The marker made the line read as handled, so the
+  passphrase left in cleartext and `--strict` still exited 0. All sixteen rules
+  that share the hint group now take a *run* of them (`ENC_RUN`). Each
+  repetition must end in whitespace, so the final token can never be eaten:
+  `password 0 12345678` still redacts `12345678`.
+
+  Output for every shipped fixture is byte-identical before and after, so no
+  config that was being handled correctly changes.
+
+- `isis-password` matched only `lsp-password`, `area-password` and
+  `domain-password`. The interface-level form is spelled with a space —
+  `isis password <key>` — and passed through untouched. It was reported by
+  `credential-left`, so it failed loudly rather than silently, but it was not
+  redacted.
+
+- `wpa-psk` is now a credential keyword to the verifier. No check named it, so
+  nothing in the verify pass was watching that line at all — which is why the
+  leak above was silent rather than reported. The rule is fixed; the safety net
+  now covers it too, so a future regression cannot be silent again.
+
 ## [0.1.0] - 2026-08-19
 
 First release.

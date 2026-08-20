@@ -83,14 +83,14 @@ Matched from the start of a line.
 
 | Rule | Family | Matches | Pattern |
 |---|---|---|---|
-| `enable-secret` | `secrets` | `enable secret` / `enable password`, any encoding | `\s*enable\s+(?:secret\|password)\s+(?:level\s+\d+\s+)?(?:<ENC>\s+)?` |
-| `username-secret` | `secrets` | `username U ... password\|secret X` | `\s*username\s+\S+\s+(?:\S+\s+)*?(?:password\|secret)\s+(?:<ENC>\s+)?` |
-| `bare-password` | `secrets` | an indented `password` / `passwd` line, e.g. under `line vty` | `\s*(?:password\|passwd)\s+(?:<ENC>\s+)?` |
-| `bare-secret` | `secrets` | a bare `secret` line, including JunOS `set ... secret` | `\s*(?:set\s+\S.*?\s)?secret\s+(?:<ENC>\s+)?` |
+| `enable-secret` | `secrets` | `enable secret` / `enable password`, any encoding | `\s*enable\s+(?:secret\|password)\s+(?:level\s+\d+\s+)?(?:<ENC>\s+)*` |
+| `username-secret` | `secrets` | `username U ... password\|secret X` | `\s*username\s+\S+\s+(?:\S+\s+)*?(?:password\|secret)\s+(?:<ENC>\s+)*` |
+| `bare-password` | `secrets` | an indented `password` / `passwd` line, e.g. under `line vty` | `\s*(?:password\|passwd)\s+(?:<ENC>\s+)*` |
+| `bare-secret` | `secrets` | a bare `secret` line, including JunOS `set ... secret` | `\s*(?:set\s+\S.*?\s)?secret\s+(?:<ENC>\s+)*` |
 | `encoded-key` | `secrets` | any `key 0\|7\|8\|encrypted X` anywhere on the line | `.*\bkey\s+(?!(?:(?:0\|7\|8\|encrypted)\s+)?(?:single-connection\|source-interface\|retransmit\|acct-port\|auth-port\|udp-port\|dynamic\|informs\|maxpoll\|minpoll\|timeout\|version\|iburst\|inform\|prefer\|source\|burst\|traps\|port\|trap\|nat\|vrf)(?![-\w]))(?:0\|7\|8\|encrypted)\s+` |
-| `aaa-server-key` | `secrets` | `key X` on a tacacs / radius / ldap / server-private line | `.*\b(?:tacacs\|radius\|ldap\|server-private\|server)\b.*?\bkey\s+(?!(?:<ENC>\s+)?(?:single-connection\|source-interface\|retransmit\|acct-port\|auth-port\|udp-port\|dynamic\|informs\|maxpoll\|minpoll\|timeout\|version\|iburst\|inform\|prefer\|source\|burst\|traps\|port\|trap\|nat\|vrf)(?![-\w]))(?:<ENC>\s+)?` |
+| `aaa-server-key` | `secrets` | `key X` on a tacacs / radius / ldap / server-private line | `.*\b(?:tacacs\|radius\|ldap\|server-private\|server)\b.*?\bkey\s+(?!(?:<ENC>\s+)?(?:single-connection\|source-interface\|retransmit\|acct-port\|auth-port\|udp-port\|dynamic\|informs\|maxpoll\|minpoll\|timeout\|version\|iburst\|inform\|prefer\|source\|burst\|traps\|port\|trap\|nat\|vrf)(?![-\w]))(?:<ENC>\s+)*` |
 | `quoted-key` | `secrets` | `key "..."`, e.g. JunOS OSPF MD5 | `\s*(?:set\s+\S.*?\s)?key\s+(?=\")` |
-| `key-string` | `secrets` | `key-string X` in a key chain | `\s*key-string\s+(?:<ENC>\s+)?` |
+| `key-string` | `secrets` | `key-string X` in a key chain | `\s*key-string\s+(?:<ENC>\s+)*` |
 | `key-hash` | `secrets` | `key-hash <alg> X`, `hash <alg> X` | `\s*(?:key-hash\|hash)\s+\S+\s+` |
 | `license-entitlement-key` | `secrets` | `license keys key X` -- the entitlement key, not the UDI | `\s*(?:set\s+system\s+)?license\s+keys\s+key\s+` |
 | `snmp-community` | `secrets` | `snmp-server community X`, `set snmp community X` | `\s*(?:snmp-server\|set\s+snmp)\s+community\s+` |
@@ -99,17 +99,17 @@ Matched from the start of a line.
 | `snmp-v3-auth` | `secrets` | `auth md5\|sha X` | `.*\bauth\s+(?:md5\|sha\d*)\s+` |
 | `snmp-v3-priv` | `secrets` | `priv [aes N\|des\|3des] X`, cipher optional for NX-OS | `.*\bpriv\s+(?:(?:aes(?:\s+\d+)?\|des\|3des)\s+)?` |
 | `snmp-engineid` | `identity` | `snmp-server engineID <type> X` -- identifies the device, and is derived from a real MAC | `\s*snmp-server\s+engineID\s+\S+\s+` |
-| `isakmp-key` | `secrets` | `crypto isakmp key X` | `\s*crypto\s+isakmp\s+key\s+(?:<ENC>\s+)?` |
-| `pre-shared-key` | `secrets` | `pre-shared-key [address A] [key] X` | `.*\bpre-shared-key\s+(?:address\s+\S+\s+)?(?:key\s+)?(?:<ENC>\s+)?` |
-| `auth-key` | `secrets` | `authentication-key` / `encryption-key`, skipping JunOS grammar keywords | `\s*(?:set\s+\S.*?\s)?(?:authentication-key\|encryption-key)\s+(?!(?:<ENC>\s+)?(?:authentication\|hexadecimal\|ascii-text\|plain-text\|start-time\|algorithm\|sha256\|value\|sha1\|type\|\d+\|key\|md5)(?![-\w]))(?:<ENC>\s+)?` |
-| `message-digest-key` | `secrets` | `message-digest-key N md5 X` (OSPF) | `.*\bmessage-digest-key\s+\d+\s+md5\s+(?:<ENC>\s+)?` |
-| `bgp-neighbor-password` | `secrets` | `neighbor A password X` | `.*\bneighbor\s+\S+\s+password\s+(?:<ENC>\s+)?` |
-| `hsrp-vrrp-auth` | `secrets` | `standby N` / `vrrp N` `authentication text\|md5 ... X` | `\s*(?:standby\s+\d+\s+\|vrrp\s+\d+\s+)?authentication\s+(?:text\|md5\s+key-string\|md5\s+key-chain)\s+(?:<ENC>\s+)?` |
-| `isis-password` | `secrets` | `lsp-password`, `area-password`, `domain-password` | `\s*(?:lsp\|area\|domain)-password\s+(?:<ENC>\s+)?` |
+| `isakmp-key` | `secrets` | `crypto isakmp key X` | `\s*crypto\s+isakmp\s+key\s+(?:<ENC>\s+)*` |
+| `pre-shared-key` | `secrets` | `pre-shared-key [address A] [key] X` | `.*\bpre-shared-key\s+(?:address\s+\S+\s+)?(?:key\s+)?(?:<ENC>\s+)*` |
+| `auth-key` | `secrets` | `authentication-key` / `encryption-key`, skipping JunOS grammar keywords | `\s*(?:set\s+\S.*?\s)?(?:authentication-key\|encryption-key)\s+(?!(?:<ENC>\s+)?(?:authentication\|hexadecimal\|ascii-text\|plain-text\|start-time\|algorithm\|sha256\|value\|sha1\|type\|\d+\|key\|md5)(?![-\w]))(?:<ENC>\s+)*` |
+| `message-digest-key` | `secrets` | `message-digest-key N md5 X` (OSPF) | `.*\bmessage-digest-key\s+\d+\s+md5\s+(?:<ENC>\s+)*` |
+| `bgp-neighbor-password` | `secrets` | `neighbor A password X` | `.*\bneighbor\s+\S+\s+password\s+(?:<ENC>\s+)*` |
+| `hsrp-vrrp-auth` | `secrets` | `standby N` / `vrrp N` `authentication text\|md5 ... X` | `\s*(?:standby\s+\d+\s+\|vrrp\s+\d+\s+)?authentication\s+(?:text\|md5\s+key-string\|md5\s+key-chain)\s+(?:<ENC>\s+)*` |
+| `isis-password` | `secrets` | `lsp-password`, `area-password`, `domain-password`, and the interface-level `isis password` | `\s*(?:(?:lsp\|area\|domain)-password\|isis\s+password)\s+(?:<ENC>\s+)*` |
 | `ntp-auth-key` | `secrets` | `ntp authentication-key N <alg> X` | `\s*ntp\s+authentication-key\s+\d+\s+\S+\s+` |
-| `ppp-credential` | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` | `\s*ppp\s+(?:chap\|pap\|eap)\s+(?:password\|secret\|sent-username\s+\S+\s+password)\s+(?:<ENC>\s+)?` |
-| `wpa-psk` | `secrets` | `wpa-psk X` | `.*\bwpa-psk\s+(?:<ENC>\s+)?` |
-| `ftp-password` | `secrets` | `ip ftp\|tftp\|http client password X` | `\s*ip\s+(?:ftp\|tftp\|http\s+client)\s+password\s+(?:<ENC>\s+)?` |
+| `ppp-credential` | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` | `\s*ppp\s+(?:chap\|pap\|eap)\s+(?:password\|secret\|sent-username\s+\S+\s+password)\s+(?:<ENC>\s+)*` |
+| `wpa-psk` | `secrets` | `wpa-psk X` | `.*\bwpa-psk\s+(?:<ENC>\s+)*` |
+| `ftp-password` | `secrets` | `ip ftp\|tftp\|http client password X` | `\s*ip\s+(?:ftp\|tftp\|http\s+client)\s+password\s+(?:<ENC>\s+)*` |
 | `junos-password` | `secrets` | `encrypted-password`, `plain-text-password-value` | `.*\b(?:encrypted-password\|plain-text-password-value)\s+` |
 | `unsupported-transceiver` | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name | `^\s*service\s+unsupported-transceiver\s+(?![{}\s]*$)%VAL%(?:\s+%VAL%)?\s*$` |
 | `hardware-model` | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; and the model in Arista's `! device: <name> (<model>, <release>)` header | `(?:^\s*!?\s*(?:hardware(?:\s+(?:model\|version\|revision))?\|model(?:\s+(?:number\|name))?\|chassis(?:\s+type)?\|product(?:\s+id)?\|platform\|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*!\s*device:\s*\S+\s*\(([^)]+),)` |
