@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-__all__ = ["detect_vendor", "VENDOR_HINTS"]
+__all__ = ["detect_vendor", "VENDOR_HINTS", "VENDOR_NAMES"]
 
 # Weight tiers. A DECISIVE hint is an unmistakable, vendor-exclusive marker:
 # seeing it once is conclusive and must outweigh any number of weak hits from
@@ -76,6 +76,18 @@ VENDOR_HINTS = (
         (r"^\s*feature\s+\S+", WEAK),
     )),
 )
+
+#: the vendors this module can name, sorted. Read off the table above and never
+#: written out, because ``config.VENDORS`` is built from this: a vendor added to
+#: ``VENDOR_HINTS`` becomes a legal ``vendor =`` value the same day, and a
+#: ``vendor =`` value with no hints behind it -- one netredact could be told
+#: about but could never recognise -- cannot come into existence at all.
+#:
+#: Sorted, rather than in the order of the table: that order is a tie-break
+#: order for :func:`detect_vendor` (``Counter.most_common`` breaks a tie by
+#: first insertion), which is a detection concern and nothing a user reading
+#: ``--print-config`` should inherit.
+VENDOR_NAMES = tuple(sorted(name for name, _ in VENDOR_HINTS))
 
 
 def detect_vendor(text: str) -> str:

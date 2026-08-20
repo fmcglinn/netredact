@@ -63,7 +63,7 @@ of keep, pseudo, hash, redact
 | Key | Default | Meaning |
 |---|---|---|
 | `salt_file` | unset | File holding the HMAC salt, created `0600` if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Unset means a fresh random salt each run. |
-| `vendor` | `"auto"` | `auto`, `cisco`, `arista`, `juniper`. Only affects the report; every rule is applied to every file regardless. |
+| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
 
 ## Every rule has exactly one home
 
@@ -407,14 +407,26 @@ location = "keep"            # this fleet's location lines hold a rack label
 banner   = "redact"          # act on banners without acting on all of `text`
 ```
 
-A key in the wrong section is an error, not a silent no-op, and the message
-lists the section's real keys:
+A key in the wrong section is an error, not a silent no-op — and because the
+rule is real, the message routes it rather than making you go and look:
 
 ```
-netredact: config error: [text]: unknown key(s) serial-number. Expected:
+netredact: config error: [text]: serial-number is a rule in [identity], not in
+[text]: set it as [identity] serial-number
+```
+
+A key that names no rule at all is a typo, and then the section's own keys are
+the useful answer:
+
+```
+netredact: config error: [text]: unknown key(s) serial-numbers. Expected:
 acl-remark, banner, contact, default, description, junos-location-body,
 location, login-message
 ```
+
+Both mistakes in one section are reported together, one line each. A key that
+names one of your own `[[custom]]` rules is routed too: a custom rule's action
+is a key on its own `[[custom]]` entry, never a key in a family section.
 
 Switching a rule off *is* an action: set it to `"keep"`. The rule still
 matches and is still counted, so the report can tell you what it left behind.

@@ -82,6 +82,10 @@ for an opaque marker, or redact
 ConfigError: [identity]: unknown key(s) nosuch. Expected: certificate-block,
 default, license-udi, pem-cert, serial-number, snmp-engineid, ssh-public-key
 
+>>> Config.from_dict({"text": {"serial-number": "keep"}})
+ConfigError: [text]: serial-number is a rule in [identity], not in [text]: set
+it as [identity] serial-number
+
 >>> Config.from_dict({"policy": {"text": "shred"}})
 ConfigError: [policy] text: unknown action 'shred'. Expected one of keep,
 pseudo, hash, redact
@@ -128,7 +132,7 @@ another command-line tool without hijacking its output.
 |---|---|---|
 | `text` | `str` | The sanitised configuration. |
 | `lines` | `list[str]` | Same, split. |
-| `vendor` | `str` | `cisco`, `arista`, `juniper`, or `unknown`. |
+| `vendor` | `str` | `arista`, `cisco`, `juniper`, or `unknown`. |
 | `counts` | `Counter` | Rule or family name → values substituted. A block or banner counts once, not once per line. |
 | `kept_counts` | `Counter` | Rule or family name → occurrences deliberately left in place. The CLI report does not print this; see the recipe below. |
 | `families` | `dict[str, str]` | Every key used in `counts` / `kept_counts` → its family, so you can group without re-deriving the rule table. |

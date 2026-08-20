@@ -47,8 +47,19 @@ All notable changes to this project are documented here. The format follows
   action.
 
 - `netredact --list-rules` prints the **section** each rule belongs to, and a
-  rule named in the wrong section is rejected with the right one. It also prints
-  the block a rule is scoped to, and the block a rule is scoped *out* of.
+  rule named in the wrong section is rejected with the right one. A real rule in
+  the wrong place is a filing mistake rather than a typo, so the message routes
+  it instead of reciting the section's keys:
+
+  ```
+  [text]: serial-number is a rule in [identity], not in [text]: set it as
+  [identity] serial-number
+  ```
+
+  A key that names no rule at all still gets the section's own key list, both
+  mistakes in one section are reported together, and a key naming one of your
+  own `[[custom]]` rules is pointed at that rule's `action`. `--list-rules` also
+  prints the block a rule is scoped to, and the block a rule is scoped *out* of.
 
 - **`[text] description` no longer reaches interface descriptions.** They moved
   to `[interfaces]` (see below), so a config that set `[text]` expecting to act
@@ -73,6 +84,13 @@ All notable changes to this project are documented here. The format follows
   are no longer out of reach. The `NOTE:` line lists ACL, route-map,
   prefix-list and policy names, AS numbers, VRF names and interface numbering —
   and `[vlans]` accounts for what left it.
+
+- **The legal values of `vendor` are read off the vendor detector's own hint
+  table**, rather than being written out a second time in `config.py` and a
+  third time in the comment `--print-config` prints. A vendor netredact cannot
+  detect is no longer a value you can set, and a vendor it can detect is always
+  a value you can set. The list is now alphabetical wherever it is printed —
+  `auto | arista | cisco | juniper`.
 
 ### Added
 

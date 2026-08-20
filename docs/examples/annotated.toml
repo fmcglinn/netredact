@@ -16,7 +16,7 @@
 # the HMAC salt, created 0600 if missing. Reuse it to keep pseudonyms
 # consistent across runs and devices. It is a re-identification key -- protect it.
 # salt_file = "~/.config/netredact/salt"
-vendor = "auto"  # auto | cisco | arista | juniper
+vendor = "auto"  # auto | arista | cisco | juniper
 
 # Passwords, keys, community strings and password hashes. This is
 # the one family that acts by default, and the whole of netredact's

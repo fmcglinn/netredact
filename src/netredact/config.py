@@ -36,6 +36,7 @@ from pathlib import Path
 
 from . import rules
 from .addresses import V4_CLASS_NAMES, V6_CLASS_NAMES, describe
+from .vendors import VENDOR_NAMES
 
 __all__ = [
     "ACTIONS", "FAMILIES", "ALLOWED", "POLICY_FAMILIES", "RULE_FAMILIES",
@@ -65,7 +66,17 @@ ALLOWED["secrets"] = ("keep", "hash", "redact")
 #: its own, where each rule is a key -- see :data:`RULE_FAMILIES`.
 POLICY_FAMILIES = ("hostnames", "domains", "usernames", "emails")
 
-VENDORS = ("auto", "cisco", "arista", "juniper")
+#: legal values for ``vendor``. ``auto`` runs the detector and is the default;
+#: naming one only overrides what the report says, since every rule is applied
+#: to every file regardless.
+#:
+#: THE PRINCIPLE, the same one the family sections are built on: the names come
+#: from the detector's own hint table (:data:`netredact.vendors.VENDOR_HINTS`)
+#: rather than being transcribed here, so the two cannot fall out of step. A
+#: vendor in only one of the two lists is either an unreachable config value or
+#: an undetectable vendor, and neither can now be written by accident.
+#: ``auto`` stays first, and is not a vendor: it is the absence of a choice.
+VENDORS = ("auto",) + VENDOR_NAMES
 
 _DOCS = "see docs/configuration.md"
 
@@ -413,6 +424,13 @@ RULE_SECTIONS = {"secrets": SecretsPolicy, "text": TextPolicy,
                  "identity": IdentityPolicy, "platform": PlatformPolicy,
                  "interfaces": InterfacesPolicy, "vlans": VlansPolicy}
 
+#: rule name -> the section that rule is set in. Read off the rule table, so a
+#: rule refiled between families cannot be pointed at a stale section. One
+#: table serves both places that have to answer "where does this rule live?":
+#: the ``[overrides]`` migration hints below, and the wrong-section routing in
+#: :func:`_misfiled`.
+_RULE_HOMES = {name: rules.family_of(name) for name in rules.rule_names()}
+
 
 @dataclass
 class CustomRule:
@@ -592,6 +610,9 @@ class Config:
                 f"unknown top-level section(s): {', '.join(sorted(unknown))}. "
                 f"Expected: {', '.join(sorted(known))}")
         kwargs: dict = {}
+        # read once, up front: a section is checked against the rules this
+        # document defines as well as the built-in ones
+        custom_names = _custom_names(raw)
         for f in fields(cls):
             if f.name not in raw:
                 continue
@@ -604,7 +625,8 @@ class Config:
                 if not isinstance(value, dict):
                     raise ConfigError(f"[{f.name}] must be a table")
                 kwargs[f.name] = _build(sub, value, f.name,
-                                        kebab=f.name in RULE_FAMILIES)
+                                        kebab=f.name in RULE_FAMILIES,
+                                        custom=custom_names)
             else:
                 kwargs[f.name] = value
         return cls(**kwargs)
@@ -626,20 +648,74 @@ def _dataclass_for(f) -> type | None:
     return mapping.get(f.name)
 
 
-def _build(cls: type, raw: dict, section: str, *, kebab: bool = False):
+def _custom_names(raw: dict) -> frozenset[str]:
+    """The names the ``[[custom]]`` entries of this document give themselves.
+
+    Read before any section is built, because a custom rule is a rule as far as
+    the user is concerned: naming it in ``[secrets]`` is the same filing mistake
+    as naming a built-in one in the wrong section, and deserves the same answer.
+    """
+    value = raw.get("custom")
+    if not isinstance(value, list):
+        return frozenset()
+    return frozenset(item["name"] for item in value
+                     if isinstance(item, dict) and isinstance(item.get("name"), str))
+
+
+def _misfiled(section: str, unknown: set[str],
+              custom: frozenset[str]) -> dict[str, str]:
+    """Of the keys a section does not have, the ones that are rules elsewhere.
+
+    THE PRINCIPLE: a key that names a real rule is not a typo, it is a filing
+    mistake, and the only thing worth saying about it is where that rule lives.
+    ``[text] serial-number`` is the reachable-but-wrong case -- the rule exists,
+    the action is legal, and the section's own key list answers a question the
+    user did not ask. Listing the section's keys is the right answer only for a
+    key that names nothing at all.
+
+    The home comes from :data:`_RULE_HOMES`, i.e. from the rule table, so
+    refiling a rule between families moves the message with it. A custom rule
+    has no section: its action is a key on its own ``[[custom]]`` entry.
+
+    Returns key -> what to say about it, in the user's own spelling.
+    """
+    out: dict[str, str] = {}
+    for key in sorted(unknown):
+        rule = key.replace("_", "-")
+        home = _RULE_HOMES.get(rule)
+        if home is not None and home in RULE_SECTIONS and home != section:
+            out[key] = (f"{key} is a rule in [{home}], not in [{section}]: "
+                        f"set it as [{home}] {rule}")
+        elif rule in custom or key in custom:
+            out[key] = (f"{key} is a [[custom]] rule, not a key of "
+                        f"[{section}]: give it an action on its own "
+                        f"[[custom]] entry")
+    return out
+
+
+def _build(cls: type, raw: dict, section: str, *, kebab: bool = False,
+           custom: frozenset[str] = frozenset()):
     """Build one section from its TOML table.
 
     ``kebab`` is for ``[platform]``, whose keys are rule names: the field is
     ``os_version`` and the key is ``os-version``. Every message here speaks
     the TOML spelling, so a typo is reported in the words the user wrote.
+
+    ``custom`` names the document's own ``[[custom]]`` rules, so that one of
+    those named in a family section is routed rather than called unknown.
     """
     spell = (lambda name: name.replace("_", "-")) if kebab else (lambda name: name)
     known = {spell(f.name): f.name for f in fields(cls)}
     unknown = set(raw) - set(known)
     if unknown:
-        raise ConfigError(
-            f"[{section}]: unknown key(s) {', '.join(sorted(unknown))}. "
-            f"Expected: {', '.join(sorted(known))}")
+        misfiled = _misfiled(section, unknown, custom)
+        lines = [f"[{section}]: {said}" for said in misfiled.values()]
+        strays = sorted(unknown - set(misfiled))
+        if strays:
+            lines.append(
+                f"[{section}]: unknown key(s) {', '.join(strays)}. "
+                f"Expected: {', '.join(sorted(known))}")
+        raise ConfigError("\n".join(lines))
     kwargs = {}
     for key, value in raw.items():
         name = known[key]
@@ -727,11 +803,12 @@ _REMOVED_KEYS = {
 
 
 #: every rule that could have been named in ``[overrides]``, and the section
-#: it lives in now. Derived from the rule table, so a refiled rule cannot be
-#: pointed at the wrong section.
+#: it lives in now. Read off :data:`_RULE_HOMES`, i.e. off the rule table, so a
+#: refiled rule cannot be pointed at the wrong section -- and so this hint and
+#: the wrong-section routing in :func:`_misfiled` can never disagree.
 _REMOVED_KEYS.update({
-    ("overrides", name): f"now [{rules.family_of(name)}] {name}"
-    for name in rules.rule_names()
+    ("overrides", name): f"now [{home}] {name}"
+    for name, home in _RULE_HOMES.items()
 })
 
 #: keys whose *section* survived but which themselves moved. A family that
@@ -804,7 +881,7 @@ _TOP_COMMENTS = {
     "salt_file": ("the HMAC salt, created 0600 if missing. Reuse it to keep "
                   "pseudonyms\n# consistent across runs and devices. It is a "
                   "re-identification key -- protect it."),
-    "vendor": "auto | cisco | arista | juniper",
+    "vendor": " | ".join(VENDORS),
 }
 
 _POLICY_COMMENTS = {

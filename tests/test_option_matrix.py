@@ -18,7 +18,7 @@ So a new family, class or action is covered the moment it exists, and
 
 The dimensions are read from the code's own tuples -- ``ACTIONS``,
 ``POLICY_FAMILIES``, ``RULE_FAMILIES``, ``RULE_SECTIONS``,
-``V4_CLASS_NAMES``, ``V6_CLASS_NAMES``, ``VENDORS``, the
+``V4_CLASS_NAMES``, ``V6_CLASS_NAMES``, ``VENDORS``, ``VENDOR_HINTS``, the
 dataclass fields -- and never transcribed, because a transcribed list is a list
 that goes stale without anything failing.
 """
@@ -45,6 +45,7 @@ from netredact.config import (
     VerifyConfig,
 )
 from netredact.pseudonymise import DESC_REMOVED, REDACT_CONST, REMOVED
+from netredact.vendors import VENDOR_HINTS
 
 from .conftest import SALT, policy, section
 
@@ -418,6 +419,27 @@ def test_every_vendor_value_is_accepted_and_reported(vendor, cisco):
 def test_an_unknown_vendor_is_rejected():
     with pytest.raises(ValueError, match="vendor"):
         Config(vendor="nortel")
+
+
+def test_the_vendor_values_are_exactly_the_vendors_the_detector_knows():
+    """The anti-drift check for vendor identity, and it belongs here.
+
+    ``test_platform.py`` asserts what ``detect_vendor`` answers; this file
+    asserts what the configuration surface *is*, and this is a claim about the
+    surface: the sweep above parametrises over ``VENDORS``, so a vendor missing
+    from it is a vendor nothing tests, and a vendor in it with no hints behind
+    it is a value you can set and netredact can never arrive at on its own.
+
+    ``VENDORS`` is now built from ``VENDOR_HINTS`` (see
+    ``config.VENDORS``), so this cannot fail by accident -- it fails if someone
+    unpicks that derivation and starts transcribing the list again.
+    """
+    assert set(VENDORS) - {"auto"} == {name for name, _ in VENDOR_HINTS}
+    # Config.__post_init__ tests membership and this file parametrises over it,
+    # so the shape matters as much as the contents
+    assert isinstance(VENDORS, tuple)
+    assert all(isinstance(v, str) for v in VENDORS)
+    assert VENDORS[0] == "auto", "auto is the default, and reads first"
 
 
 @pytest.mark.parametrize("enabled", [True, False])

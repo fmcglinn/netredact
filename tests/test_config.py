@@ -9,6 +9,7 @@ from netredact import (
     Config,
     ConfigError,
     CustomRule,
+    family_of,
     find_config,
     rule_names,
 )
@@ -225,6 +226,86 @@ def test_unknown_key_error_names_the_expected_keys(tmp_path):
         load(tmp_path, '[identity]\nserial_number = "keep"\n')
     assert "unknown key(s) serial_number" in str(exc.value)
     assert "serial-number" in str(exc.value)
+
+
+# -- the wrong section ------------------------------------------------------
+#
+# THE PRINCIPLE: a key that names a real rule is not a typo, it is a filing
+# mistake. `[text] serial-number` is legal in every respect except its address:
+# the rule exists, the action is legal, and the section's own key list answers a
+# question this user did not ask. The one useful thing to say is where the rule
+# does live. Listing the section's keys stays the right answer for a key that
+# names nothing at all, and a config can contain both mistakes at once.
+
+def test_a_rule_in_the_wrong_section_names_the_section_it_belongs_to(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, '[text]\nserial-number = "keep"\n')
+    message = str(exc.value)
+    assert "serial-number is a rule in [identity], not in [text]" in message
+    assert "set it as [identity] serial-number" in message
+    assert "Expected: " not in message, "the key list is not the answer here"
+
+
+def test_a_misfiled_key_is_routed_in_the_spelling_the_user_wrote(tmp_path):
+    """The field is `serial_number`; the rule, and the message, are kebab-case."""
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, '[text]\nserial_number = "keep"\n')
+    message = str(exc.value)
+    assert "serial_number is a rule in [identity]" in message
+    assert "set it as [identity] serial-number" in message
+
+
+def test_a_key_that_is_no_rule_at_all_still_lists_the_sections_keys(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, '[text]\nserial-numbers = "keep"\n')
+    message = str(exc.value)
+    assert "unknown key(s) serial-numbers" in message
+    assert "Expected: acl-remark, banner" in message
+    assert "belongs" not in message and "is a rule in" not in message
+
+
+def test_a_misfiled_rule_and_a_typo_are_both_reported(tmp_path):
+    """Several wrong keys in one section: each gets the answer it deserves."""
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, '[text]\nserial-number = "keep"\nos-version = "hash"\n'
+                       'nosuch = "keep"\n')
+    message = str(exc.value)
+    assert "serial-number is a rule in [identity]" in message
+    assert "os-version is a rule in [platform]" in message
+    assert "unknown key(s) nosuch. Expected: " in message
+    # the typo is listed once, as a typo, and not as a rule
+    assert "nosuch is a rule" not in message
+
+
+@pytest.mark.parametrize("rule", sorted(rule_names()))
+def test_every_rule_is_routed_home_from_a_foreign_section(tmp_path, rule):
+    """The anti-drift half: both the rule and its home come from the rule table.
+
+    A rule refiled between families takes its own routing message with it, and
+    a family added to ``RULE_SECTIONS`` is swept the day it exists -- there is
+    no list here to keep in step.
+    """
+    home = family_of(rule)
+    elsewhere = next(f for f in RULE_SECTIONS if f != home)
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, f'[{elsewhere}]\n{rule} = "keep"\n')
+    assert f"set it as [{home}] {rule}" in str(exc.value)
+
+
+def test_a_custom_rule_named_in_a_family_section_is_routed_to_its_own_entry(tmp_path):
+    """A custom rule is a rule to its author, but its action is its own key."""
+    with pytest.raises(ConfigError) as exc:
+        load(tmp_path, """
+[secrets]
+acme-shared-key = "hash"
+
+[[custom]]
+name    = "acme-shared-key"
+pattern = '\\s*acme\\s+shared-key\\s+'
+""")
+    message = str(exc.value)
+    assert "acme-shared-key is a [[custom]] rule" in message
+    assert "its own [[custom]] entry" in message
 
 
 # -- migration off the old model --------------------------------------------
