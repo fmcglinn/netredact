@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from . import rules as R
+from .collection import RemovedSection, strip_rancid_diagnostics
 from .config import RULE_FAMILIES, Config
 from .pseudonymise import Pseudonymiser, is_mask_like
 from .vendors import detect_vendor
@@ -70,6 +71,8 @@ class Result:
     #: every key used in :attr:`counts` / :attr:`kept_counts` -> its family, so
     #: a caller can group the report without re-deriving the rule table
     families: dict[str, str] = field(default_factory=dict)
+    #: collector command sections deleted before sanitization
+    removed_sections: list[RemovedSection] = field(default_factory=list)
 
     @property
     def lines(self) -> list[str]:
@@ -368,6 +371,17 @@ def sanitise_text(text: str, config: Config | None = None, *,
     cfg = config or Config()
     salt = salt or _secrets.token_bytes(32)
     lines = text.splitlines()
+    removed_sections: list[RemovedSection] = []
+    collection_mode = cfg.collection.rancid_diagnostics
+    if collection_mode not in {"remove", "keep"}:
+        from .config import ConfigError
+        raise ConfigError(
+            "[collection] rancid_diagnostics: unknown mode "
+            f"{collection_mode!r}. Expected one of remove, keep"
+        )
+    if collection_mode == "remove":
+        lines, removed_sections = strip_rancid_diagnostics(lines)
+    retained_text = "\n".join(lines) + ("\n" if lines else "")
 
     san = Sanitiser(cfg, salt=salt)
     san.collect(lines)
@@ -377,7 +391,7 @@ def sanitise_text(text: str, config: Config | None = None, *,
     findings = verify(out_lines, cfg) if cfg.verify.enabled else []
     return Result(
         text=out,
-        vendor=cfg.vendor if cfg.vendor != "auto" else detect_vendor(text),
+        vendor=cfg.vendor if cfg.vendor != "auto" else detect_vendor(retained_text),
         counts=san.counts,
         kept_counts=san.kept_counts,
         kept=san.p.kept,
@@ -386,4 +400,5 @@ def sanitise_text(text: str, config: Config | None = None, *,
         findings=findings,
         mapping={k: dict(v) for k, v in san.p.maps.items()},
         families=san.families,
+        removed_sections=removed_sections,
     )

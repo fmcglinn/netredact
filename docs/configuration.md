@@ -92,8 +92,9 @@ in `[policy]`.
 Passwords, keys, community strings and password hashes — 32 rules.
 `default = "redact"`, and it is the only family that acts out of the box.
 
-**That is the whole default contract**: credentials are destroyed, nothing else
-is. Default output still contains every address, hostname and customer
+For configuration values, that is the whole default contract: credentials are
+destroyed and everything else is kept. The separate `[collection]` preprocessing
+step removes RANCID diagnostics by default. Output still contains every address, hostname and customer
 description, which is why the report opens with the effective policy rather
 than leaving you to guess.
 
@@ -390,7 +391,7 @@ boot-image = "redact"        # and the image path
 | Rule | Line |
 |---|---|
 | `hardware-model` | `Model Number : WS-C3850-48P`, `Hardware: …`, `Chassis type: …`, `PID: …` |
-| `os-version` | a line that is nothing but `version …`: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` |
+| `os-version` | a version declaration: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6` |
 | `software-image` | `Software image version: …`, `System image file is "…"`, `Junos: …` |
 | `boot-image` | `boot system flash:/EOS64-4.32.1F.swi`, commented out or not |
 
@@ -550,6 +551,28 @@ rejected with a migration message.
 
 [`06-custom-rules.toml`](examples/06-custom-rules.toml) is a worked example of
 all of this.
+
+## `[collection]` — collector wrappers
+
+```toml
+[collection]
+rancid_diagnostics = "remove"  # "remove" (default) or "keep"
+```
+
+With `remove`, strong RANCID evidence—an explicit content-type header, a
+recognized command header, or repeated collector prompts—activates a
+fail-closed preprocessing pass. It physically deletes collector prompts,
+device metadata, and every command section except an explicit allowlist of
+configuration-producing commands such as `show configuration | display set`
+and `show running-config`. Unknown commands are removed through the next
+boundary or EOF, and arbitrary pipelines are not accepted.
+
+The RANCID content-type header remains. If running and startup configurations
+both occur, both bodies remain with source delimiters. Removal happens before
+identity collection and verification, so deleted diagnostics cannot affect
+pseudonym maps, counts, or findings. This is the intentional exception to the
+usual line-count preservation guarantee. Use `keep` when diagnosing collector
+output itself.
 
 ## `[verify]` — the output pass
 

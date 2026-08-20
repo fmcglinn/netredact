@@ -44,7 +44,9 @@ EOS_HEADER = (
 
 
 def redacted(text: str) -> str:
-    return sanitise_text(text, policy(platform="redact"), salt=SALT).text
+    cfg = policy(platform="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    return sanitise_text(text, cfg, salt=SALT).text
 
 
 # -- reaching the material ---------------------------------------------------
@@ -65,15 +67,18 @@ def test_each_field_of_the_arista_header_belongs_to_its_own_rule():
     would put the model and the release out of reach of `[overrides]`. Three
     values of three kinds on one line need the three owners they already have.
     """
-    result = sanitise_text(EOS_HEADER, policy(platform="redact"), salt=SALT)
+    cfg = policy(platform="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    result = sanitise_text(EOS_HEADER, cfg, salt=SALT)
     assert result.counts["hardware-model"] == 1     # DCS-7280SR-48C6-M
     assert result.counts["os-version"] == 1         # EOS-4.32.1F
     assert "device-header" not in result.families
 
 
 def test_one_rule_of_the_section_keeps_its_own_action():
-    out = sanitise_text(EOS_HEADER, section("platform", "redact", os_version="keep"),
-                        salt=SALT).text
+    cfg = section("platform", "redact", os_version="keep")
+    cfg.collection.rancid_diagnostics = "keep"
+    out = sanitise_text(EOS_HEADER, cfg, salt=SALT).text
     assert "! device: agg-sw-02 (<REMOVED>, EOS-4.32.1F)" in out
 
 
@@ -87,6 +92,7 @@ def test_a_rule_has_exactly_one_home():
 def test_the_three_families_on_the_header_line_move_independently():
     cfg = policy(hostnames="pseudo")
     cfg.platform.default = "hash"
+    cfg.collection.rancid_diagnostics = "keep"
     out = sanitise_text(EOS_HEADER, cfg, salt=SALT).text
     line = next(v for v in out.splitlines() if v.startswith("! device:"))
     assert re.fullmatch(
@@ -105,6 +111,7 @@ def test_a_boot_image_goes_whether_or_not_it_is_commented_out():
     ("version 15.7\n", "version <REMOVED>\n"),                    # IOS
     ("version 9.3(5) Bios:version 07.66\n", "version <REMOVED>\n"),  # NX-OS
     ("version 21.4R3-S4.9;\n", "version <REMOVED>;\n"),           # JunOS
+    ("set version 23.4R2-S5.6\n", "set version <REMOVED>\n"),     # JunOS set
 ])
 def test_a_bare_version_line_is_the_software_release(line, kept):
     """The JunOS `;` is structure, not value, so it stays outside the span."""
@@ -151,7 +158,9 @@ def test_a_configuration_keyword_is_not_a_platform_disclosure(line):
 
 
 def test_platform_is_kept_by_default_and_counted_as_kept():
-    result = sanitise_text(EOS_HEADER, Config(), salt=SALT)
+    cfg = Config()
+    cfg.collection.rancid_diagnostics = "keep"
+    result = sanitise_text(EOS_HEADER, cfg, salt=SALT)
     assert "DCS-7280SR-48C6-M, EOS-4.32.1F" in result.text
     assert result.kept_counts["hardware-model"] == 1
     assert result.kept_counts["os-version"] == 1
@@ -160,7 +169,9 @@ def test_platform_is_kept_by_default_and_counted_as_kept():
 
 
 def test_a_destroyed_platform_value_counts_as_a_redaction():
-    result = sanitise_text(EOS_HEADER, policy(platform="redact"), salt=SALT)
+    cfg = policy(platform="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    result = sanitise_text(EOS_HEADER, cfg, salt=SALT)
     assert result.families["os-version"] == "platform"
     assert result.redactions == sum(result.counts.values())
 

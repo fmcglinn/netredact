@@ -90,9 +90,9 @@ RULE_NOTES = {
                       "`platform` and `model` config keywords are not "
                       "touched; and the model in Arista's `! device: <name> "
                       "(<model>, <release>)` header",
-    "os-version": "a line that is just `version <digits...>`: IOS `version "
-                  "15.7`, NX-OS `version 9.3(5)`, JunOS `version "
-                  "21.4R3-S4.9;`; and the release in Arista's `! device:` "
+    "os-version": "a `version <digits...>` line: IOS `version 15.7`, NX-OS "
+                  "`version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set "
+                  "version 23.4R2-S5.6`; and the release in Arista's `! device:` "
                   "header",
     "software-image": "`Software image version:`, `System image file is ...`, "
                       "`Software version:`; and the bare `Junos:` / `EOS:` "

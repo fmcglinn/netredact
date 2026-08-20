@@ -44,7 +44,7 @@ __all__ = [
     "IPv6Policy", "MacPolicy", "SecretsPolicy", "TextPolicy",
     "IdentityPolicy", "PlatformPolicy", "InterfacesPolicy", "VlansPolicy",
     "CircuitsPolicy",
-    "VerifyConfig", "CustomRule",
+    "CollectionConfig", "VerifyConfig", "CustomRule",
     "ConfigError", "find_config", "DEFAULT_CONFIG_NAMES",
 ]
 
@@ -510,6 +510,22 @@ class VerifyConfig:
 
 
 @dataclass
+class CollectionConfig:
+    """How collector wrappers around a device configuration are handled."""
+
+    rancid_diagnostics: str = "remove"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rancid_diagnostics, str):
+            raise ConfigError("[collection] rancid_diagnostics must be a string")
+        if self.rancid_diagnostics not in {"remove", "keep"}:
+            raise ConfigError(
+                "[collection] rancid_diagnostics: unknown mode "
+                f"{self.rancid_diagnostics!r}. Expected one of remove, keep"
+            )
+
+
+@dataclass
 class Config:
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     ipv4: IPv4Policy = field(default_factory=IPv4Policy)
@@ -525,6 +541,7 @@ class Config:
     circuits: CircuitsPolicy = field(default_factory=CircuitsPolicy)
     #: extra rules of your own
     custom: list[CustomRule] = field(default_factory=list)
+    collection: CollectionConfig = field(default_factory=CollectionConfig)
     verify: VerifyConfig = field(default_factory=VerifyConfig)
     #: file holding the HMAC salt, created 0600 if missing. Reuse it to keep
     #: pseudonyms consistent across runs and across devices. It is a
@@ -668,7 +685,8 @@ class Config:
 def _dataclass_for(f) -> type | None:
     mapping = {
         "policy": PolicyConfig, "ipv4": IPv4Policy, "ipv6": IPv6Policy,
-        "macs": MacPolicy, "verify": VerifyConfig, **RULE_SECTIONS,
+        "macs": MacPolicy, "collection": CollectionConfig,
+        "verify": VerifyConfig, **RULE_SECTIONS,
     }
     return mapping.get(f.name)
 
@@ -1013,6 +1031,10 @@ _VERIFY_COMMENTS = {
     "ignore_patterns": "regexes to treat as expected, not as findings",
 }
 
+_COLLECTION_COMMENTS = {
+    "rancid_diagnostics": "remove non-configuration command sections from RANCID captures",
+}
+
 
 def _toml_value(v) -> str:
     if isinstance(v, bool):
@@ -1138,6 +1160,19 @@ def _render_verify(verify: VerifyConfig) -> list[str]:
     return out
 
 
+def _render_collection(collection: CollectionConfig) -> list[str]:
+    out = [
+        "# Collector wrappers. RANCID captures are detected from strong headers",
+        "# or repeated prompts; unknown command sections fail closed.",
+        "[collection]",
+    ]
+    out += _block((f.name, getattr(collection, f.name),
+                   _COLLECTION_COMMENTS.get(f.name), False)
+                  for f in fields(collection))
+    out.append("")
+    return out
+
+
 _CUSTOM_EXAMPLE = [
     "# Extra rules of your own. `pattern` is a regex: if it has capture",
     "# groups, the groups are what gets acted on and everything outside them",
@@ -1181,6 +1216,7 @@ def _render_toml(cfg: Config) -> str:
     out += _render_ip("ipv4", cfg.ipv4)
     out += _render_ip("ipv6", cfg.ipv6)
     out += _render_macs(cfg.macs)
+    out += _render_collection(cfg.collection)
     out += _render_verify(cfg.verify)
     out += _CUSTOM_EXAMPLE
     return "\n".join(out)

@@ -16,6 +16,7 @@ def test_print_config_is_valid_toml_and_shows_the_defaults(capsys):
     assert parsed["ipv4"]["default"] == "keep"
     assert parsed["ipv6"]["default"] == "keep"
     assert parsed["macs"] == {"oui": "keep", "nic": "keep", "pool": "00:00:5e"}
+    assert parsed["collection"] == {"rancid_diagnostics": "remove"}
     assert parsed["ipv4"]["pool"] == ["198.18.0.0/15", "100.64.0.0/10"]
     assert "well_known_resolvers" in parsed["ipv4"]
 
@@ -179,6 +180,25 @@ def test_report_names_the_policy_and_the_changes(fixtures, capsys):
     assert "changes:" in err
     assert "VERIFY: clean" in err
     assert "NOTE: never scrubbed" in err
+
+
+def test_report_audits_removed_collection_sections_without_their_contents(
+        tmp_path, capsys):
+    src = tmp_path / "rancid.conf"
+    src.write_text(
+        "# RANCID-CONTENT-TYPE: juniper\n"
+        "# user@router> show version detail\n"
+        "# private-build-identifier\n"
+        "# user@router> show configuration | display set\n"
+        "set system host-name router\n"
+    )
+
+    assert main([str(src), "--report"]) == EXIT_OK
+    out, err = capsys.readouterr()
+    assert "show version detail" not in out
+    assert "collection: removed 2 line(s) [show version detail]" in err
+    assert "private-build-identifier" not in err
+    assert "is this really a device configuration?" not in err
 
 
 def test_the_report_does_not_enumerate_what_was_kept(fixtures, capsys):

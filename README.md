@@ -117,6 +117,7 @@ The sections are the selectors:
 | `[ipv4]` / `[ipv6]` | one action per address class, plus `default`, `pool`, `well_known_resolvers`, `keep_networks` |
 | `[macs]` | `oui` and `nic` independently, plus the `pool` prefix that `redact` writes |
 | `[[custom]]` | rules of your own |
+| `[collection]` | removal of non-configuration RANCID command output |
 | `[verify]` | the pass that re-scans the output |
 
 **Every rule has exactly one home.** A family whose members are named rules is
@@ -133,6 +134,19 @@ serial-number = "keep"       # except this one: TAC asks for it first
 
 The four families with no rules at all — the names the collect pass learns —
 stay one key each in `[policy]`.
+
+RANCID captures are preprocessed before those selectors run. By default,
+non-configuration command sections, collector prompts, and device metadata are
+physically removed; only explicitly recognized configuration commands survive:
+
+```toml
+[collection]
+rancid_diagnostics = "remove"  # default; use "keep" for an untouched wrapper
+```
+
+Detection requires a RANCID header, a recognized command header, or repeated
+collector prompts. Unknown commands fail closed. Reports name removed commands
+and line counts without echoing their contents.
 
 Here is a **hardened profile** — not the default, and not what `--print-config`
 prints:

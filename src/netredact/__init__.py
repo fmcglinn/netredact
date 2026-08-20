@@ -47,10 +47,12 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 from .addresses import V4_CLASS_NAMES, V6_CLASS_NAMES, classify_v4, classify_v6
+from .collection import RemovedSection
 from .config import (
     ACTIONS,
     ALLOWED,
     FAMILIES,
+    CollectionConfig,
     Config,
     ConfigError,
     CustomRule,
@@ -75,7 +77,7 @@ from .verify import Finding, check_names, verify
 
 __all__ = [
     "__version__",
-    "Config", "ConfigError", "CustomRule",
+    "Config", "ConfigError", "CustomRule", "CollectionConfig",
     "PolicyConfig", "IPv4Policy", "IPv6Policy", "MacPolicy",
     "SecretsPolicy", "TextPolicy", "IdentityPolicy", "PlatformPolicy",
     "InterfacesPolicy", "VlansPolicy",
@@ -83,7 +85,7 @@ __all__ = [
     "ACTIONS", "FAMILIES", "ALLOWED",
     "classify_v4", "classify_v6", "V4_CLASS_NAMES", "V6_CLASS_NAMES",
     "find_config",
-    "sanitise_text", "Sanitiser", "Result",
+    "sanitise_text", "Sanitiser", "Result", "RemovedSection",
     "Pseudonymiser", "PoolExhausted", "detect_vendor",
     "verify", "Finding", "check_names",
     "RuleCatalogue", "RuleInfo", "RuleHit", "RuleReplacement", "REMOVED",

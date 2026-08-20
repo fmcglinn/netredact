@@ -204,6 +204,10 @@ def report(stream, label: str, result: Result, cfg: Config) -> None:
                               break_long_words=False, break_on_hyphens=False):
         w(line + "\n")
 
+    for section in result.removed_sections:
+        w(f"  collection: removed {section.lines} line(s) "
+          f"[{section.command}]\n")
+
     if result.counts:
         w("  changes:\n")
         groups = _grouped(result.counts, result.families)
@@ -211,6 +215,8 @@ def report(stream, label: str, result: Result, cfg: Config) -> None:
                 groups.items(), key=lambda kv: -sum(result.counts[k] for k in kv[1])):
             total = sum(result.counts[k] for k in keys)
             w(f"    {total:6d}  {_joined(keys, family)}\n")
+    elif result.removed_sections:
+        w("  changes: no value substitutions after collection preprocessing\n")
     else:
         w("  changes: NONE -- is this really a device configuration?\n")
 

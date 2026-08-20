@@ -424,7 +424,7 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
           # the Arista header, up to the last comma inside the brackets
           rf"{_EOS_HEADER}([^)]+),"), "platform", None),
     ("os-version",
-     _alt(_rest(r"\s*version\s+(?=\d)"),
+     _alt(_rest(r"\s*(?:set\s+)?version\s+(?=\d)"),
           # the Arista header, the token after the last comma
           rf"{_EOS_HEADER}[^)]+,\s*([^\s,)]+)\s*\)\s*$"), "platform", None),
     ("software-image",

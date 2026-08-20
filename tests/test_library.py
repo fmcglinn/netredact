@@ -20,12 +20,12 @@ def test_a_random_salt_differs_between_runs(cisco):
 
 
 def test_public_api_is_exported():
-    for name in ("Config", "ConfigError", "CustomRule", "PolicyConfig",
+    for name in ("Config", "ConfigError", "CustomRule", "CollectionConfig", "PolicyConfig",
                  "IPv4Policy", "IPv6Policy", "MacPolicy", "VerifyConfig",
                  "SecretsPolicy", "TextPolicy", "IdentityPolicy",
                  "PlatformPolicy",
                  "ACTIONS", "FAMILIES", "ALLOWED", "sanitise_text",
-                 "Sanitiser", "Result", "Pseudonymiser", "detect_vendor",
+                 "Sanitiser", "Result", "RemovedSection", "Pseudonymiser", "detect_vendor",
                  "verify", "Finding", "check_names", "RuleCatalogue",
                  "RuleInfo", "RuleHit", "RuleReplacement", "REMOVED", "find_config",
                  "classify_v4", "classify_v6",

@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- RANCID collection preprocessing now removes diagnostic command sections,
+  collector prompts, and device metadata before normal sanitization. Unknown
+  commands fail closed; `[collection] rancid_diagnostics = "keep"` restores
+  the unstripped wrapper. Reports expose normalized command names and removed
+  line counts without retaining diagnostic contents.
+
 ## [0.1.0] - 2026-08-20
 
 First release.

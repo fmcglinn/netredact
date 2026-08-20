@@ -268,6 +268,11 @@ oui  = "keep"      # the 24-bit vendor prefix; redact writes `pool`
 nic  = "keep"      # the 24-bit device half
 pool = "00:00:5e"  # the OUI that redact writes -- 00:00:5e is IANA-reserved
 
+# Collector wrappers. RANCID captures are detected from strong headers
+# or repeated prompts; unknown command sections fail closed.
+[collection]
+rancid_diagnostics = "remove"  # remove non-configuration command sections from RANCID captures
+
 # The pass that re-scans the OUTPUT for anything still sensitive.
 [verify]
 enabled         = true

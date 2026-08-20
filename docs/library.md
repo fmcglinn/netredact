@@ -37,6 +37,7 @@ cfg.ipv4.other_unicast = "pseudo"         # one class
 cfg.ipv4.pool = ["198.18.0.0/15"]
 cfg.macs.nic = "pseudo"                   # the two halves are independent
 cfg.identity.serial_number = "keep"       # one rule, by name
+cfg.collection.rancid_diagnostics = "keep" # retain a RANCID wrapper
 ```
 
 The actions and families are exported, so you can validate against them:
@@ -116,7 +117,9 @@ for path in paths:
 ```
 
 Passing the same salt across files is what makes a fleet pseudonymise
-consistently.
+consistently. Before normal collection and sanitization, detected RANCID input
+defaults to removing non-configuration command sections. Set
+`cfg.collection.rancid_diagnostics = "keep"` to bypass that preprocessing.
 
 ## Nothing is printed
 
@@ -142,6 +145,7 @@ another command-line tool without hijacking its output.
 | `collisions` | `set[str]` | Real addresses kept that fall inside a pseudonym pool. |
 | `findings` | `list[Finding]` | What the verification pass found. |
 | `mapping` | `dict[str, dict[str, str]]` | Category → `{original: pseudonym}`. **The re-identification map.** |
+| `removed_sections` | `list[RemovedSection]` | Collector audit entries with normalized `.command` and physically removed `.lines`; removed contents are never retained. |
 
 `Finding` has `.line`, `.check` and `.text`, and a readable `str()`.
 
