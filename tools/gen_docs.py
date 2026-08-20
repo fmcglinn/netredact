@@ -123,7 +123,7 @@ BLOB_NOTES = {
     "junos-type9": "any `$9$...` blob, wherever it appears",
     "crypt-hash": "any `$1$ $2a/b/x/y$ $5$ $6$ $y$` hash, wherever it appears",
     "ssh-public-key": "`ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` "
-                      "plus `AAAA...`",
+                      "plus `AAAA...`, and JunOS `ssh-known-hosts` key forms",
     "license-udi": "`License UDI: ...`",
     "serial-number": "`Serial Number: ...`, `System serial number ...`",
 }

@@ -559,7 +559,9 @@ _BLOB: list[tuple[str, str, str, int]] = [
     ("junos-type9", r'(\$9\$[^\s";]+)', "secrets", 0),
     ("crypt-hash", r'(\$(?:1|2[abxy]?|5|6|y)\$[^\s";]+)', "secrets", 0),
     ("ssh-public-key",
-     r'\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[\w-]+)\s+("?AAAA[0-9A-Za-z+/=]+"?)',
+     r'(?:\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[\w-]+)\s+'
+     r'|\bssh-known-hosts\s+host\s+\S+\s+(?:rsa|dsa|ecdsa|ed25519)-key\s+)'
+     r'("?AAAA[0-9A-Za-z+/=]+"?)',
      "identity", 0),
     # atomic header: the optional colon must not be handed back as the value,
     # so a bare `! License UDI:` heading with no data on it never matches

@@ -236,6 +236,14 @@ def test_a_kept_secret_is_not_blinded_by_the_shape_exemption():
     assert "crypt-hash-left" in {f.check for f in result.findings}
 
 
+def test_junos_access_denied_secret_placeholder_is_already_safe():
+    """An inaccessible secret placeholder is not credential material."""
+    text = "set secret /* ACCESS-DENIED */;\n"
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert result.text == text
+    assert result.findings == []
+
+
 # --------------------------------------------------------------------------
 # 8: the shape-check exemption, and its deliberate asymmetry
 # --------------------------------------------------------------------------
@@ -264,6 +272,22 @@ def test_material_a_rule_was_told_to_keep_is_not_a_finding():
     for key in ("ssh-public-key", "certificate-block", "serial-number",
                 "snmp-engineid"):
         assert result.kept_counts[key] == 1, key
+
+
+def test_junos_known_host_ed25519_key_is_owned_by_the_identity_rule():
+    key = "AAAAC3NzaC1lZDI1NTE5AAAAINNA" * 2
+    text = ("set security ssh-known-hosts host \"[100.116.72.74]:2022\" "
+            f"ed25519-key {key}\n")
+
+    kept = sanitise_text(text, Config(), salt=SALT)
+    assert kept.text == text
+    assert kept.kept_counts["ssh-public-key"] == 1
+    assert kept.findings == []
+
+    acting = sanitise_text(text, policy(identity="redact"), salt=SALT)
+    assert key not in acting.text
+    assert acting.counts["ssh-public-key"] == 1
+    assert acting.findings == []
 
 
 def test_the_same_input_exits_zero(tmp_path):

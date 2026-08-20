@@ -139,6 +139,7 @@ MARKER_IGNORE = (r"(?<=<)(?:" + "|".join(sorted({m for m, _t in PREFIX.values()}
 #: expected artefacts of sanitising, and keywords that are not credentials
 DEFAULT_IGNORE = (
     r"\buser-[0-9a-f]{4}@(?:example|d[0-9a-f]{4}\.example)\.\w+",
+    r"/\*\s*ACCESS-DENIED\s*\*/",
     r"\b(?:no|service)\s+password\b",
     r"password-(?:policy|encryption)",
     r"\bpassword\s+encryption\b",

@@ -147,7 +147,7 @@ searched inline, or consumed as structured multi-line material.
 | `banner` | `text` | `banner <type> <delim>` through its closing delimiter |  | `^\s*banner\s+([\w-]+)\s+(.*)$` |  |
 | `junos-type9` | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  | `(\$9\$[^\s";]+)` |  |
 | `crypt-hash` | `secrets` | any `$1$ $2a/b/x/y$ $5$ $6$ $y$` hash, wherever it appears |  | `(\$(?:1\|2[abxy]?\|5\|6\|y)\$[^\s";]+)` |  |
-| `ssh-public-key` | `identity` | `ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` plus `AAAA...` |  | `\b(?:ssh-(?:rsa\|dss\|ed25519)\|ecdsa-sha2-[\w-]+)\s+("?AAAA[0-9A-Za-z+/=]+"?)` |  |
+| `ssh-public-key` | `identity` | `ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` plus `AAAA...`, and JunOS `ssh-known-hosts` key forms |  | `(?:\b(?:ssh-(?:rsa\|dss\|ed25519)\|ecdsa-sha2-[\w-]+)\s+\|\bssh-known-hosts\s+host\s+\S+\s+(?:rsa\|dsa\|ecdsa\|ed25519)-key\s+)("?AAAA[0-9A-Za-z+/=]+"?)` |  |
 | `license-udi` | `identity` | `License UDI: ...` |  | `^\s*!?\s*(?>License\s+UDI:?\s*)(.+)$` |  |
 | `serial-number` | `identity` | `Serial Number: ...`, `System serial number ...` |  | `^\s*!?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$` |  |
 | `certificate-block` | `identity` | a Cisco `certificate self-signed ... quit` body |  | `^\s*certificate\s+(?:self-signed\|ca)?\s*\S*\s*(?:nvram:\S+)?\s*$` | `^\s*quit\s*$` |
