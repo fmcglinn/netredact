@@ -21,7 +21,9 @@ from __future__ import annotations
 import ipaddress
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from . import rules as R
@@ -47,6 +49,19 @@ _DESTRUCTIVE = RULE_FAMILIES
 #: is recorded under (singular, as the report and the tests expect)
 _NAME_CATEGORY = {"hostnames": "hostname", "domains": "domain",
                   "usernames": "username", "emails": "email"}
+
+# Associated labels are commonly filenames. Unlike configuration grammar,
+# ``_`` and ``-`` are separators there, so their boundaries are alphanumeric
+# rather than ``\w`` boundaries. The value patterns remain strict enough not
+# to select an address embedded inside a larger word or address.
+_LABEL_IPV4_RE = re.compile(
+    r"(?<![A-Za-z0-9.])((?:\d{1,3}\.){3}\d{1,3})(?!(?:[A-Za-z0-9]|\.\d))")
+_LABEL_IPV6_RE = re.compile(
+    R.IPV6_RE.pattern.replace(r"(?<![\w:.])", r"(?<![A-Za-z0-9:.])")
+    .replace(r"(?![\w:.])", r"(?![A-Za-z0-9:.])"))
+_LABEL_MAC_RE = re.compile(
+    R.MAC_RE.pattern.replace(r"(?<![\w.:-])", r"(?<![A-Za-z0-9:-])")
+    .replace(r"(?![\w.:-])", r"(?![A-Za-z0-9:-])"))
 
 
 @dataclass
@@ -74,6 +89,12 @@ class Result:
     families: dict[str, str] = field(default_factory=dict)
     #: collector command sections deleted before sanitization
     removed_sections: list[RemovedSection] = field(default_factory=list)
+    #: caller-supplied associated labels, sanitised with :attr:`text`
+    labels: dict[str, str] = field(default_factory=dict)
+    #: label key -> family -> rendered replacements; never originals or kept values
+    label_replacements: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     @property
     def lines(self) -> list[str]:
@@ -163,6 +184,7 @@ class Sanitiser:
     def __init__(self, config: Config | None = None, *, salt: bytes,
                  pseudo: Pseudonymiser | None = None):
         self.cfg = config or Config()
+        self.cfg.validate()
         self.p = pseudo or Pseudonymiser(salt, self.cfg)
         self.operational = OperationalNames(self.cfg.operational_names, self.p)
         self.as_numbers = AsNumbers(self.cfg.as_numbers, self.p)
@@ -172,7 +194,11 @@ class Sanitiser:
         self.hostnames: list[str] = []
         self.domains: list[str] = []
         self.usernames: list[str] = []
+        self.emails: list[str] = []
         self._name_res: list[tuple[re.Pattern, str]] = []
+        self._label_name_res: list[tuple[re.Pattern, str]] = []
+        self._label_email_res: list[re.Pattern] = []
+        self._active_label_replacements: dict[str, list[str]] | None = None
         self.handled_macs: set[str] = set()
         # name -> family for everything that can be counted, and name -> action
         # for every rule. Resolving the action once means a bad override is an
@@ -209,6 +235,7 @@ class Sanitiser:
                 if m:
                     self._add(self.usernames, m.group(1).strip('";'))
             for m in R.EMAIL_RE.finditer(line):
+                self._add(self.emails, m.group(0))
                 _, _, dom = m.group(0).partition("@")
                 self._add(self.domains, dom)
 
@@ -236,6 +263,10 @@ class Sanitiser:
         candidates.sort(key=lambda pair: len(pair[0]), reverse=True)
         self._name_res = [(self._word_re(value), family)
                           for value, family in candidates]
+        self._label_name_res = [(self._label_re(value), family)
+                                for value, family in candidates]
+        self._label_email_res = [self._label_email_re(value)
+                                 for value in sorted(self.emails, key=len, reverse=True)]
 
     @staticmethod
     def _add(bucket: list, value: str) -> None:
@@ -247,6 +278,20 @@ class Sanitiser:
     def _word_re(token: str) -> re.Pattern:
         # no [\w-] either side, so "admin" never matches inside "network-admin"
         return re.compile(rf"(?<![\w-]){re.escape(token)}(?![\w-])", re.I)
+
+    @staticmethod
+    def _label_re(token: str) -> re.Pattern:
+        """Match a discovered identity as one filename/display-label token."""
+        return re.compile(
+            rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", re.I)
+
+    @staticmethod
+    def _label_email_re(email: str) -> re.Pattern:
+        """Match a whole discovered address, never a suffix of another one."""
+        return re.compile(
+            rf"(?<![\w.!#$%&'*+/=?^_`{{|}}~-]){re.escape(email)}(?![\w.-])",
+            re.I,
+        )
 
     # -- pass 2: transform -------------------------------------------------
     def run(self, lines) -> list[str]:
@@ -294,6 +339,35 @@ class Sanitiser:
             text = pat.sub(self._name_sub(family), text)
         return text
 
+    def associated_label(self, text: str) -> tuple[str, dict[str, tuple[str, ...]]]:
+        """Sanitise a filename or display label with this run's identities.
+
+        Accounting is intentionally owned by the configuration body. The
+        public entry point snapshots it before calling this method.
+        """
+        self._active_label_replacements = {}
+        try:
+            # An e-mail domain may itself be an IPv4 literal. Handle the complete
+            # collected identity before generic address recognition can split it.
+            for pat in self._label_email_res:
+                text = pat.sub(self._name_sub("emails"), text)
+            text = _LABEL_MAC_RE.sub(self._sub_mac, text)
+            text = _LABEL_IPV6_RE.sub(self._sub_v6, text)
+            text = _LABEL_IPV4_RE.sub(self._sub_v4, text)
+            for pat, family in self._label_name_res:
+                text = pat.sub(self._name_sub(family), text)
+            replacements = {
+                family: tuple(values)
+                for family, values in self._active_label_replacements.items()
+            }
+            return text, replacements
+        finally:
+            self._active_label_replacements = None
+
+    def _record_label_replacement(self, family: str, replacement: str) -> None:
+        if self._active_label_replacements is not None:
+            self._active_label_replacements.setdefault(family, []).append(replacement)
+
     # -- substitution callbacks -------------------------------------------
     # Addresses and MACs do not go through `render`: their action is finer than
     # one string per family -- per address class, per MAC half -- so the
@@ -307,6 +381,7 @@ class Sanitiser:
             return value
         self.counts["macs"] += 1
         self.handled_macs.add(new.lower())
+        self._record_label_replacement("macs", new)
         return new
 
     def _replace_bare_mac(self, value: str) -> str:
@@ -322,6 +397,7 @@ class Sanitiser:
         if new == value:
             return value
         self.counts["emails"] += 1
+        self._record_label_replacement("emails", new)
         return new
 
     def _sub_v6(self, m):
@@ -334,6 +410,7 @@ class Sanitiser:
         if new == value:
             return value
         self.counts["ipv6"] += 1
+        self._record_label_replacement("ipv6", new)
         return new
 
     def _sub_v4(self, m):
@@ -346,6 +423,7 @@ class Sanitiser:
         if new == value:
             return value
         self.counts["ipv4"] += 1
+        self._record_label_replacement("ipv4", new)
         return new
 
     def _name_sub(self, family: str):
@@ -360,6 +438,7 @@ class Sanitiser:
             if new == value:
                 return value
             self.counts[family] += 1
+            self._record_label_replacement(family, new)
             return new
 
         return sub
@@ -387,7 +466,8 @@ def _is_v6(text: str) -> bool:
 
 
 def sanitise_text(text: str, config: Config | None = None, *,
-                  salt: bytes | None = None) -> Result:
+                  salt: bytes | None = None,
+                  labels: Mapping[str, str] | None = None) -> Result:
     """Sanitise a configuration and return a :class:`Result`.
 
     This is the main library entry point::
@@ -399,14 +479,28 @@ def sanitise_text(text: str, config: Config | None = None, *,
             print(f.line, f.check, f.text)
 
     With no ``salt``, a random one is generated, so pseudonyms differ between
-    runs. Pass a stable salt (or set ``salt_file`` in the config) to make them
-    reproducible.
+    runs. Library callers pass a stable salt explicitly to make them
+    reproducible. ``Config.salt_file`` is CLI-oriented and this function never
+    reads or writes it.
+
+    ``labels`` associates filenames or display labels with the text. Their
+    values are sanitised with the same collected identities and pseudonymiser;
+    their keys are left unchanged. Labels do not contribute to body findings,
+    counts, mapping, collisions or kept-value reporting.
     """
     import secrets as _secrets
 
     from .verify import verify
 
     cfg = config or Config()
+    cfg.validate()
+    if labels is None:
+        labels = {}
+    elif not isinstance(labels, Mapping):
+        raise TypeError("labels must be a mapping of strings to strings")
+    if any(not isinstance(key, str) or not isinstance(value, str)
+           for key, value in labels.items()):
+        raise TypeError("labels must be a mapping of strings to strings")
     salt = salt or _secrets.token_bytes(32)
     lines = text.splitlines()
     removed_sections: list[RemovedSection] = []
@@ -429,16 +523,32 @@ def sanitise_text(text: str, config: Config | None = None, *,
     findings = (verify(out_lines, cfg, handled_macs=san.handled_macs,
                        handled_asns=san.as_numbers.handled)
                 if cfg.verify.enabled else [])
+    # Labels share the stateful pseudonymiser so equal values render equally,
+    # but body reporting is a separate contract. Snapshot it first: a value
+    # present only in a filename must not appear to have occurred in the config.
+    body_counts = Counter(san.counts)
+    body_kept_counts = Counter(san.kept_counts)
+    body_kept = {key: set(values) for key, values in san.p.kept.items()}
+    body_collisions = set(san.p.collisions)
+    body_mapping = {key: dict(values) for key, values in san.p.maps.items()}
+    sanitised_labels: dict[str, str] = {}
+    label_replacements: dict[str, Mapping[str, tuple[str, ...]]] = {}
+    for key, value in labels.items():
+        sanitised, replacements = san.associated_label(value)
+        sanitised_labels[key] = sanitised
+        label_replacements[key] = MappingProxyType(replacements)
     return Result(
         text=out,
         vendor=cfg.vendor if cfg.vendor != "auto" else detect_vendor(retained_text),
-        counts=san.counts,
-        kept_counts=san.kept_counts,
-        kept=san.p.kept,
+        labels=sanitised_labels,
+        label_replacements=MappingProxyType(label_replacements),
+        counts=body_counts,
+        kept_counts=body_kept_counts,
+        kept=body_kept,
         policy_summary=policy_summary(cfg),
-        collisions=san.p.collisions,
+        collisions=body_collisions,
         findings=findings,
-        mapping={k: dict(v) for k, v in san.p.maps.items()},
+        mapping=body_mapping,
         families=san.families,
         removed_sections=removed_sections,
     )

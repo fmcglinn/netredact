@@ -13,8 +13,8 @@
 # the shape of an optional setting.
 # Docs: https://github.com/fmcglinn/netredact
 
-# the HMAC salt, created 0600 if missing. Reuse it to keep pseudonyms
-# consistent across runs and devices. It is a re-identification key -- protect it.
+# CLI only: the HMAC salt, created 0600 if missing. Library callers pass
+# salt= bytes to sanitise_text instead. It is a re-identification key -- protect it.
 # salt_file = "~/.config/netredact/salt"
 vendor = "auto"  # auto | arista | cisco | juniper
 

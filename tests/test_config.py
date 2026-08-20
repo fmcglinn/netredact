@@ -370,16 +370,94 @@ def test_custom_rule_needs_a_name_and_a_pattern():
 
 
 def test_custom_rule_bad_regex_is_reported():
-    from netredact import sanitise_text
-    cfg = Config(custom=[CustomRule(name="bad", pattern=r"(unclosed")])
-    with pytest.raises(ValueError, match="bad regex"):
-        sanitise_text("hostname x\n", cfg, salt=SALT)
+    with pytest.raises(ConfigError, match="bad regex"):
+        Config(custom=[CustomRule(name="bad", pattern=r"(unclosed")])
+
+
+def test_custom_rule_regex_overflow_is_a_config_error():
+    with pytest.raises(ConfigError, match="bad regex"):
+        Config(custom=[CustomRule(
+            name="too-large",
+            pattern="a{999999999999999999999999}",
+        )])
 
 
 def test_custom_rule_cannot_pseudonymise_a_secret():
     with pytest.raises(ConfigError, match="pseudo is not available for secrets"):
         Config(custom=[CustomRule(name="x", pattern="y", family="secrets",
                                   action="pseudo")])
+
+
+def test_validate_rejects_mutation_before_sanitisation():
+    from netredact import sanitise_text
+
+    cfg = Config()
+    cfg.policy.hostnames = 3
+    with pytest.raises(ConfigError, match=r"\[policy\] hostnames must be an action string"):
+        cfg.validate()
+    with pytest.raises(ConfigError, match=r"\[policy\] hostnames must be an action string"):
+        sanitise_text("hostname edge-1\n", cfg, salt=SALT)
+
+
+def test_the_lower_level_sanitiser_validates_before_collection():
+    from netredact import Sanitiser
+
+    cfg = Config()
+    cfg.text.default = "shred"
+    with pytest.raises(ConfigError, match="unknown action 'shred'"):
+        Sanitiser(cfg, salt=SALT)
+
+
+@pytest.mark.parametrize("mutate,message", [
+    (lambda cfg: setattr(cfg.ipv4, "pool", ["198.18.0.0/15", 7]),
+     r"\[ipv4\] pool entries must be strings"),
+    (lambda cfg: setattr(cfg.verify, "disable", ["credential-left", 7]),
+     r"\[verify\] disable entries must be strings"),
+    (lambda cfg: setattr(cfg.verify, "ignore_patterns", [r"(unclosed"]),
+     r"\[verify\] ignore_patterns.*bad regex"),
+    (lambda cfg: setattr(cfg, "salt_file", 7),
+     "salt_file must be a string or null"),
+    (lambda cfg: setattr(cfg, "vendor", 7),
+     "vendor must be a string"),
+])
+def test_validate_normalises_invalid_field_errors(mutate, message):
+    cfg = Config()
+    mutate(cfg)
+    with pytest.raises(ConfigError, match=message):
+        cfg.validate()
+
+
+def test_duplicate_custom_rules_are_config_errors():
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        Config(custom=[
+            CustomRule(name="same", pattern="first"),
+            CustomRule(name="same", pattern="second"),
+        ])
+    with pytest.raises(ConfigError, match="duplicate rule name"):
+        Config(custom=[CustomRule(name="enable-secret", pattern="shadow")])
+
+
+@pytest.mark.parametrize("raw,message", [
+    (7, "configuration must be a table"),
+    ({"vendor": 7}, "vendor must be a string"),
+    ({"salt_file": 7}, "salt_file must be a string or null"),
+    ({"custom": [7]}, r"\[\[custom\]\] entries must be tables"),
+    ({"custom": [{"name": 7, "pattern": "x"}]},
+     r"\[\[custom\]\] name must be a string"),
+])
+def test_programmatic_top_level_and_custom_types_raise_config_error(raw, message):
+    with pytest.raises(ConfigError, match=message):
+        Config.from_dict(raw)
+
+
+@pytest.mark.parametrize("raw,message", [
+    ({7: "value"}, "top-level keys must be strings"),
+    ({"policy": {7: "keep"}}, r"\[policy\] keys must be strings"),
+    ({"custom": [{7: "value"}]}, r"\[custom\] keys must be strings"),
+])
+def test_non_string_configuration_keys_raise_config_error(raw, message):
+    with pytest.raises(ConfigError, match=message):
+        Config.from_dict(raw)
 
 
 # -- pools ------------------------------------------------------------------

@@ -207,6 +207,7 @@ class Pseudonymiser:
     def __init__(self, salt: bytes, config: Config | None = None):
         self.salt = salt
         self.cfg = config or Config()
+        self.cfg.validate()
         self.maps: dict[str, OrderedDict[str, str]] = {}
         self.kept: dict[str, set[str]] = {}
         #: real addresses left in place that fall inside a pseudonym pool --

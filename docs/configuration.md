@@ -62,7 +62,7 @@ of keep, pseudo, hash, redact
 
 | Key | Default | Meaning |
 |---|---|---|
-| `salt_file` | unset | File holding the HMAC salt, created `0600` if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Unset means a fresh random salt each run. |
+| `salt_file` | unset | CLI-oriented file holding the HMAC salt, created `0600` by the CLI if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Library callers pass `salt=` bytes to `sanitise_text`; the library never reads or writes this path. |
 | `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
 
 ## Every rule has exactly one home

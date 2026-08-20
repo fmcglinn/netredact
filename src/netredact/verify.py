@@ -236,6 +236,7 @@ def verify(lines, config: Config | None = None, *,
            handled_macs: set[str] | None = None,
            handled_asns: set[str] | None = None) -> list[Finding]:
     cfg = config or Config()
+    cfg.validate()
     lines = list(lines)             # a PEM block is judged by its body
     disabled = set(cfg.verify.disable)
     unknown = disabled - set(check_names())

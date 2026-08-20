@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Library callers can associate labels such as filenames with a sanitising run.
+  `Result.label_replacements` exposes immutable, replacement-only metadata so
+  callers can derive safe display tokens without retaining unmatched label
+  fragments or re-identification data.
+
 - RANCID collection preprocessing now removes diagnostic command sections,
   collector prompts, and device metadata before normal sanitization. Unknown
   commands fail closed; `[collection] rancid_diagnostics = "keep"` restores

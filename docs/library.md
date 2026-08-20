@@ -38,7 +38,14 @@ cfg.ipv4.pool = ["198.18.0.0/15"]
 cfg.macs.nic = "pseudo"                   # the two halves are independent
 cfg.identity.serial_number = "keep"       # one rule, by name
 cfg.collection.rancid_diagnostics = "keep" # retain a RANCID wrapper
+cfg.validate()                            # explicitly check after mutations
 ```
+
+Construction validates initial values. Because section dataclasses remain
+ordinary mutable objects, `sanitise_text` validates the complete `Config`
+again before processing. Call `cfg.validate()` yourself when you want to check
+a programmatically mutated configuration earlier. Every validation failure is
+a `ConfigError`.
 
 The actions and families are exported, so you can validate against them:
 
@@ -103,12 +110,12 @@ this is what `--print-config` prints.
 
 ```python
 sanitise_text(text: str, config: Config | None = None, *,
-              salt: bytes | None = None) -> Result
+              salt: bytes | None = None,
+              labels: Mapping[str, str] | None = None) -> Result
 ```
 
 With no `salt`, a random one is generated and substitutes differ between calls.
-Pass a stable salt for reproducible output — this is the API equivalent of
-`salt_file`:
+Pass a stable salt for reproducible output:
 
 ```python
 salt = Path("~/.config/netredact/salt").expanduser().read_bytes().strip()
@@ -117,9 +124,46 @@ for path in paths:
 ```
 
 Passing the same salt across files is what makes a fleet pseudonymise
-consistently. Before normal collection and sanitization, detected RANCID input
-defaults to removing non-configuration command sections. Set
+consistently. `Config.salt_file` is a CLI-oriented setting: `sanitise_text`
+never reads, creates or writes that file. Library callers inject the bytes via
+`salt=` explicitly.
+
+Before normal collection and sanitization, detected RANCID input defaults to
+removing non-configuration command sections. Set
 `cfg.collection.rancid_diagnostics = "keep"` to bypass that preprocessing.
+
+### Associated labels
+
+Pass filenames, display names or other labels alongside their configuration:
+
+```python
+result = sanitise_text(
+    text,
+    cfg,
+    salt=salt,
+    labels={"filename": "EDGE-RTR-01_running.cfg"},
+)
+print(result.labels["filename"])
+```
+
+The mapping keys are caller-owned identifiers and stay unchanged. Its string
+values use the exact same policy, salt, pseudonymiser and identities collected
+from the configuration body. Matching is case-insensitive, longest-first and
+aware of common filename separators, so an FQDN is handled before its domain
+and a hostname next to `_` or `-` is still recognised. Recognisable IPv4,
+IPv6 and MAC values are handled too.
+
+Labels are associated metadata, not configuration input. They do not change
+verification findings, counts, kept values, collisions or the re-identification
+mapping. If sanitising any label fails, `sanitise_text` raises and no `Result`
+containing the original labels is returned.
+
+`result.label_replacements` is an immutable mapping from each supplied label
+key to policy family to a tuple of rendered replacement values. It contains
+only values actually substituted in that label: no originals and no values
+whose action was `keep`. This lets a caller build a safe display token from a
+known transformed hostname without retaining arbitrary unmatched filename
+fragments.
 
 ## Nothing is printed
 
@@ -136,6 +180,8 @@ another command-line tool without hijacking its output.
 | `text` | `str` | The sanitised configuration. |
 | `lines` | `list[str]` | Same, split. |
 | `vendor` | `str` | `arista`, `cisco`, `juniper`, or `unknown`. |
+| `labels` | `dict[str, str]` | Sanitised associated filename/display-label values, keyed exactly as supplied. Empty when none were passed. |
+| `label_replacements` | `Mapping[str, Mapping[str, tuple[str, ...]]]` | Immutable label key → family → rendered replacements. Contains no originals or kept values. |
 | `counts` | `Counter` | Rule or family name → values substituted. A block or banner counts once, not once per line. |
 | `kept_counts` | `Counter` | Rule or family name → occurrences deliberately left in place. The CLI report does not print this; see the recipe below. |
 | `families` | `dict[str, str]` | Every key used in `counts` / `kept_counts` → its family, so you can group without re-deriving the rule table. |

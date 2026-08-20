@@ -29,7 +29,9 @@ that is safe to emit, so secrets take ``keep``, ``hash`` or ``redact``.
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field, fields, is_dataclass, make_dataclass
 from pathlib import Path
@@ -85,7 +87,7 @@ _DOCS = "see docs/configuration.md"
 
 
 class ConfigError(ValueError):
-    """Raised when a configuration file is invalid."""
+    """Raised when file-loaded or programmatically built configuration is invalid."""
 
 
 def _check_action(where: str, family: str, action: object) -> str:
@@ -538,10 +540,16 @@ class CustomRule:
     stanza: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.name, str):
+            raise ConfigError(f"custom rule name must be a string, got {self.name!r}")
         if not self.name:
             raise ConfigError("a custom rule needs a name")
         if not isinstance(self.pattern, str) or not self.pattern:
             raise ConfigError(f"custom rule {self.name!r}: needs a pattern")
+        if not isinstance(self.family, str):
+            raise ConfigError(
+                f"custom rule {self.name!r}: family must be a string, "
+                f"got {self.family!r}")
         if self.family not in FAMILIES:
             raise ConfigError(
                 f"custom rule {self.name!r}: family must be one of "
@@ -549,6 +557,10 @@ class CustomRule:
         if self.action is not None:
             _check_action(f"custom rule {self.name!r} action", self.family,
                           self.action)
+        if self.stanza is not None and not isinstance(self.stanza, str):
+            raise ConfigError(
+                f"custom rule {self.name!r}: stanza must be a string or null, "
+                f"got {self.stanza!r}")
 
 
 @dataclass
@@ -602,20 +614,17 @@ class Config:
     custom: list[CustomRule] = field(default_factory=list)
     collection: CollectionConfig = field(default_factory=CollectionConfig)
     verify: VerifyConfig = field(default_factory=VerifyConfig)
-    #: file holding the HMAC salt, created 0600 if missing. Reuse it to keep
-    #: pseudonyms consistent across runs and across devices. It is a
-    #: re-identification key -- protect it.
+    #: CLI-oriented path to the HMAC salt. The CLI creates it 0600 if missing;
+    #: library entry points never read or write it and take salt bytes directly.
+    #: It is a re-identification key -- protect it.
     salt_file: str | None = None
     vendor: str = "auto"
     #: where the configuration came from, for diagnostics
     source: str | None = None
 
     def __post_init__(self) -> None:
-        if self.vendor not in VENDORS:
-            raise ConfigError(f"vendor must be one of {VENDORS}, got {self.vendor!r}")
-        self.custom = [c if isinstance(c, CustomRule) else CustomRule(**c)
-                       for c in self.custom]
-        self._validate_custom()
+        self._normalise_custom()
+        self.validate()
 
     # -- resolution -------------------------------------------------------
     def action_for_rule(self, rule_name: str) -> str:
@@ -673,7 +682,203 @@ class Config:
         return family
 
     # -- validation -------------------------------------------------------
+    def validate(self) -> None:
+        """Validate the complete current configuration.
+
+        Construction validates initial values. Callers may still mutate the
+        dataclass sections; the sanitising entry points call this method again
+        so a bad mutation is rejected before any input is processed.
+        """
+        sections = {
+            "policy": PolicyConfig,
+            "ipv4": IPv4Policy,
+            "ipv6": IPv6Policy,
+            "macs": MacPolicy,
+            "operational_names": OperationalNamesPolicy,
+            "as_numbers": AsNumbersPolicy,
+            "collection": CollectionConfig,
+            "verify": VerifyConfig,
+            **RULE_SECTIONS,
+        }
+        for name, expected in sections.items():
+            value = getattr(self, name)
+            if not isinstance(value, expected):
+                section = name.replace("_", "-")
+                raise ConfigError(
+                    f"[{section}] must be a {expected.__name__}, got {value!r}")
+
+        self._validate_actions()
+        self._validate_address_settings()
+        self._validate_verify()
+
+        if not isinstance(self.collection.rancid_diagnostics, str):
+            raise ConfigError("[collection] rancid_diagnostics must be a string")
+        if self.collection.rancid_diagnostics not in {"remove", "keep"}:
+            raise ConfigError(
+                "[collection] rancid_diagnostics: unknown mode "
+                f"{self.collection.rancid_diagnostics!r}. Expected one of remove, keep")
+
+        if not isinstance(self.salt_file, (str, type(None))):
+            raise ConfigError(
+                f"salt_file must be a string or null, got {self.salt_file!r}")
+        if not isinstance(self.vendor, str):
+            raise ConfigError(f"vendor must be a string, got {self.vendor!r}")
+        if self.vendor not in VENDORS:
+            raise ConfigError(f"vendor must be one of {VENDORS}, got {self.vendor!r}")
+        if not isinstance(self.source, (str, type(None))):
+            raise ConfigError(f"source must be a string or null, got {self.source!r}")
+
+        self._normalise_custom()
+        self._validate_custom()
+
+    def _validate_actions(self) -> None:
+        for f in fields(self.policy):
+            _check_action(f"[policy] {f.name}", f.name,
+                          getattr(self.policy, f.name))
+        for section_name, section in (("ipv4", self.ipv4), ("ipv6", self.ipv6)):
+            _check_action(f"[{section_name}] default", section_name, section.default)
+            for klass in section.CLASSES:
+                action = getattr(section, klass)
+                if action is not None:
+                    _check_action(f"[{section_name}] {klass}", section_name, action)
+        _check_action("[macs] oui", "macs", self.macs.oui)
+        _check_action("[macs] nic", "macs", self.macs.nic)
+        if "hash" in (self.macs.oui, self.macs.nic) and self.macs.oui != self.macs.nic:
+            raise ConfigError(
+                "macs: hash applies to the whole address, set both oui and nic to hash")
+        _check_action("[operational-names] default", "text",
+                      self.operational_names.default)
+        for kind in self.operational_names.TYPES:
+            action = getattr(self.operational_names, kind.replace("-", "_"))
+            if action is not None:
+                _check_action(f"[operational-names] {kind}", "text", action)
+        _check_action("[as-numbers] default", "text", self.as_numbers.default)
+        for family in RULE_FAMILIES:
+            section = getattr(self, family)
+            _check_action(f"[{family}] default", family, section.default)
+            for rule in section.RULES:
+                action = getattr(section, _field(rule))
+                if action is not None:
+                    _check_action(f"[{family}] {rule}", family, action)
+
+    def _validate_address_settings(self) -> None:
+        self._validate_str_list("ipv4", "pool", self.ipv4.pool, nonempty=True)
+        self._validate_str_list(
+            "ipv4", "well_known_resolvers", self.ipv4.well_known_resolvers)
+        self._validate_str_list("ipv4", "keep_networks", self.ipv4.keep_networks)
+        self._validate_str_list(
+            "ipv6", "well_known_resolvers", self.ipv6.well_known_resolvers)
+        self._validate_str_list("ipv6", "keep_networks", self.ipv6.keep_networks)
+
+        for cidr in self.ipv4.pool:
+            net = self._network("ipv4.pool", cidr)
+            if net.version != 4:
+                raise ConfigError(f"ipv4.pool must be IPv4: {cidr}")
+            if net.prefixlen > 24:
+                raise ConfigError(
+                    f"ipv4.pool entries must be /24 or shorter: {cidr}")
+        v6 = self._network("ipv6.pool", self.ipv6.pool)
+        if v6.version != 6:
+            raise ConfigError(f"ipv6.pool must be IPv6: {self.ipv6.pool}")
+        if v6.prefixlen > 64:
+            raise ConfigError(
+                f"ipv6.pool must be /64 or shorter: {self.ipv6.pool}")
+
+        for section_name, values, version in (
+            ("ipv4.well_known_resolvers", self.ipv4.well_known_resolvers, 4),
+            ("ipv6.well_known_resolvers", self.ipv6.well_known_resolvers, 6),
+        ):
+            for value in values:
+                try:
+                    address = ipaddress.ip_address(value)
+                except ValueError as exc:
+                    raise ConfigError(f"{section_name} has invalid address {value!r}") from exc
+                if address.version != version:
+                    raise ConfigError(f"{section_name} must contain IPv{version}: {value}")
+        for section_name, values, version in (
+            ("ipv4.keep_networks", self.ipv4.keep_networks, 4),
+            ("ipv6.keep_networks", self.ipv6.keep_networks, 6),
+        ):
+            for value in values:
+                net = self._network(section_name, value)
+                if net.version != version:
+                    raise ConfigError(f"{section_name} must contain IPv{version}: {value}")
+
+        if not isinstance(self.macs.pool, str):
+            raise ConfigError(f"[macs] pool must be a string, got {self.macs.pool!r}")
+        if not re.fullmatch(
+                r"(?:[0-9A-Fa-f]{6}|(?:[0-9A-Fa-f]{2}[:-]){2}[0-9A-Fa-f]{2}|"
+                r"[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{2})", self.macs.pool):
+            raise ConfigError(
+                f"[macs] pool must be a three-byte OUI, got {self.macs.pool!r}")
+
+    @staticmethod
+    def _network(where: str, value: object):
+        if not isinstance(value, str):
+            raise ConfigError(f"{where} must be a string, got {value!r}")
+        try:
+            return ipaddress.ip_network(value)
+        except ValueError as exc:
+            raise ConfigError(f"{where} has invalid network {value!r}") from exc
+
+    @staticmethod
+    def _validate_str_list(section: str, key: str, value: object, *,
+                           nonempty: bool = False) -> None:
+        if not isinstance(value, list):
+            raise ConfigError(f"[{section}] {key} must be a list, got {value!r}")
+        if nonempty and not value:
+            raise ConfigError(f"{section}.{key} must not be empty")
+        if any(not isinstance(item, str) for item in value):
+            raise ConfigError(f"[{section}] {key} entries must be strings")
+
+    def _validate_verify(self) -> None:
+        if not isinstance(self.verify.enabled, bool):
+            raise ConfigError(
+                f"[verify] enabled must be true or false, got {self.verify.enabled!r}")
+        if not isinstance(self.verify.strict, bool):
+            raise ConfigError(
+                f"[verify] strict must be true or false, got {self.verify.strict!r}")
+        self._validate_str_list("verify", "disable", self.verify.disable)
+        self._validate_str_list(
+            "verify", "ignore_patterns", self.verify.ignore_patterns)
+        from .verify import check_names
+
+        unknown = set(self.verify.disable) - set(check_names())
+        if unknown:
+            raise ConfigError(
+                "[verify] disable names unknown check(s): "
+                f"{', '.join(sorted(unknown))}")
+        for pattern in self.verify.ignore_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ConfigError(
+                    f"[verify] ignore_patterns has bad regex {pattern!r}: {exc}") from exc
+
+    def _normalise_custom(self) -> None:
+        if not isinstance(self.custom, list):
+            raise ConfigError(
+                "custom rules are a list of tables: use [[custom]] for each one")
+        normalised: list[CustomRule] = []
+        for item in self.custom:
+            if isinstance(item, CustomRule):
+                normalised.append(item)
+                continue
+            if not isinstance(item, dict):
+                raise ConfigError(f"[[custom]] entries must be tables, got {item!r}")
+            try:
+                normalised.append(CustomRule(**item))
+            except TypeError as exc:
+                raise ConfigError(f"[[custom]]: {exc}") from exc
+        self.custom = normalised
+
     def _validate_custom(self) -> None:
+        for c in self.custom:
+            c.__post_init__()
+        try:
+            rules.RuleCatalogue.builtins().configured(self.custom)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         for c in self.custom:
             _check_action(f"custom rule {c.name!r}", c.family,
                           self.action_for_rule(c.name))
@@ -703,7 +908,13 @@ class Config:
 
     @classmethod
     def from_dict(cls, raw: dict) -> Config:
+        if not isinstance(raw, dict):
+            raise ConfigError(f"configuration must be a table, got {raw!r}")
         raw = dict(raw)
+        non_string = [key for key in raw if not isinstance(key, str)]
+        if non_string:
+            raise ConfigError(
+                f"top-level keys must be strings, got {non_string!r}")
         for external, internal in (("operational-names", "operational_names"),
                                    ("as-numbers", "as_numbers")):
             if external in raw:
@@ -817,6 +1028,10 @@ def _build(cls: type, raw: dict, section: str, *, kebab: bool = False,
     ``custom`` names the document's own ``[[custom]]`` rules, so that one of
     those named in a family section is routed rather than called unknown.
     """
+    non_string = [key for key in raw if not isinstance(key, str)]
+    if non_string:
+        where = section if section.startswith("[") else f"[{section}]"
+        raise ConfigError(f"{where} keys must be strings, got {non_string!r}")
     spell = (lambda name: name.replace("_", "-")) if kebab else (lambda name: name)
     known = {spell(f.name): f.name for f in fields(cls)}
     unknown = set(raw) - set(known)
@@ -991,9 +1206,9 @@ _HEADER = [
 _NONE_EXAMPLES = {"salt_file": "~/.config/netredact/salt"}
 
 _TOP_COMMENTS = {
-    "salt_file": ("the HMAC salt, created 0600 if missing. Reuse it to keep "
-                  "pseudonyms\n# consistent across runs and devices. It is a "
-                  "re-identification key -- protect it."),
+    "salt_file": ("CLI only: the HMAC salt, created 0600 if missing. Library "
+                  "callers pass\n# salt= bytes to sanitise_text instead. It is "
+                  "a re-identification key -- protect it."),
     "vendor": " | ".join(VENDORS),
 }
 

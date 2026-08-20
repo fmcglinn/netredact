@@ -2,6 +2,8 @@
 
 from collections import Counter
 
+import pytest
+
 import netredact
 from netredact import Config, Pseudonymiser, Sanitiser, sanitise_text
 
@@ -61,6 +63,15 @@ def test_a_pseudonymiser_can_be_shared_between_files(cisco, arista):
     assert len(set(p.maps["hostname"].values())) == len(p.maps["hostname"])
 
 
+def test_pseudonymiser_validates_a_mutated_config_before_using_it():
+    from netredact import ConfigError
+
+    cfg = Config()
+    cfg.ipv4.pool = [7]
+    with pytest.raises(ConfigError, match=r"\[ipv4\] pool entries must be strings"):
+        Pseudonymiser(SALT, cfg)
+
+
 def test_config_can_be_built_in_python_without_a_file():
     cfg = Config()
     cfg.text.default = "hash"
@@ -71,7 +82,7 @@ def test_config_can_be_built_in_python_without_a_file():
 
 
 def test_version_is_exposed():
-    assert netredact.__version__.count(".") >= 1
+    assert netredact.__version__ == "0.1.0"
 
 
 # -- the library never writes to a stream --------------------------------------

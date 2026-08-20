@@ -627,7 +627,7 @@ def _build_rules(custom=()) -> list[_Rule]:
     for c in custom:
         try:
             regex, targets = _compile(c.pattern)
-        except re.error as exc:
+        except (re.error, OverflowError) as exc:
             raise ValueError(f"custom rule {c.name!r}: bad regex: {exc}") from exc
         rules.append(_Rule(name=c.name, regex=regex,
                           family=getattr(c, "family", "secrets") or "secrets",
