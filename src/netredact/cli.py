@@ -226,9 +226,11 @@ def report(stream, label: str, result: Result, cfg: Config) -> None:
     # VLAN names used to head this list. They have a section now -- [vlans] --
     # so they are no longer out of reach, only kept by default like everything
     # else the policy line already accounts for.
-    w("  NOTE: never scrubbed -- ACL / route-map / prefix-list / policy names,\n"
-      "        AS numbers, VRF names and interface numbering.\n"
-      "        Read the output before sending it anywhere.\n")
+    w("  NOTE: interface numbering and unsupported vendor grammar are never scrubbed.\n"
+      "  WARNING: netredact reduces exposure; it does not guarantee anonymisation.\n"
+      "        Network configurations may retain identifying or confidential\n"
+      "        material in unsupported syntax or relationships. Review every\n"
+      "        output; you decide whether it is safe and lawful to share.\n")
 
 
 def _destination(args, label: str, path: str) -> str | None:

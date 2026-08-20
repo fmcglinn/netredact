@@ -7,9 +7,9 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**53 rules**: 32 `secrets`, 7 `text`, 6 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`, 2 `circuits`.
+**53 rules**: 32 `secrets`, 5 `text`, 2 `locations`, 6 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`, 2 `circuits`.
 
-- 11 verification checks
+- 15 verification checks
 
 A rule does not decide what happens to what it finds. Its **family**
 does, and every family of rules is a section: the action is
@@ -134,9 +134,9 @@ searched inline, or consumed as structured multi-line material.
 | `os-version` | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; and the release in Arista's `! device:` header |  | `(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$)` |  |
 | `software-image` | `platform` | `Software image version:`, `System image file is ...`, `Software version:`; and the bare `Junos:` / `EOS:` forms, where a colon is required |  | `^\s*!?\s*(?:(?:software\s+image\s+version\|system\s+image\s+file(?:\s+is)?\|(?:software\|firmware\|image\|junos\|eos\|os)\s+version)(?:\s*[:=]\s*\|\s+)\|(?:junos\|eos)\s*[:=]\s*)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
 | `boot-image` | `platform` | `boot system <image>`, commented out or not |  | `^\s*!?\s*boot\s+system\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `location` | `text` | the whole value of a `location` line; never a JunOS `location {` stanza opener |  | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
+| `location` | `locations` | the whole value of a `location` line; never a JunOS `location {` stanza opener |  | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
 | `contact` | `text` | the whole value of a `contact` line |  | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `junos-location-body` | `text` | the street address inside a JunOS `location { ... }` stanza -- juniper grammar | inside `location` | `^\s*(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
+| `junos-location-body` | `locations` | the street address inside a JunOS `location { ... }` stanza -- juniper grammar | inside `location` | `(?:^\s*set\s+system\s+location\s+(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$)` |  |
 | `description` | `text` | a `description` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down |  outside `interfaces` | `^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
 | `acl-remark` | `text` | an ACL `remark` |  | `^\s*remark\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
 | `login-message` | `text` | `banner login`-style `message` and `announcement` text |  | `^\s*(?:set\s+system\s+login\s+)?(?:message\|announcement)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
@@ -168,19 +168,23 @@ A third group only recognises a *shape*:
 `ssh-key-left`, `pem-left`, `long-hex-left`, `long-base64-left`. A long base64 run is
 an authorised SSH key or a leaked one, and the check cannot tell
 which, so those four are blinded to the spans that a kept
-`identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched -- including the body of a kept
+`identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched -- including the body of a kept
 block. A kept `secrets` rule never blinds anything.
 
 | Check | Fires when | Gated by |
 |---|---|---|
 | `crypt-hash-left` | a `$1$`/`$5$`/`$6$`-style hash survived | always |
 | `junos-type9-left` | a JunOS `$9$` blob survived | always |
-| `ssh-key-left` | SSH key material survived | `[policy] identity` is not `"keep"` -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
-| `pem-left` | a `-----BEGIN` block survived -- private keys and DH parameters always, certificates only when `identity` acts | always for a private key; the certificate half needs `identity` to act -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
+| `ssh-key-left` | SSH key material survived | `[policy] identity` is not `"keep"` -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
+| `pem-left` | a `-----BEGIN` block survived -- private keys and DH parameters always, certificates only when `identity` acts | always for a private key; the certificate half needs `identity` to act -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
 | `type7-left` | a Cisco type-7 string survived | always |
-| `long-hex-left` | an unexplained run of 24+ hex characters | always -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
-| `long-base64-left` | an unexplained run of 40+ base64 characters | always -- blind to spans a kept `identity` / `text` / `interfaces` / `vlans` / `circuits` rule matched |
+| `long-hex-left` | an unexplained run of 24+ hex characters | always -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
+| `long-base64-left` | an unexplained run of 40+ base64 characters | always -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
 | `credential-left` | a credential keyword not followed by a placeholder | always |
 | `email-left` | an e-mail address survived | `[policy] emails` is not `"keep"` |
 | `ipv4-left` | an IPv4 address survived whose class `[ipv4]` acts on | some `[ipv4]` class acts |
 | `ipv6-left` | an IPv6 address survived whose class `[ipv6]` acts on | some `[ipv6]` class acts |
+| `mac-left` | a recognisable MAC address survived while `[macs]` acts | either `[macs]` half acts |
+| `operational-name-left` | a supported operational name survived | some `[operational-names]` type acts |
+| `as-number-left` | an ASN survived in supported explicit grammar | `[as-numbers] default` is not `"keep"` |
+| `location-left` | an explicit physical location survived | the matching `[locations]` rule acts |

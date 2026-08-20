@@ -65,7 +65,10 @@ Only `secrets`, and it redacts. Everything else is kept until you ask for it:
 default = "redact"    # passwords, keys, community strings, hashes (no pseudo)
 
 [text]
-default = "keep"      # descriptions, remarks, banners, login messages, location, contact
+default = "keep"      # descriptions, remarks, banners, login messages, contact
+
+[locations]
+default = "keep"      # SNMP and structured JunOS physical locations
 
 [identity]
 default = "keep"      # serials, UDIs, engine IDs, certificates, SSH public keys
@@ -112,7 +115,9 @@ The sections are the selectors:
 
 | Section | Selects |
 |---|---|
-| `[secrets]` / `[text]` / `[identity]` / `[platform]` / `[interfaces]` / `[vlans]` / `[circuits]` | one action per named rule, plus a `default` for the family — between them, every rule |
+| `[secrets]` / `[text]` / `[locations]` / `[identity]` / `[platform]` / `[interfaces]` / `[vlans]` / `[circuits]` | one action per named rule, plus a `default` for the family — between them, every rule |
+| `[operational-names]` | independent actions for ACL/firewall filters, route maps, prefix lists, policy statements, VRFs and peer groups |
+| `[as-numbers]` | one consistent action for explicit AS-valued commands and AS-path prepends |
 | `[policy]` | the four families with no rules: `hostnames`, `domains`, `usernames`, `emails` |
 | `[ipv4]` / `[ipv6]` | one action per address class, plus `default`, `pool`, `well_known_resolvers`, `keep_networks` |
 | `[macs]` | `oui` and `nic` independently, plus the `pool` prefix that `redact` writes |
@@ -218,10 +223,12 @@ rejected with the section it belongs to rather than silently ignored.
 
 ```toml
 [text]
-default  = "hash"            # <DESC-a1b2c3> everywhere in the family...
-location = "keep"            # ...except here: this fleet's location lines
-                             #    hold a rack label, not a street address
-banner   = "redact"          # ...and here: destroy it outright
+default = "hash"
+banner  = "redact"
+
+[locations]
+default  = "hash"
+location = "keep"            # this fleet's location is a safe rack label
 
 [identity]
 serial-number = "keep"       # TAC asks for it
@@ -315,12 +322,16 @@ result.mapping           # category -> {original: pseudonym}
 Pass `salt=` for reproducible substitutes across calls. Full API in
 [docs/library.md](https://github.com/fmcglinn/netredact/blob/main/docs/library.md).
 
-## Never touched
+## Limits and responsibility
 
-ACL / route-map / prefix-list / policy / key-chain / VRF names, AS numbers, and
-interface numbering. These are usually what makes the config worth sharing, and
-BGP communities in particular must survive intact. If your policy names encode
-customer names, handle that yourself.
+Interface numbering, key-chain names, BGP communities and unsupported vendor
+grammar are not transformed. Operational-name and AS-number controls are
+opt-in and cover only the explicit grammar documented for them.
+
+> **Warning:** netredact reduces exposure; it does not guarantee anonymisation.
+> Configurations may retain identifying or confidential material in unsupported
+> syntax or relationships between transformed values. Review every output. You
+> are responsible for deciding whether it is safe and lawful to share.
 
 VLAN names used to head that list. They have a section now — `[vlans]`, `keep`
 by default — because on an access switch a VLAN name is frequently a service or

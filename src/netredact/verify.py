@@ -28,14 +28,16 @@ from dataclasses import dataclass
 from . import rules as R
 from .addresses import classify_v4, classify_v6
 from .config import Config
+from .operational import OperationalNames
 from .pseudonymise import (
     DESC_REMOVED,
     PREFIX,
     REDACT_CONST,
     REMOVED,
+    Pseudonymiser,
     is_mask_like,
 )
-from .rules import EMAIL_RE, ENC, IPV4_RE, IPV6_RE
+from .rules import BARE_MAC_CONTEXT_RE, EMAIL_RE, ENC, IPV4_RE, IPV6_RE, MAC_RE
 
 __all__ = ["verify", "Finding", "check_names", "VERIFY_RULES"]
 
@@ -121,10 +123,12 @@ SHAPE_CHECKS = ("ssh-key-left", "pem-left", "long-hex-left", "long-base64-left")
 #: reads as a base64 run to ``long-base64-left``, and if the policy was told to
 #: keep it then it is not a miss. ``secrets`` is deliberately absent: see
 #: :func:`_shape_blind`.
-SHAPE_BLIND_FAMILIES = ("identity", "text", "interfaces", "vlans", "circuits")
+SHAPE_BLIND_FAMILIES = ("identity", "text", "locations", "interfaces",
+                        "vlans", "circuits")
 
 #: checks that only make sense when the policy acts on that family
-CONDITIONAL_CHECKS = ("email-left", "ipv4-left", "ipv6-left")
+CONDITIONAL_CHECKS = ("email-left", "ipv4-left", "ipv6-left", "mac-left",
+                      "operational-name-left", "as-number-left", "location-left")
 
 #: our own hash markers. ``<SECRET-a1b2c3>`` says the credential is gone, but
 #: it contains the word "secret", so without this the ``credential-left`` check
@@ -228,7 +232,9 @@ def check_names() -> list[str]:
     return [name for name, _ in VERIFY_RULES] + list(CONDITIONAL_CHECKS)
 
 
-def verify(lines, config: Config | None = None) -> list[Finding]:
+def verify(lines, config: Config | None = None, *,
+           handled_macs: set[str] | None = None,
+           handled_asns: set[str] | None = None) -> list[Finding]:
     cfg = config or Config()
     lines = list(lines)             # a PEM block is judged by its body
     disabled = set(cfg.verify.disable)
@@ -252,6 +258,14 @@ def verify(lines, config: Config | None = None) -> list[Finding]:
     check_email = cfg.action_for("emails") != "keep" and "email-left" not in disabled
     check_v4 = cfg.ipv4.any_active() and "ipv4-left" not in disabled
     check_v6 = cfg.ipv6.any_active() and "ipv6-left" not in disabled
+    check_mac = cfg.macs.any_active() and "mac-left" not in disabled
+    handled_macs = {value.lower() for value in (handled_macs or set())}
+    handled_asns = {value.lower() for value in (handled_asns or set())}
+    check_operational = (cfg.operational_names.any_active()
+                         and "operational-name-left" not in disabled)
+    check_asn = cfg.as_numbers.any_active() and "as-number-left" not in disabled
+    check_location = (cfg.locations.any_active()
+                      and "location-left" not in disabled)
     well_known = {4: frozenset(cfg.ipv4.well_known_resolvers),
                   6: frozenset(cfg.ipv6.well_known_resolvers)}
     keep_nets = [ipaddress.ip_network(n) for n in
@@ -285,6 +299,18 @@ def verify(lines, config: Config | None = None) -> list[Finding]:
     catalogue = R.RuleCatalogue.builtins().configured(cfg.custom)
     shaped_lines = catalogue.verification_view(
         lines, blind=lambda info: _shape_blind(info, cfg))
+    verification_pseudo = Pseudonymiser(b"netredact-verification-probe", cfg)
+    op_probe = OperationalNames(cfg.operational_names, verification_pseudo)
+    operational_probe_lines = [op_probe.line(line) for line in lines]
+
+    def location_probe(hit: R.RuleHit) -> R.RuleReplacement:
+        if hit.family != "locations" or cfg.action_for_rule(hit.name) == "keep":
+            return R.RuleReplacement.keep()
+        if verification_pseudo.is_rendered(hit.name, hit.value):
+            return R.RuleReplacement.unchanged()
+        return R.RuleReplacement.with_text("<LOCATION-PROBE>")
+
+    location_probe_lines = catalogue.transform(lines, replace=location_probe)
     findings: list[Finding] = []
     for i, (line, shaped_line) in enumerate(zip(lines, shaped_lines, strict=True), 1):
         stripped = ignore.sub(" ", line)
@@ -302,4 +328,25 @@ def verify(lines, config: Config | None = None) -> list[Finding]:
             findings.append(Finding(i, "ipv4-left", line.strip()))
         if check_v6 and any(address_left(m.group(1)) for m in IPV6_RE.finditer(line)):
             findings.append(Finding(i, "ipv6-left", line.strip()))
+        if check_mac:
+            candidates = [m.group(1) for m in MAC_RE.finditer(line)]
+            candidates += [m.group("value") for m in BARE_MAC_CONTEXT_RE.finditer(line)]
+            if any(value.lower() not in handled_macs for value in candidates):
+                findings.append(Finding(i, "mac-left", line.strip()))
+        if check_operational and operational_probe_lines[i - 1] != line:
+            findings.append(Finding(i, "operational-name-left", line.strip()))
+        if check_asn:
+            candidates = []
+            for pat in (
+                r"\b(?:router\s+bgp|remote-as|local-as|autonomous-system)\s+(\d+(?:\.\d+)?)",
+                r"\bas-path\s+prepend\s+([\d. ]+)",
+            ):
+                for match in re.finditer(pat, line, re.I):
+                    candidates.extend(re.findall(r"\d+(?:\.\d+)?", match.group(1)))
+            if any(value.lower() not in handled_asns
+                   and value not in {"0", "23456", "65535", "4294967295"}
+                   for value in candidates):
+                findings.append(Finding(i, "as-number-left", line.strip()))
+        if check_location and location_probe_lines[i - 1] != line:
+            findings.append(Finding(i, "location-left", line.strip()))
     return findings

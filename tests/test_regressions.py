@@ -35,7 +35,7 @@ def test_a_junos_stanza_opener_is_never_eaten(action):
     The brace was consumed as the location's value, so the config no longer
     parsed -- and the street address *inside* the stanza survived untouched.
     """
-    out = sanitise_text(JUNOS_LOCATION, policy(text=action), salt=SALT).text
+    out = sanitise_text(JUNOS_LOCATION, policy(locations=action), salt=SALT).text
     assert "    location {" in out
     assert out.count("{") == JUNOS_LOCATION.count("{")
     assert out.count("}") == JUNOS_LOCATION.count("}")
@@ -49,7 +49,7 @@ def test_a_junos_stanza_opener_is_never_eaten(action):
 ])
 def test_the_stanza_body_is_what_carries_the_address(action, expected):
     """The address the opener must not eat is reached by junos-location-body."""
-    result = sanitise_text(JUNOS_LOCATION, policy(text=action), salt=SALT)
+    result = sanitise_text(JUNOS_LOCATION, policy(locations=action), salt=SALT)
     assert "500 Example St" not in result.text
     assert expected in result.text
     assert result.counts["junos-location-body"] == 2       # building + floor
@@ -64,7 +64,7 @@ def test_the_stanza_body_survives_when_text_is_kept():
 def test_a_building_line_outside_a_location_stanza_is_untouched():
     """junos-location-body is stanza-scoped, so it is not a global `building`."""
     text = "system {\n    services {\n        building 7;\n    }\n}\n"
-    result = sanitise_text(text, policy(text="redact"), salt=SALT)
+    result = sanitise_text(text, policy(locations="redact"), salt=SALT)
     assert "building 7;" in result.text
 
 

@@ -43,7 +43,8 @@ __all__ = [
     "RULE_SECTIONS", "VENDORS", "Config", "PolicyConfig", "IPv4Policy",
     "IPv6Policy", "MacPolicy", "SecretsPolicy", "TextPolicy",
     "IdentityPolicy", "PlatformPolicy", "InterfacesPolicy", "VlansPolicy",
-    "CircuitsPolicy",
+    "CircuitsPolicy", "LocationsPolicy",
+    "OperationalNamesPolicy", "AsNumbersPolicy",
     "CollectionConfig", "VerifyConfig", "CustomRule",
     "ConfigError", "find_config", "DEFAULT_CONFIG_NAMES",
 ]
@@ -54,8 +55,8 @@ DEFAULT_CONFIG_NAMES = ("netredact.toml", ".netredact.toml")
 ACTIONS = ("keep", "pseudo", "hash", "redact")
 
 #: the families a rule -- or a bare regex match -- belongs to
-FAMILIES = ("secrets", "text", "identity", "platform", "interfaces", "vlans",
-            "circuits",
+FAMILIES = ("secrets", "text", "locations", "identity", "platform",
+            "interfaces", "vlans", "circuits",
             "hostnames", "domains", "usernames", "emails",
             "ipv4", "ipv6", "macs")
 
@@ -286,6 +287,51 @@ class MacPolicy:
         return self.oui != "keep" or self.nic != "keep"
 
 
+@dataclass
+class OperationalNamesPolicy:
+    """Actions for typed configuration identifiers and their references."""
+
+    TYPES = ("acl-firewall-filter", "route-map", "prefix-list",
+             "policy-statement", "vrf", "peer-group")
+
+    default: str = "keep"
+    acl_firewall_filter: str | None = None
+    route_map: str | None = None
+    prefix_list: str | None = None
+    policy_statement: str | None = None
+    vrf: str | None = None
+    peer_group: str | None = None
+
+    def __post_init__(self) -> None:
+        _check_action("[operational-names] default", "text", self.default)
+        for kind in self.TYPES:
+            value = getattr(self, kind.replace("-", "_"))
+            if value is not None:
+                _check_action(f"[operational-names] {kind}", "text", value)
+
+    def action(self, kind: str) -> str:
+        if kind not in self.TYPES:
+            raise ConfigError(f"unknown operational-name type {kind!r}")
+        value = getattr(self, kind.replace("-", "_"))
+        return self.default if value is None else value
+
+    def any_active(self) -> bool:
+        return any(self.action(kind) != "keep" for kind in self.TYPES)
+
+
+@dataclass
+class AsNumbersPolicy:
+    """Action for structurally explicit autonomous-system numbers."""
+
+    default: str = "keep"
+
+    def __post_init__(self) -> None:
+        _check_action("[as-numbers] default", "text", self.default)
+
+    def any_active(self) -> bool:
+        return self.default != "keep"
+
+
 def _field(rule: str) -> str:
     """The dataclass field that holds the action for one rule name.
 
@@ -373,6 +419,14 @@ TextPolicy = _rule_policy(
     two ports apart without saying whose they are.
     """)
 
+LocationsPolicy = _rule_policy(
+    "locations", "keep",
+    """Explicit physical-location fields.
+
+    This is separate from generic text so a policy can retain descriptions
+    while removing SNMP locations and structured JunOS building details.
+    """)
+
 IdentityPolicy = _rule_policy(
     "identity", "keep",
     """Serial numbers, license UDIs, SNMP engine IDs, certificates, SSH keys.
@@ -438,11 +492,12 @@ CircuitsPolicy = _rule_policy(
     """)
 
 #: the families whose members are named rules, and so have a section each
-RULE_FAMILIES = ("secrets", "text", "identity", "platform",
+RULE_FAMILIES = ("secrets", "text", "locations", "identity", "platform",
                  "interfaces", "vlans", "circuits")
 
 #: family -> its section class
 RULE_SECTIONS = {"secrets": SecretsPolicy, "text": TextPolicy,
+                 "locations": LocationsPolicy,
                  "identity": IdentityPolicy, "platform": PlatformPolicy,
                  "interfaces": InterfacesPolicy, "vlans": VlansPolicy,
                  "circuits": CircuitsPolicy}
@@ -531,9 +586,13 @@ class Config:
     ipv4: IPv4Policy = field(default_factory=IPv4Policy)
     ipv6: IPv6Policy = field(default_factory=IPv6Policy)
     macs: MacPolicy = field(default_factory=MacPolicy)
+    operational_names: OperationalNamesPolicy = field(
+        default_factory=OperationalNamesPolicy)
+    as_numbers: AsNumbersPolicy = field(default_factory=AsNumbersPolicy)
     #: the seven rule-named families, one section each
     secrets: SecretsPolicy = field(default_factory=SecretsPolicy)
     text: TextPolicy = field(default_factory=TextPolicy)
+    locations: LocationsPolicy = field(default_factory=LocationsPolicy)
     identity: IdentityPolicy = field(default_factory=IdentityPolicy)
     platform: PlatformPolicy = field(default_factory=PlatformPolicy)
     interfaces: InterfacesPolicy = field(default_factory=InterfacesPolicy)
@@ -644,6 +703,13 @@ class Config:
 
     @classmethod
     def from_dict(cls, raw: dict) -> Config:
+        raw = dict(raw)
+        for external, internal in (("operational-names", "operational_names"),
+                                   ("as-numbers", "as_numbers")):
+            if external in raw:
+                if internal in raw:
+                    raise ConfigError(f"use [{external}], not both spellings")
+                raw[internal] = raw.pop(external)
         _reject_removed(raw)
         known = {f.name for f in fields(cls)} - {"source"}
         unknown = set(raw) - known
@@ -666,8 +732,10 @@ class Config:
             if sub is not None:
                 if not isinstance(value, dict):
                     raise ConfigError(f"[{f.name}] must be a table")
-                kwargs[f.name] = _build(sub, value, f.name,
-                                        kebab=f.name in RULE_FAMILIES,
+                section_name = f.name.replace("_", "-")
+                kwargs[f.name] = _build(sub, value, section_name,
+                                        kebab=(f.name in RULE_FAMILIES
+                                               or f.name == "operational_names"),
                                         custom=custom_names)
             else:
                 kwargs[f.name] = value
@@ -686,6 +754,8 @@ def _dataclass_for(f) -> type | None:
     mapping = {
         "policy": PolicyConfig, "ipv4": IPv4Policy, "ipv6": IPv6Policy,
         "macs": MacPolicy, "collection": CollectionConfig,
+        "operational_names": OperationalNamesPolicy,
+        "as_numbers": AsNumbersPolicy,
         "verify": VerifyConfig, **RULE_SECTIONS,
     }
     return mapping.get(f.name)
@@ -967,11 +1037,16 @@ _SECTION_INTROS = {
         "# real credential, computable by anyone who can derive it.",
     ],
     "text": [
-        "# Descriptions, ACL remarks, banners, login messages, SNMP location",
-        "# and contact. On a service-provider config this is where the",
+        "# Descriptions, ACL remarks, banners, login messages and contact.",
+        "# On a service-provider config this is where the",
         "# customer names live. `hash` is usually the right middle ground:",
         "# <DESC-f11e24> still tells two ports apart and still correlates the",
         "# same port across files, without saying whose it is.",
+    ],
+    "locations": [
+        "# Explicit physical locations: SNMP location values and structured",
+        "# JunOS building, floor, rack, room and street-address fields.",
+        "# Kept by default; use redact before public disclosure.",
     ],
     "identity": [
         "# Serial numbers, license UDIs, SNMP engine IDs, certificates and",
@@ -1212,6 +1287,9 @@ def _render_toml(cfg: Config) -> str:
     out.append("")
     for family in RULE_FAMILIES:
         out += _render_rule_section(family, getattr(cfg, family))
+    out += _render_plain_section("operational-names", cfg.operational_names,
+                                 kebab=True)
+    out += _render_plain_section("as-numbers", cfg.as_numbers)
     out += _render_policy(cfg.policy)
     out += _render_ip("ipv4", cfg.ipv4)
     out += _render_ip("ipv6", cfg.ipv6)
@@ -1220,3 +1298,15 @@ def _render_toml(cfg: Config) -> str:
     out += _render_verify(cfg.verify)
     out += _CUSTOM_EXAMPLE
     return "\n".join(out)
+
+
+def _render_plain_section(name: str, section, *, kebab: bool = False) -> list[str]:
+    out = [f"[{name}]"]
+    for item in fields(section):
+        key = item.name.replace("_", "-") if kebab else item.name
+        value = getattr(section, item.name)
+        if value is None:
+            out.append(f"# {key} = \"keep\"")
+        else:
+            out.append(f"{key} = {_toml_value(value)}")
+    return out + [""]

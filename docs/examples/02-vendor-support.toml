@@ -25,6 +25,9 @@ default = "keep"           # remarks, location, login messages
 banner  = "redact"         # legal boilerplate, no diagnostic value
 contact = "redact"         # a name, a phone number, an e-mail address
 
+[locations]
+default = "keep"
+
 # Interface descriptions are the topology written down, and a support engineer
 # cannot follow a path without them. This is the section that says so; [text]
 # no longer covers them.

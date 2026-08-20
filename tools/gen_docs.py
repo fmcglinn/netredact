@@ -148,6 +148,10 @@ VERIFY_NOTES = {
     "email-left": "an e-mail address survived",
     "ipv4-left": "an IPv4 address survived whose class `[ipv4]` acts on",
     "ipv6-left": "an IPv6 address survived whose class `[ipv6]` acts on",
+    "mac-left": "a recognisable MAC address survived while `[macs]` acts",
+    "operational-name-left": "a supported operational name survived",
+    "as-number-left": "an ASN survived in supported explicit grammar",
+    "location-left": "an explicit physical location survived",
 }
 
 #: what switches a conditional check on. Unconditional checks say so.
@@ -155,6 +159,10 @@ VERIFY_GATE = {
     "email-left": '`[policy] emails` is not `"keep"`',
     "ipv4-left": "some `[ipv4]` class acts",
     "ipv6-left": "some `[ipv6]` class acts",
+    "mac-left": "either `[macs]` half acts",
+    "operational-name-left": "some `[operational-names]` type acts",
+    "as-number-left": '`[as-numbers] default` is not `"keep"`',
+    "location-left": "the matching `[locations]` rule acts",
     "ssh-key-left": '`[policy] identity` is not `"keep"`',
     "pem-left": "always for a private key; the certificate half needs "
                 "`identity` to act",

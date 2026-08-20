@@ -15,6 +15,9 @@ default = "redact"
 # lines hold a rack label, not a street address, and the reviewer needs them.
 [text]
 default  = "hash"      # so the custom `text` rule below has something to do
+
+[locations]
+default  = "hash"
 location = "keep"
 
 # `pattern` with NO capture groups is a PREFIX -- everything up to and

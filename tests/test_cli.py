@@ -179,7 +179,7 @@ def test_report_names_the_policy_and_the_changes(fixtures, capsys):
     assert "policy: secrets=redact, everything else kept" in err
     assert "changes:" in err
     assert "VERIFY: clean" in err
-    assert "NOTE: never scrubbed" in err
+    assert "does not guarantee anonymisation" in err
 
 
 def test_report_audits_removed_collection_sections_without_their_contents(

@@ -76,7 +76,8 @@ default       = "hash"       # the action for every rule not named below
 serial-number = "keep"       # TAC asks for it first
 ```
 
-Seven families work this way — [`[secrets]`](#secrets), [`[text]`](#text),
+Eight families work this way — [`[secrets]`](#secrets), [`[text]`](#text),
+[`[locations]`](#locations),
 [`[identity]`](#identity), [`[platform]`](#platform),
 [`[interfaces]`](#interfaces), [`[vlans]`](#vlans) and
 [`[circuits]`](#circuits) — and between them they carry every rule; the [rule reference](rules.md) has the current count and the
@@ -104,8 +105,8 @@ real credential. Use `hash` for an audit-visible marker, or `redact`.
 
 ## `[text]`
 
-Descriptions, ACL remarks, banners, login messages, SNMP `location` and
-`contact` — 7 rules. On a service-provider config this is where the customer
+Descriptions, ACL remarks, banners, login messages and `contact` — 5 rules.
+On a service-provider config this is where the customer
 names live, so the choice matters.
 
 **An interface description is not in here.** It is the same selector split off
@@ -122,6 +123,34 @@ them acts on any given line.
   the same port across files, without the text. Usually the right middle ground.
 - `redact` — `<DESCRIPTION-REMOVED>`. Use this for anything public: even a
   stable token leaks how many distinct customers sit on a device.
+
+## `[locations]`
+
+Physical locations are independent of generic text. `location` covers SNMP
+location values; `junos-location-body` covers structured JunOS building,
+floor, rack, room, postal and street-address fields. Both default to `keep`.
+
+```toml
+[locations]
+default             = "redact"
+location            = "keep"
+junos-location-body = "redact"
+```
+
+## `[operational-names]`
+
+Typed operational identifiers default to `keep`. Options are
+`acl-firewall-filter`, `route-map`, `prefix-list`, `policy-statement`, `vrf`
+and `peer-group`. Firewall-filter and policy term names inherit their parent's
+action. `pseudo` preserves supported declarations and references; `redact`
+may make output unloadable.
+
+## `[as-numbers]`
+
+`default = "keep"` controls ASNs in explicit AS-valued commands and AS-path
+prepends. `pseudo` maps one normalized ASN consistently, preserving dotted
+notation, 16/32-bit width and public/private allocation class. Communities are
+deliberately outside this option.
 
 To act on banners without acting on the rest: `[text] banner = "redact"`.
 
@@ -452,9 +481,12 @@ and so does the [rule reference](rules.md).
 
 ```toml
 [text]
+default = "hash"
+banner  = "redact"
+
+[locations]
 default  = "hash"
-location = "keep"            # this fleet's location lines hold a rack label
-banner   = "redact"          # act on banners without acting on all of `text`
+location = "keep"
 ```
 
 A key in the wrong section is an error, not a silent no-op — and because the
@@ -470,8 +502,7 @@ the useful answer:
 
 ```
 netredact: config error: [text]: unknown key(s) serial-numbers. Expected:
-acl-remark, banner, contact, default, description, junos-location-body,
-location, login-message
+acl-remark, banner, contact, default, description, login-message
 ```
 
 Both mistakes in one section are reported together, one line each. A key that

@@ -50,9 +50,9 @@ This is the whole report for one of the test fixtures, at stock defaults:
   changes:
         19  username-secret, enable-secret, encoded-key ...
   VERIFY: clean (policy applied, no credential-shaped material left)
-  NOTE: never scrubbed -- ACL / route-map / prefix-list / policy names,
-        AS numbers, VRF names and interface numbering.
-        Read the output before sending it anywhere.
+  NOTE: interface numbering and unsupported vendor grammar are never scrubbed.
+  WARNING: netredact reduces exposure; it does not guarantee anonymisation.
+        Review every output before disclosure.
 ```
 
 Three things to read:
@@ -127,6 +127,7 @@ the `keep` action by name, in its own family's section:
 ```toml
 [text]
 default  = "hash"
+[locations]
 location = "keep"        # this fleet's location lines hold a rack label
 ```
 

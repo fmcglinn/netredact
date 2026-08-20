@@ -62,12 +62,11 @@ The trade only works if the policy is never a surprise, so `--report` opens
 with it in one line — at defaults, `secrets=redact, everything else kept`. Read
 it before you send anything.
 
-## What is never touched
+## What remains outside the guarantee
 
-VLAN names, ACL / route-map / prefix-list / policy / key-chain / VRF names, AS
-numbers, and interface numbering. These are usually what makes a config worth
-sharing, and BGP communities in particular must survive intact or the config
-stops meaning anything.
+Interface numbering, key-chain names, BGP communities and unsupported grammar
+are not transformed. Operational names and ASNs are opt-in and limited to the
+documented Cisco, Arista and JunOS forms.
 
-**On a service-provider config these frequently carry customer names.** If
-yours do, that is yours to handle — netredact will not guess.
+**Warning:** netredact reduces exposure; it does not guarantee anonymisation.
+Review every output and decide whether it is safe and lawful to share.

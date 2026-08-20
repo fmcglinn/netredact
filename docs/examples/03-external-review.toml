@@ -16,6 +16,9 @@ default = "redact"
 [text]
 default = "hash"       # <DESC-a1b2c3>
 
+[locations]
+default = "hash"
+
 # Per-port structure is what a reviewer reads, so the descriptions become
 # markers rather than disappearing: <DESC-a1b2c3> still tells two ports apart
 # and still correlates the same port across files.

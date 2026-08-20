@@ -25,14 +25,15 @@ def test_inventory_is_immutable_and_rule_names_are_unique():
 
 def test_every_rule_has_the_expected_family():
     counts = Counter(info.family for info in inventory())
-    assert counts == {"secrets": 32, "text": 7, "identity": 6, "platform": 4,
+    assert counts == {"secrets": 32, "text": 5, "locations": 2,
+                      "identity": 6, "platform": 4,
                       "interfaces": 1, "vlans": 1, "circuits": 2}
     assert set(counts) <= set(FAMILIES)
 
 
 @pytest.mark.parametrize("name,family", [
     ("enable-secret", "secrets"), ("junos-type9", "secrets"),
-    ("pem-key", "secrets"), ("location", "text"), ("banner", "text"),
+    ("pem-key", "secrets"), ("location", "locations"), ("banner", "text"),
     ("snmp-engineid", "identity"), ("ssh-public-key", "identity"),
     ("pem-cert", "identity"), ("hardware-model", "platform"),
     ("interface-description", "interfaces"), ("vlan-name", "vlans"),

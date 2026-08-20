@@ -37,7 +37,7 @@ def load(tmp_path, body: str) -> Config:
 
 def test_actions_and_families():
     assert ACTIONS == ("keep", "pseudo", "hash", "redact")
-    assert FAMILIES == ("secrets", "text", "identity", "platform",
+    assert FAMILIES == ("secrets", "text", "locations", "identity", "platform",
                         "interfaces", "vlans", "circuits",
                         "hostnames", "domains", "usernames", "emails",
                         "ipv4", "ipv6", "macs")
@@ -54,10 +54,10 @@ def test_defaults_act_on_secrets_only():
     assert cfg.secrets.default == "redact"
     assert all(cfg.action_for_rule(r) == "redact"
                for r in RULE_SECTIONS["secrets"].RULES)
-    for family in ("text", "identity", "platform", "hostnames", "domains",
+    for family in ("text", "locations", "identity", "platform", "hostnames", "domains",
                    "usernames", "emails"):
         assert cfg.action_for(family) == "keep", family
-    for family in ("text", "identity", "platform"):
+    for family in ("text", "locations", "identity", "platform"):
         assert not getattr(cfg, family).any_active(), family
     assert cfg.ipv4.default == "keep" and not cfg.ipv4.any_active()
     assert cfg.ipv6.default == "keep" and not cfg.ipv6.any_active()
@@ -92,7 +92,7 @@ def test_action_for_rule_follows_the_family():
 
 
 def test_a_named_rule_beats_its_section_default():
-    cfg = Config(text=RULE_SECTIONS["text"](default="keep", location="redact"),
+    cfg = Config(locations=RULE_SECTIONS["locations"](default="keep", location="redact"),
                  secrets=RULE_SECTIONS["secrets"](default="redact",
                                                   enable_secret="keep"))
     assert cfg.action_for_rule("location") == "redact"
@@ -138,7 +138,10 @@ oui = "keep"
 nic = "pseudo"
 
 [text]
-default  = "redact"
+default = "redact"
+
+[locations]
+default = "redact"
 location = "keep"
 """)
     assert cfg.vendor == "juniper"
@@ -200,7 +203,7 @@ def test_a_custom_rule_can_carry_its_own_action():
     ('[secrets]\nno-such-rule = "keep"\n', r"unknown key\(s\) no-such-rule"),
     ('[secrets]\nenable-secret = "pseudo"\n',
      "pseudo is not available for secrets"),
-    ('[text]\nlocation = true\n', "must be a string"),
+    ('[locations]\nlocation = true\n', "must be a string"),
     ('[policy]\nnope = "keep"\n', r"unknown key\(s\) nope"),
     ('[nope]\nx = 1\n', "unknown top-level section"),
     ('[ipv4]\nrfc1917 = "keep"\n', r"unknown key\(s\) rfc1917"),

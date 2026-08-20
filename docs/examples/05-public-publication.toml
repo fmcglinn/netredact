@@ -23,6 +23,15 @@ default = "redact"
 [text]
 default = "redact"       # <DESCRIPTION-REMOVED>
 
+[locations]
+default = "redact"
+
+[operational-names]
+default = "redact"
+
+[as-numbers]
+default = "pseudo"
+
 # Destroyed, not hashed: a stable <DESC-a1b2c3> still leaks how many distinct
 # customers sit on a device, and which ports belong to the same one.
 [interfaces]

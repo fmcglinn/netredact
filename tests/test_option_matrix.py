@@ -78,6 +78,7 @@ POLICY_SAMPLE = {
     "secrets":   (" enable secret 5 $1$abc$0123456789abcdefghij\n",
                   "$1$abc$0123456789abcdefghij"),
     "text":      (" description a plain description\n", "a plain description"),
+    "locations": ("snmp-server location Rack A12\n", "Rack A12"),
     "identity":  ("! Serial Number: FDO1234ABCD\n", "FDO1234ABCD"),
     "platform":  ("version 15.7\n", "15.7"),
     # the two scoped families need the block that scopes them, so their sample
@@ -98,6 +99,7 @@ POLICY_SAMPLE = {
 REDACT_EXPECTED = {
     "secrets": (REMOVED,),
     "text": (REMOVED, DESC_REMOVED),
+    "locations": (REMOVED, DESC_REMOVED),
     "identity": (REMOVED,),
     "platform": (REMOVED,),
     "interfaces": (DESC_REMOVED,),
@@ -325,6 +327,7 @@ def test_hash_on_one_mac_half_is_rejected(half):
 RULE_SAMPLE = {
     "secrets": ("snmp-community", "snmp-server community s3cr3t ro\n", "s3cr3t"),
     "text": ("acl-remark", " remark a plain remark\n", "a plain remark"),
+    "locations": ("location", "snmp-server location Rack A12\n", "Rack A12"),
     "identity": ("serial-number", "! Serial Number: FDO1234ABCD\n", "FDO1234ABCD"),
     "platform": ("os-version", "version 15.7\n", "15.7"),
     "interfaces": ("interface-description",

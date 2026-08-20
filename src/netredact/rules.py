@@ -77,7 +77,7 @@ __all__ = [
     "REMOVED", "DESC_REMOVED", "RuleInfo", "RuleHit",
     "RuleReplacement", "RuleCatalogue",
     "HOSTNAME_PATS", "DOMAIN_PATS", "USERNAME_PATS",
-    "IPV4_RE", "IPV6_RE", "MAC_RE", "EMAIL_RE",
+    "IPV4_RE", "IPV6_RE", "MAC_RE", "BARE_MAC_CONTEXT_RE", "EMAIL_RE",
 ]
 
 REMOVED = "<REMOVED>"
@@ -440,13 +440,15 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # ---- free text ---------------------------------------------------------
     # location / contact are text, not secrets: they leak an org and a site,
     # not a credential. NOT_BRACE keeps `location {` a stanza opener.
-    ("location", _rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+"), "text", None),
+    ("location", _rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+"), "locations", None),
     ("contact", _rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+"), "text", None),
     # the body of a JunOS `location { ... }` stanza: the keys carry the street
     # address the `location` rule itself must not eat (it is a stanza opener,
     # not a value). Stanza-scoped, so a `building` line elsewhere is untouched.
     ("junos-location-body",
-     _rest(rf"\s*(?:{_JUNOS_LOCATION_KEYS})\s+"), "text", "location"),
+     _alt(_rest(rf"\s*set\s+system\s+location\s+(?:{_JUNOS_LOCATION_KEYS})\s+"),
+          _rest(rf"\s*(?:{_JUNOS_LOCATION_KEYS})\s+")),
+     "locations", "location"),
     ("description", _rest(_DESCRIPTION), "text", None),
     ("acl-remark", _rest(r"\s*remark\s+"), "text", None),
     ("login-message",
@@ -775,7 +777,10 @@ class RuleCatalogue:
                 ios_block = next((name for name, pat in _BLOCK_SCOPES
                                   if pat.match(raw)), None)
             set_match = _SET_SCOPE.match(raw)
-            line_scope = (set_match.group(1).lower(),) if set_match else ()
+            if re.match(r"\s*set\s+system\s+location\b", raw, re.I):
+                line_scope = ("location",)
+            else:
+                line_scope = (set_match.group(1).lower(),) if set_match else ()
             inside = tuple(stanza) + ((ios_block,) if ios_block else ()) + line_scope
 
             block = next(((start, end, name, family)
@@ -936,10 +941,14 @@ IPV6_RE = re.compile(
 MAC_RE = re.compile(
     r"(?<![\w.:-])("
     r"[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
+    r"|[0-9A-Fa-f]{4}(?:-[0-9A-Fa-f]{4}){2}"
     r"|(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}"
     r"|(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2}"
     r")(?![\w.:-])"
 )
+BARE_MAC_CONTEXT_RE = re.compile(
+    r"(?P<prefix>\b(?:mac-address|mac\s+address|hardware-address)\s+)"
+    r"(?P<value>[0-9A-Fa-f]{12})(?![0-9A-Fa-f])", re.I)
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 
 _STANZA_OPEN = re.compile(r"^\s*([\w-]+)[^{}]*\{\s*$")

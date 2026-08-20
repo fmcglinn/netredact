@@ -19,6 +19,9 @@ default = "redact"
 [text]
 default = "hash"
 
+[locations]
+default = "hash"
+
 # A model reasons about the topology from the port descriptions, so keep them
 # distinguishable rather than removing them.
 [interfaces]

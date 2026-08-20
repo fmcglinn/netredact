@@ -76,6 +76,7 @@ DESC_REMOVED = "<DESCRIPTION-REMOVED>"
 PREFIX: dict[str, tuple[str, str | None]] = {
     "secrets": ("SECRET", None),          # None => pseudo illegal
     "text": ("DESC", "desc"),
+    "locations": ("DESC", "desc"),
     # an interface description is a description: it renders as one, so a
     # reader of the output learns what was taken out rather than which section
     # took it out. The two families never see the same span -- one is scoped to
@@ -125,7 +126,7 @@ _TEXT_DEFAULT_REDACT = DESC_REMOVED
 
 #: families whose values are free text, so ``redact`` leaves the description
 #: marker rather than the generic one
-_DESC_FAMILIES = ("text", "interfaces")
+_DESC_FAMILIES = ("text", "locations", "interfaces")
 
 #: family names, for :meth:`Pseudonymiser._family`. Read off the config's own
 #: tuple so a new family cannot be renderable but unknown here.
@@ -135,7 +136,8 @@ _FAMILIES = frozenset(FAMILIES)
 #: catalogue inventory; custom rules fall through to ``config.custom``.
 _KEY_FAMILY = {
     "description": "text", "acl-remark": "text", "login-message": "text",
-    "banner": "text", "location": "text", "contact": "text",
+    "banner": "text", "contact": "text",
+    "location": "locations", "junos-location-body": "locations",
     "interface-description": "interfaces", "vlan-name": "vlans",
     "patch-name": "circuits", "pseudowire-name": "circuits",
     "serial-number": "identity", "license-udi": "identity",
@@ -168,6 +170,7 @@ _REDACTED_CONSTS = {
     "identity": (REMOVED,),
     "platform": (REMOVED,),
     "text": (REMOVED, DESC_REMOVED),
+    "locations": (REMOVED, DESC_REMOVED),
     "interfaces": (REMOVED, DESC_REMOVED),
     "vlans": (REMOVED,),
     "hostnames": ("redacted",),
@@ -411,6 +414,50 @@ class Pseudonymiser:
             return gen(value)
         return f"{tok}-{self.tag(mark.lower(), value)}"
 
+    def asn(self, text: str) -> str:
+        """Render one ASN, preserving notation, width and allocation class."""
+        action = self.cfg.as_numbers.default
+        dotted = "." in text
+        try:
+            if dotted:
+                high, low = (int(part) for part in text.split(".", 1))
+                if not (0 <= high <= 65535 and 0 <= low <= 65535):
+                    return text
+                value = high * 65536 + low
+            else:
+                value = int(text)
+        except ValueError:
+            return text
+        if not 0 <= value <= 0xFFFFFFFF or action == "keep":
+            return text
+        # Protocol constants and documentation-only ASNs identify nobody.
+        if value in {0, 23456, 65535, 0xFFFFFFFF} or 64496 <= value <= 64511 \
+                or 65536 <= value <= 65551:
+            return text
+        if action == "hash":
+            return f"<ASN-{self.tag('asn', str(value))}>"
+        if action == "redact":
+            return REMOVED
+
+        if 64512 <= value <= 65534:
+            start, end, namespace = 64512, 65534, "asn-private16"
+        elif 4200000000 <= value <= 4294967294:
+            start, end, namespace = 4200000000, 4294967294, "asn-private32"
+        elif value <= 65535:
+            start, end, namespace = 1, 64495, "asn-public16"
+        else:
+            start, end, namespace = 65552, 4199999999, "asn-public32"
+        span = end - start + 1
+        seed = self._h(namespace, str(value))
+
+        def gen(i: int) -> str:
+            return str(start + ((seed + i) % span))
+
+        rendered = int(self._assign(namespace, str(value), gen))
+        if dotted:
+            return f"{rendered >> 16}.{rendered & 0xFFFF}"
+        return str(rendered)
+
     @staticmethod
     def _tag_value(family: str, value: str) -> str:
         """Names are matched case-insensitively, so they hash case-folded."""
@@ -551,7 +598,11 @@ class Pseudonymiser:
         if "." in text:
             return ".".join(new[i:i + 4] for i in (0, 4, 8))
         if "-" in text:
+            if len(text.split("-")) == 3:
+                return "-".join(new[i:i + 4] for i in (0, 4, 8))
             return "-".join(new[i:i + 2] for i in range(0, 12, 2))
+        if ":" not in text:
+            return new
         return ":".join(new[i:i + 2] for i in range(0, 12, 2))
 
     # -- names -------------------------------------------------------------

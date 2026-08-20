@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from . import rules as R
 from .collection import RemovedSection, strip_rancid_diagnostics
 from .config import RULE_FAMILIES, Config
+from .operational import AsNumbers, OperationalNames
 from .pseudonymise import Pseudonymiser, is_mask_like
 from .vendors import detect_vendor
 
@@ -131,6 +132,19 @@ def policy_summary(cfg: Config) -> str:
     else:
         parts.append(f"macs={macs.oui}/{macs.nic}")
 
+    op_actions = {cfg.operational_names.action(kind)
+                  for kind in cfg.operational_names.TYPES}
+    if op_actions == {"keep"}:
+        kept.append("operational-names")
+    elif len(op_actions) == 1:
+        parts.append(f"operational-names={op_actions.pop()}")
+    else:
+        parts.append("operational-names=keep (per type)")
+    if cfg.as_numbers.default == "keep":
+        kept.append("as-numbers")
+    else:
+        parts.append(f"as-numbers={cfg.as_numbers.default}")
+
     custom = [f"{c.name}={c.action}" for c in cfg.custom if c.action]
     if len(custom) > 3:
         custom = custom[:3] + [f"+{len(custom) - 3} more custom rule(s)"]
@@ -150,6 +164,8 @@ class Sanitiser:
                  pseudo: Pseudonymiser | None = None):
         self.cfg = config or Config()
         self.p = pseudo or Pseudonymiser(salt, self.cfg)
+        self.operational = OperationalNames(self.cfg.operational_names, self.p)
+        self.as_numbers = AsNumbers(self.cfg.as_numbers, self.p)
         self.catalogue = R.RuleCatalogue.builtins().configured(self.cfg.custom)
         self.counts: Counter = Counter()
         self.kept_counts: Counter = Counter()
@@ -157,6 +173,7 @@ class Sanitiser:
         self.domains: list[str] = []
         self.usernames: list[str] = []
         self._name_res: list[tuple[re.Pattern, str]] = []
+        self.handled_macs: set[str] = set()
         # name -> family for everything that can be counted, and name -> action
         # for every rule. Resolving the action once means a bad override is an
         # error before any output is produced, not halfway through a file.
@@ -168,6 +185,9 @@ class Sanitiser:
         for family in ("ipv4", "ipv6", "macs", "hostnames", "domains",
                        "usernames", "emails"):
             self.families[family] = family
+        for kind in self.cfg.operational_names.TYPES:
+            self.families[kind] = "operational-names"
+        self.families["as-numbers"] = "as-numbers"
         self._family_actions = {f: self.cfg.action_for(f)
                                 for f in ("hostnames", "domains", "usernames",
                                           "emails")}
@@ -230,8 +250,15 @@ class Sanitiser:
 
     # -- pass 2: transform -------------------------------------------------
     def run(self, lines) -> list[str]:
-        return self.catalogue.transform(
-            lines, replace=self._replace_rule_hit, finish_line=self.line)
+        out = self.catalogue.transform(
+            lines, replace=self._replace_rule_hit,
+            finish_line=lambda line: self.line(
+                self.as_numbers.line(self.operational.line(line))))
+        self.counts.update(self.operational.counts)
+        self.kept_counts.update(self.operational.kept_counts)
+        self.counts.update(self.as_numbers.counts)
+        self.kept_counts.update(self.as_numbers.kept_counts)
+        return out
 
     def _replace_rule_hit(self, hit: R.RuleHit) -> R.RuleReplacement:
         """Classify and render one value selected by the rule catalogue."""
@@ -251,6 +278,9 @@ class Sanitiser:
     def line(self, text: str) -> str:
         # MAC before IPv6 (both eat hex and colons); names last
         text = R.MAC_RE.sub(self._sub_mac, text)
+        text = R.BARE_MAC_CONTEXT_RE.sub(
+            lambda m: m.group("prefix") + self._replace_bare_mac(m.group("value")),
+            text)
         if self._family_actions["emails"] == "keep":
             for m in R.EMAIL_RE.finditer(text):
                 self.p.kept.setdefault("email", set()).add(m.group(0))
@@ -276,7 +306,15 @@ class Sanitiser:
             self.kept_counts["macs"] += 1
             return value
         self.counts["macs"] += 1
+        self.handled_macs.add(new.lower())
         return new
+
+    def _replace_bare_mac(self, value: str) -> str:
+        class Match:
+            @staticmethod
+            def group(_index):
+                return value
+        return self._sub_mac(Match())
 
     def _sub_email(self, m):
         value = m.group(0)
@@ -388,7 +426,9 @@ def sanitise_text(text: str, config: Config | None = None, *,
     out_lines = san.run(lines)
     out = "\n".join(out_lines) + ("\n" if out_lines else "")
 
-    findings = verify(out_lines, cfg) if cfg.verify.enabled else []
+    findings = (verify(out_lines, cfg, handled_macs=san.handled_macs,
+                       handled_asns=san.as_numbers.handled)
+                if cfg.verify.enabled else [])
     return Result(
         text=out,
         vendor=cfg.vendor if cfg.vendor != "auto" else detect_vendor(retained_text),

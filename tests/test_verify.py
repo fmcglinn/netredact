@@ -15,7 +15,8 @@ from .conftest import SALT, policy
 UNCONDITIONAL = ("crypt-hash-left", "junos-type9-left", "pem-left",
                  "type7-left", "long-hex-left", "long-base64-left",
                  "credential-left")
-CONDITIONAL = ("email-left", "ipv4-left", "ipv6-left")
+CONDITIONAL = ("email-left", "ipv4-left", "ipv6-left", "mac-left",
+               "operational-name-left", "as-number-left", "location-left")
 
 #: a PEM block is judged by its body, so every case here is a whole block
 PEM_BODY = "MIIEowIBAAKCAQEAprivatekeymaterialAAAABBBBCCCCDDDDEEEEFFFF0123456789"
