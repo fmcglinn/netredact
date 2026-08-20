@@ -23,19 +23,10 @@ from netredact import Config  # noqa: E402
 from netredact.addresses import V4_CLASSES, V6_CLASSES  # noqa: E402
 from netredact.config import RULE_FAMILIES  # noqa: E402
 from netredact.rules import (  # noqa: E402
-    BANNER_RE,
-    BANNER_RULE,
-    BLOB_RULES,
-    BLOCK_SCOPES,
-    BLOCK_STARTS,
-    BUILTIN,
     ENC,
-    OUTSIDE,
-    RULE_VENDORS,
     VAL,
     VAL_MACRO,
-    family_of,
-    rule_names,
+    RuleCatalogue,
 )
 from netredact.verify import (  # noqa: E402
     CONDITIONAL_CHECKS,
@@ -203,21 +194,18 @@ def pattern_cell(pattern: str) -> str:
 
 
 def family_counts() -> str:
-    counts = Counter(family_of(name) for name in rule_names())
+    counts = Counter(info.family for info in RuleCatalogue.builtins().inventory())
     return ", ".join(f"{counts[f]} `{f}`" for f in RULE_FAMILIES if counts[f])
 
 
 def rules_md() -> str:
-    names = rule_names()
+    catalogue = RuleCatalogue.builtins().inventory()
+    names = [info.name for info in catalogue]
     out = [BANNER, "# Rule reference\n",
            "Every named rule, the family it belongs to, and every check the",
            "verification pass runs afterwards. Generated from the source, so it",
            "matches the code exactly.\n",
            f"**{len(names)} rules**: {family_counts()}.\n",
-           f"- {len(BUILTIN)} keyword rules",
-           f"- {len(BLOB_RULES)} inline rules",
-           f"- {len(BLOCK_STARTS)} multi-line block handlers",
-           "- 1 banner handler",
            f"- {len(VERIFY_RULES) + len(CONDITIONAL_CHECKS)} verification checks\n",
            "A rule does not decide what happens to what it finds. Its **family**",
            "does, and every family of rules is a section: the action is",
@@ -253,13 +241,8 @@ def rules_md() -> str:
            "route-map name under `route-map`, and the line itself cannot tell you",
            "which. So a rule may name the block it needs, or the blocks it must",
            "stay out of, and two kinds of block share one set of names:\n",
-           "| Scope | Opened by |", "|---|---|",
-           "| a JunOS stanza | `interfaces {`, `snmp {`, `location {` — the brace stack |",
-           "| an IOS-style block | " + ", ".join(
-               f"`{name}`: `{md_cell(pat.pattern)}`" for name, pat in BLOCK_SCOPES)
-           + " at column zero, plus the indented lines under it |",
-           "| one JunOS `set` line | the word after `set`, for that line only |",
-           "",
+           "JunOS stanzas, IOS-style blocks and one-line JunOS `set` commands",
+           "share the scope names shown in the rule catalogue below.\n",
            "Where both dialects have the block the name is JunOS's own —",
            "`interfaces`, `vlans` — so one rule covers every dialect: an IOS",
            "`interface Gi0/0` block, a JunOS `interfaces { … }` stanza and a",
@@ -289,49 +272,26 @@ def rules_md() -> str:
            "instead. `patch-name` cannot fire on a JunOS config because it has",
            "to be inside a `patch panel` block, and that grammar opens none.",
            "Scope is the gate; the dialect column is a caption.\n",
-           "## Keyword rules\n",
-           "Matched from the start of a line.\n",
-           "| Rule | Family | Matches | Pattern |",
-           "|---|---|---|---|"]
-    for name, pattern, family, stanza in BUILTIN:
-        note = md_cell(RULE_NOTES.get(name, ""))
-        if stanza:
-            note += f" -- only in scope `{stanza}`"
-        for outside in OUTSIDE.get(name, ()):
-            note += f" -- never in scope `{outside}`"
-        if RULE_VENDORS.get(name):
-            note += f" -- {RULE_VENDORS[name]} grammar"
-        out.append(f"| `{name}` | `{family}` | {note} | `{pattern_cell(pattern)}` |")
+           "## Rule catalogue\n",
+           "The catalogue owns whether a rule is matched at the start of a line,",
+           "searched inline, or consumed as structured multi-line material.\n",
+           "| Rule | Family | Matches | Scope | Pattern | End |",
+           "|---|---|---|---|---|---|"]
+    notes = RULE_NOTES | BLOB_NOTES | BLOCK_NOTES | {
+        "banner": "`banner <type> <delim>` through its closing delimiter"}
+    for info in catalogue:
+        note = md_cell(notes.get(info.name, ""))
+        scope = f"inside `{info.required_scope}`" if info.required_scope else ""
+        if info.excluded_scopes:
+            scope += " " + " ".join(
+                f"outside `{name}`" for name in info.excluded_scopes)
+        if info.vendor:
+            note += f" -- {info.vendor} grammar"
+        end = f"`{md_cell(info.end_pattern)}`" if info.end_pattern else ""
+        out.append(f"| `{info.name}` | `{info.family}` | {note} | {scope} | "
+                   f"`{pattern_cell(info.pattern)}` | {end} |")
 
-    out += ["\n## Inline rules\n",
-            "Searched anywhere in a line, not anchored to the start, so one line",
-            "can carry several.\n",
-            "| Rule | Family | Matches |", "|---|---|---|"]
-    for rule in BLOB_RULES:
-        out.append(f"| `{rule.name}` | `{rule.family}` | "
-                   f"{md_cell(BLOB_NOTES.get(rule.name, ''))} |")
-
-    out += ["\n## Multi-line blocks\n",
-            "The **body** between start and end is one value: it is counted once",
-            "per block, not once per line, and one replacement stands in for the",
-            "whole thing. The enclosing lines survive so the structure stays",
-            "readable.\n",
-            "| Block | Family | Matches | Start | End |", "|---|---|---|---|---|"]
-    for start, end, name, family in BLOCK_STARTS:
-        out.append(f"| `{name}` | `{family}` | {BLOCK_NOTES.get(name, '')} | "
-                   f"`{md_cell(start.pattern)}` | `{md_cell(end.pattern)}` |")
-
-    out += ["\n## Banners\n",
-            "| Rule | Family | Matches |", "|---|---|---|",
-            f"| `{BANNER_RULE[0]}` | `{BANNER_RULE[1]}` | "
-            f"`banner <type> <delim>` through the closing delimiter, covering "
-            f"both the one-line and multi-line `^C` forms |",
-            "",
-            "A banner is driven by a delimiter state machine rather than by one",
-            "regex over one line. The opener it recognises is",
-            f"`{md_cell(BANNER_RE.pattern)}`; everything from there to the",
-            "closing delimiter is one value. Like a block, a banner counts once,",
-            "however many lines it spans.\n"]
+    out += [""]
 
     out += ["## Verification checks\n",
             "Credential checks are unconditional: they fire even when the policy",

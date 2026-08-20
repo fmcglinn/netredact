@@ -26,8 +26,8 @@ def test_public_api_is_exported():
                  "PlatformPolicy",
                  "ACTIONS", "FAMILIES", "ALLOWED", "sanitise_text",
                  "Sanitiser", "Result", "Pseudonymiser", "detect_vendor",
-                 "verify", "Finding", "check_names", "build_rules",
-                 "rule_names", "family_of", "REMOVED", "find_config",
+                 "verify", "Finding", "check_names", "RuleCatalogue",
+                 "RuleInfo", "RuleHit", "RuleReplacement", "REMOVED", "find_config",
                  "classify_v4", "classify_v6",
                  "V4_CLASS_NAMES", "V6_CLASS_NAMES"):
         assert name in netredact.__all__, name

@@ -224,9 +224,7 @@ from netredact import (
     Pseudonymiser,       # HMAC-derived substitutes; renders every action
     verify,              # run the checks over any list of lines
     detect_vendor,
-    build_rules,         # compile the rule set, plus your CustomRules
-    rule_names,          # every built-in rule name, in report order
-    family_of,           # rule name -> family
+    RuleCatalogue,       # immutable rule inventory and traversal
     check_names,         # every verification check name
     classify_v4,         # address -> class name
     classify_v6,
@@ -239,14 +237,18 @@ from netredact import (
 ```python
 >>> classify_v4("100.64.5.9", frozenset())
 'cgnat'
->>> family_of("serial-number")
+>>> catalogue = RuleCatalogue.builtins()
+>>> next(info.family for info in catalogue.inventory()
+...      if info.name == "serial-number")
 'identity'
->>> len(rule_names())
+>>> len(catalogue.inventory())
 45
 ```
 
-`build_rules` takes no `disable` argument: keeping a rule is an action, so a
-kept rule is still compiled, still matches, and is still counted.
+`RuleCatalogue.inventory()` exposes immutable descriptive metadata. Compiled
+patterns, scope state and the different execution forms stay behind the
+catalogue interface. `catalogue.configured(cfg.custom)` returns a new catalogue
+with custom rules merged in; it does not mutate the built-ins.
 
 `Sanitiser` is two-pass and single-use — build one per file:
 

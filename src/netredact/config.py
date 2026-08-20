@@ -335,7 +335,8 @@ def _rule_policy(family: str, default: str, doc: str) -> type:
     difference is only that its members are rules rather than a partition of
     a value space.
     """
-    names = tuple(n for n in rules.rule_names() if rules.family_of(n) == family)
+    names = tuple(info.name for info in rules.RuleCatalogue.builtins().inventory()
+                  if info.family == family)
     cls = make_dataclass(
         f"{family.capitalize()}Policy",
         [("default", str, field(default=default))]
@@ -397,7 +398,8 @@ InterfacesPolicy = _rule_policy(
     """What a port is called: the ``description`` on an interface.
 
     The same selector as ``[text] description``, split off by the block it is
-    in -- see ``rules.BLOCK_SCOPES``. It is a section of its own because it is
+    in -- scope traversal lives behind ``RuleCatalogue``. It is a section of
+    its own because it is
     the one piece of free text with two incompatible audiences: a TAC case is
     unreadable without the descriptions the topology is written in, and a public
     post is unpublishable with them. ``[text] default = "redact"`` with
@@ -450,7 +452,8 @@ RULE_SECTIONS = {"secrets": SecretsPolicy, "text": TextPolicy,
 #: table serves both places that have to answer "where does this rule live?":
 #: the ``[overrides]`` migration hints below, and the wrong-section routing in
 #: :func:`_misfiled`.
-_RULE_HOMES = {name: rules.family_of(name) for name in rules.rule_names()}
+_RULE_HOMES = {info.name: info.family
+               for info in rules.RuleCatalogue.builtins().inventory()}
 
 
 @dataclass
@@ -586,12 +589,12 @@ class Config:
         for c in self.custom:
             if c.name == rule_name:
                 return c.family
-        try:
-            return rules.family_of(rule_name)
-        except (KeyError, ValueError) as exc:
+        family = _RULE_HOMES.get(rule_name)
+        if family is None:
             raise ConfigError(
                 f"unknown rule name {rule_name!r}. "
-                f"See netredact --list-rules") from exc
+                f"See netredact --list-rules")
+        return family
 
     # -- validation -------------------------------------------------------
     def _validate_custom(self) -> None:

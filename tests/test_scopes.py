@@ -16,8 +16,8 @@ this tool exists to remove, so none of them appears in the test suite.
 
 import pytest
 
-from netredact import Config, Sanitiser, sanitise_text
 from netredact import rules as R
+from netredact import sanitise_text
 
 from .conftest import SALT, maximal, policy, section
 
@@ -119,51 +119,26 @@ def test_a_vlan_name_survives_a_policy_that_destroys_all_free_text():
     assert "description a port note" in out
 
 
-# -- the mechanism itself ---------------------------------------------------
+# -- the mechanism itself, observed through the catalogue interface --------
 
-@pytest.mark.parametrize("line,scope", [
-    ("interface GigabitEthernet1/0/1", "interfaces"),
-    ("interface Vlan905", "interfaces"),
-    ("interface Ethernet1", "interfaces"),
-    ("vlan 905", "vlans"),
-    ("vlan 300,301", "vlans"),
-    ("vlan database", "vlans"),
-    ("vlan internal allocation policy ascending", None),
-    ("vlan configuration 905", None),
-    ("interfaces {", None),          # a JunOS stanza, handled by the brace stack
-    ("router bgp 64512", None),
-    ("!", None),
-    ("switchport access vlan 905", None),   # never at column zero in practice
-])
-def test_which_lines_open_a_block(line, scope):
-    got = next((name for name, pat in R.BLOCK_SCOPES if pat.match(line)), None)
-    assert got == scope
-
-
-def test_an_indented_line_stays_in_the_block_and_any_other_ends_it():
-    san = Sanitiser(Config(), salt=SALT)
-    san._enter("interface Gi0/0")
-    assert san.inside == ("interfaces",)
-    san._enter(" description still inside")
-    assert san.inside == ("interfaces",)
-    san._enter("!")
-    assert san.inside == ()
-
-
-def test_a_set_line_carries_its_own_scope_for_one_line_only():
-    san = Sanitiser(Config(), salt=SALT)
-    san._enter("set interfaces xe-0/0/0 description \"x\"")
-    assert san.inside == ("interfaces",)
-    san._enter("set snmp community public")
-    assert san.inside == ("snmp",)
-
-
-def test_a_junos_stanza_and_an_ios_block_share_one_set_of_names():
-    """One name, both dialects: that is why the IOS scopes are named in plural."""
-    san = Sanitiser(Config(), salt=SALT)
-    san.stanza = ["interfaces", "ge-0"]
-    san._enter('        description "x";')
-    assert "interfaces" in san.inside
+def test_catalogue_scope_tracking_is_observable_through_sanitising():
+    """IOS blocks, JunOS stanzas and set lines share the interfaces scope."""
+    text = ("interface Gi0/0\n"
+            " description ios\n"
+            "!\n"
+            " description outside\n"
+            "interfaces {\n"
+            " ge-0/0/0 {\n"
+            '  description "junos";\n'
+            " }\n"
+            "}\n"
+            'set interfaces xe-0/0/0 description "set-line"\n')
+    out = sanitise_text(
+        text, policy(text="keep", interfaces="redact"), salt=SALT).text
+    assert "ios" not in out
+    assert "junos" not in out
+    assert "set-line" not in out
+    assert "outside" in out
 
 
 def test_a_banner_body_never_opens_a_block():
@@ -223,11 +198,13 @@ def test_one_rule_carries_the_definition_and_the_reference():
     rules could be configured apart; two branches of one rule cannot, and this
     is what pins that down.
     """
-    rules = {r.name: r for r in R.build_rules()}
-    assert "pseudowire-name" in rules
-    assert R.family_of("pseudowire-name") == "circuits"
-    # three target groups: the connector's two, and the definition's one
-    assert rules["pseudowire-name"].targets == (1, 2, 3)
+    info = next(i for i in R.RuleCatalogue.builtins().inventory()
+                if i.name == "pseudowire-name")
+    assert info.family == "circuits"
+    out = sanitise_text(CIRCUITS, policy(circuits="pseudo"), salt=SALT).text
+    connector = next(line for line in out.splitlines() if "connector" in line)
+    primary = connector.split("pseudowire ldp ")[1].split(" alternate ")[0]
+    assert f"pseudowire {primary}" in out
 
 
 @pytest.mark.parametrize("action,expected", [

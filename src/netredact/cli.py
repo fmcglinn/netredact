@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT_CONFIG_NAMES, Config, ConfigError
-from .rules import BUILTIN, OUTSIDE, family_of, rule_names, vendor_of
+from .rules import RuleCatalogue
 from .sanitise import Result, sanitise_text
 from .verify import check_names
 
@@ -238,17 +238,16 @@ def _destination(args, label: str, path: str) -> str | None:
 
 def list_rules() -> None:
     """Every rule with its family, then every verification check."""
-    stanzas = {name: stanza for name, _pattern, _family, stanza in BUILTIN}
     print('rules (set one by name in its family\'s section, e.g. '
           '[text] location = "hash"):')
     print(f"  {'rule':24} {'section':12} {'dialect':9} where it applies")
-    for name in rule_names():
-        stanza = stanzas.get(name)
-        extra = f"[stanza: {stanza}]" if stanza else ""
-        for out in OUTSIDE.get(name, ()):
+    for info in RuleCatalogue.builtins().inventory():
+        extra = (f"[stanza: {info.required_scope}]"
+                 if info.required_scope else "")
+        for out in info.excluded_scopes:
             extra += f"[outside: {out}]"
-        vendor = vendor_of(name) or ""
-        print(f"  {name:24} {family_of(name):12} {vendor:9} {extra}".rstrip())
+        print(f"  {info.name:24} {info.family:12} "
+              f"{(info.vendor or ''):9} {extra}".rstrip())
     print("\nA rule's action comes from one place: the section named above,"
           "\nwhich either names the rule or falls back to that section's"
           "\n`default`. The family also decides how the replacement renders.")

@@ -40,57 +40,44 @@ Some material is only recognisable from the block that encloses it. A bare
 ``name CUST000000000123`` is a VLAN name under ``vlan 905`` and a route-map
 name under ``route-map``, and the line itself cannot tell you which. So a rule
 can name the block it needs (``stanza``) or the blocks it must stay out of
-(:data:`OUTSIDE`), and the sanitiser tracks two kinds of block under one set of
+(:data:`_OUTSIDE`), and the sanitiser tracks two kinds of block under one set of
 names:
 
 * a JunOS brace stanza -- ``interfaces { … }`` -- from the stanza stack;
 * an IOS-style block -- ``interface Gi0/0`` and the indented lines under it --
-  from :data:`BLOCK_SCOPES`.
+  from :data:`_BLOCK_SCOPES`.
 
 The names are JunOS's own wherever both dialects have the block, so one rule
 covers both: an IOS ``interface`` block is scope ``interfaces``, a ``vlan 905``
 block is scope ``vlans``. A JunOS ``set`` line carries its scope on the line
-itself (:data:`SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is
+itself (:data:`_SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is
 inside ``interfaces`` too. A block only one vendor has keeps its own name --
 ``patch-panel``.
 
 Scope is also how a vendor-specific rule is confined, and there is no other
-mechanism for it. :data:`RULE_VENDORS` labels the dialect a rule was written
+mechanism for it. :data:`_RULE_VENDORS` labels the dialect a rule was written
 for, but nothing consults it when matching: a rule is held off another
 vendor's file by needing a block that vendor's grammar cannot open, which is
 evidence in the file rather than a guess about the file. The reasoning is at
-:data:`RULE_VENDORS`.
+:data:`_RULE_VENDORS`.
 
-Collections
------------
-* :func:`build_rules` -- line rules, matched with ``regex.match()`` from the
-  start of the line.
-* :data:`BLOB_RULES`  -- secret-shaped material anywhere in a line, searched
-  (``finditer``), not anchored. Same :class:`Rule` contract: groups are targets.
-* :data:`BLOCK_STARTS` -- multi-line blocks; the body between start and end is
-  the target.
-* :data:`BANNER_RE`   -- the ``banner`` rule, driven by the delimiter state
-  machine in ``sanitise.py`` rather than by a target group.
-
-Together these carry every named rule; :func:`rule_names` lists them in report
-order and :func:`family_of` maps each to its family. The count lives in
-``docs/rules.md``, which is generated, rather than in prose that goes stale.
+``RuleCatalogue`` is the sole interface for rule inventory and traversal.
+Executable rule forms, scope state and multiline handling stay private to its
+implementation; callers see immutable ``RuleInfo`` and logical ``RuleHit``
+values only.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 __all__ = [
-    "REMOVED", "DESC_REMOVED", "Rule", "build_rules", "rule_names", "family_of",
-    "vendor_of", "RULE_VENDORS",
-    "BUILTIN", "BLOB_RULES", "BLOCK_STARTS", "DESCRIPTION_RULES", "BANNER_RE",
+    "REMOVED", "DESC_REMOVED", "RuleInfo", "RuleHit",
+    "RuleReplacement", "RuleCatalogue",
     "HOSTNAME_PATS", "DOMAIN_PATS", "USERNAME_PATS",
     "IPV4_RE", "IPV6_RE", "MAC_RE", "EMAIL_RE",
-    "SNMP_HOST_KEYWORDS", "JUNOS_KEYWORDS", "IOS_KEYWORDS",
-    "STANZA_OPEN", "STANZA_CLOSE", "BLOCK_SCOPES", "SET_SCOPE", "OUTSIDE",
-    "ENC", "ENC_RUN", "VAL", "VAL_MACRO", "VAL_GROUP",
 ]
 
 REMOVED = "<REMOVED>"
@@ -149,23 +136,75 @@ SNMP_HOST_KEYWORDS = {
 
 
 @dataclass(frozen=True)
-class Rule:
+class _Rule:
     name: str
     regex: re.Pattern
     family: str
     targets: tuple[int, ...]     # capture-group indices to act on
     #: the block this rule needs to be inside: a JunOS stanza name, or a name
-    #: from :data:`BLOCK_SCOPES` for an IOS-style block. None means anywhere.
+    #: from :data:`_BLOCK_SCOPES` for an IOS-style block. None means anywhere.
     stanza: str | None = None
     #: blocks this rule must NOT be inside, because a scoped rule owns that
-    #: material instead -- see :data:`OUTSIDE`
+    #: material instead -- see :data:`_OUTSIDE`
     outside: tuple[str, ...] = ()
     custom: bool = False
     handler: str | None = None   # "snmp-host" only; else None
     #: ADVISORY ONLY: the dialect this rule's grammar comes from, or None for
     #: a rule that is unlabelled. Nothing in the sanitiser reads it, and no
-    #: rule is ever skipped because of it -- see :data:`RULE_VENDORS`.
+    #: rule is ever skipped because of it -- see :data:`_RULE_VENDORS`.
     vendor: str | None = None
+
+
+@dataclass(frozen=True)
+class RuleInfo:
+    """Stable, non-executable description of a rule.
+
+    Callers that report or configure rules should consume this view rather
+    than learning which internal representation happens to execute the rule.
+    """
+
+    name: str
+    family: str
+    vendor: str | None
+    custom: bool
+    required_scope: str | None
+    excluded_scopes: tuple[str, ...]
+    pattern: str
+    end_pattern: str | None = None
+
+
+@dataclass(frozen=True)
+class RuleHit:
+    """One value selected by the catalogue during transformation."""
+
+    name: str
+    family: str
+    value: str
+
+
+@dataclass(frozen=True)
+class RuleReplacement:
+    """The caller's decision for a selected value.
+
+    ``active`` distinguishes an inactive (kept) banner, whose body remains
+    ordinary input, from an active banner whose already-rendered body is left
+    unchanged.  Other rule forms treat both decisions as no replacement.
+    """
+
+    text: str | None = None
+    active: bool = True
+
+    @classmethod
+    def keep(cls) -> RuleReplacement:
+        return cls(active=False)
+
+    @classmethod
+    def unchanged(cls) -> RuleReplacement:
+        return cls(active=True)
+
+    @classmethod
+    def with_text(cls, text: str) -> RuleReplacement:
+        return cls(text=text, active=True)
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +284,7 @@ _IMAGE_COLON_KEYS = r"junos|eos"
 #: by its pattern. Inside an interface it is ``interface-description`` in the
 #: ``interfaces`` family; everywhere else -- a VRF, a policy-map, a peer group --
 #: it is ``description`` in ``text``. One selector, split in two by
-#: :data:`OUTSIDE`, so the two can never both act on the same line and no
+#: :data:`_OUTSIDE`, so the two can never both act on the same line and no
 #: description falls between them.
 _DESCRIPTION = r"\s*(?:set\s+\S.*?\s)?description\s+"
 
@@ -293,7 +332,7 @@ def _compile(pattern: str, flags: int = re.I) -> tuple[re.Pattern, tuple[int, ..
 # keyword rules: (name, pattern, family, required JunOS stanza)
 # ---------------------------------------------------------------------------
 
-BUILTIN: list[tuple[str, str, str, str | None]] = [
+_BUILTIN: list[tuple[str, str, str, str | None]] = [
     # ---- enable / user credentials -------------------------------------
     ("enable-secret", rf"\s*enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?{ENC_RUN}", "secrets", None),
     ("username-secret", rf"\s*username\s+\S+\s+(?:\S+\s+)*?(?:password|secret)\s+{ENC_RUN}", "secrets", None),
@@ -410,7 +449,7 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
 
     # ---- what a port and a VLAN are called ---------------------------------
     # Both of these are only recognisable from the block they sit in, so both
-    # are scoped: see BLOCK_SCOPES. They are families of their own rather than
+    # are scoped: see _BLOCK_SCOPES. They are families of their own rather than
     # part of `text` because they are the two places a customer name reaches
     # material that has to survive -- a reviewer needs the ports to stay
     # distinguishable, a VLAN name is a value the config elsewhere refers to,
@@ -435,7 +474,7 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
     # ordinary word, but no grammar except Arista's opens a `patch panel` block
     # for a line to be inside. That is a gate on evidence in the file rather
     # than on a guess about the file -- which is also why there is no vendor
-    # gate; see :data:`RULE_VENDORS`.
+    # gate; see :data:`_RULE_VENDORS`.
     #
     # The `panel` lookahead is not redundant with the scope. An IOS-style block
     # header is inside its own block (see ``Sanitiser._enter``), so without it
@@ -464,7 +503,7 @@ BUILTIN: list[tuple[str, str, str, str | None]] = [
 #: owns that material there. The pair is exhaustive and disjoint by
 #: construction: every description is matched by exactly one of
 #: ``interface-description`` and ``description``.
-OUTSIDE: dict[str, tuple[str, ...]] = {
+_OUTSIDE: dict[str, tuple[str, ...]] = {
     "description": ("interfaces",),
 }
 
@@ -488,7 +527,7 @@ OUTSIDE: dict[str, tuple[str, ...]] = {
 #: naming the dialect a test fixture has to be written in. Only rules whose
 #: vendor the pattern itself already asserts are listed. Absence is not a claim
 #: of portability -- it means unlabelled.
-RULE_VENDORS: dict[str, str] = {
+_RULE_VENDORS: dict[str, str] = {
     "junos-community": "juniper",
     "junos-location-body": "juniper",
     "junos-password": "juniper",
@@ -502,12 +541,12 @@ RULE_VENDORS: dict[str, str] = {
 _HANDLERS = {"snmp-host": "snmp-host"}
 
 _COMPILED: dict[str, tuple[re.Pattern, tuple[int, ...]]] = {
-    name: _compile(pattern) for name, pattern, _family, _stanza in BUILTIN
+    name: _compile(pattern) for name, pattern, _family, _stanza in _BUILTIN
 }
 
 #: the banner rule: name and family here, delimiter state machine in sanitise
-BANNER_RE = re.compile(r"^\s*banner\s+([\w-]+)\s+(.*)$", re.I)
-BANNER_RULE = ("banner", "text")
+_BANNER_RE = re.compile(r"^\s*banner\s+([\w-]+)\s+(.*)$", re.I)
+_BANNER_RULE = ("banner", "text")
 
 
 # ---------------------------------------------------------------------------
@@ -530,19 +569,19 @@ _BLOB: list[tuple[str, str, str, int]] = [
      "identity", 0),
 ]
 
-def _blob_rules() -> list[Rule]:
+def _blob_rules() -> list[_Rule]:
     out = []
     for name, pattern, family, flags in _BLOB:
         regex, targets = _compile(pattern, flags)
-        out.append(Rule(name=name, regex=regex, family=family, targets=targets,
-                        vendor=RULE_VENDORS.get(name)))
+        out.append(_Rule(name=name, regex=regex, family=family, targets=targets,
+                        vendor=_RULE_VENDORS.get(name)))
     return out
 
 
-BLOB_RULES: list[Rule] = _blob_rules()
+_BLOB_RULES: list[_Rule] = _blob_rules()
 
 #: opaque multi-line blocks: (start, end, name, family). The body is the target.
-BLOCK_STARTS = (
+_BLOCK_STARTS = (
     (re.compile(r"^\s*certificate\s+(?:self-signed|ca)?\s*\S*\s*(?:nvram:\S+)?\s*$", re.I),
      re.compile(r"^\s*quit\s*$", re.I), "certificate-block", "identity"),
     (re.compile(r"^\s*key-string\s*$", re.I),
@@ -562,45 +601,7 @@ DESCRIPTION_RULES = [
     for name in ("description", "acl-remark", "login-message")
 ]
 
-def _registry() -> dict[str, str]:
-    """name -> family for every named rule, in report order."""
-    reg = {name: family for name, _pattern, family, _stanza in BUILTIN}
-    reg[BANNER_RULE[0]] = BANNER_RULE[1]
-    reg.update({r.name: r.family for r in BLOB_RULES})
-    reg.update({name: family for _start, _end, name, family in BLOCK_STARTS})
-    return reg
-
-
-_FAMILY: dict[str, str] = _registry()
-
-
-def rule_names() -> list[str]:
-    """Every built-in rule name, in report order."""
-    return list(_FAMILY)
-
-
-def family_of(name: str) -> str:
-    """The family a built-in rule belongs to.
-
-    Raises ``KeyError`` for an unknown name; custom rules carry their own
-    family on the ``CustomRule`` and are never registered here.
-    """
-    try:
-        return _FAMILY[name]
-    except KeyError:
-        raise KeyError(f"unknown rule: {name!r}") from None
-
-
-def vendor_of(name: str) -> str | None:
-    """The dialect a rule's grammar comes from, or None if it is unlabelled.
-
-    Advisory: this answers a reporting question, never a matching one. See
-    :data:`RULE_VENDORS`.
-    """
-    return RULE_VENDORS.get(name)
-
-
-def build_rules(custom=()) -> list[Rule]:
+def _build_rules(custom=()) -> list[_Rule]:
     """Compile the keyword rule set.
 
     ``custom`` is a list of ``CustomRule`` appended after the built-ins. There
@@ -608,22 +609,283 @@ def build_rules(custom=()) -> list[Rule]:
     keeps still matches and still gets counted.
     """
     rules = [
-        Rule(name=name, regex=_COMPILED[name][0], family=family,
+        _Rule(name=name, regex=_COMPILED[name][0], family=family,
              targets=_COMPILED[name][1], stanza=stanza,
-             outside=OUTSIDE.get(name, ()), handler=_HANDLERS.get(name),
-             vendor=RULE_VENDORS.get(name))
-        for name, _pattern, family, stanza in BUILTIN
+             outside=_OUTSIDE.get(name, ()), handler=_HANDLERS.get(name),
+             vendor=_RULE_VENDORS.get(name))
+        for name, _pattern, family, stanza in _BUILTIN
     ]
     for c in custom:
         try:
             regex, targets = _compile(c.pattern)
         except re.error as exc:
             raise ValueError(f"custom rule {c.name!r}: bad regex: {exc}") from exc
-        rules.append(Rule(name=c.name, regex=regex,
+        rules.append(_Rule(name=c.name, regex=regex,
                           family=getattr(c, "family", "secrets") or "secrets",
                           targets=targets, stanza=getattr(c, "stanza", None),
                           custom=True))
     return rules
+
+
+@dataclass(frozen=True)
+class RuleCatalogue:
+    """All rule forms behind one immutable execution and reporting interface."""
+
+    _ordinary: tuple[_Rule, ...]
+    _searched: tuple[_Rule, ...]
+    _blocks: tuple[tuple[re.Pattern, re.Pattern, str, str], ...]
+
+    @classmethod
+    def builtins(cls) -> RuleCatalogue:
+        return cls(tuple(_build_rules()), tuple(_BLOB_RULES), tuple(_BLOCK_STARTS))
+
+    def configured(self, custom=()) -> RuleCatalogue:
+        """Return a catalogue with custom rules appended to ordinary rules."""
+        custom = tuple(custom)
+        if not custom:
+            return self
+        existing = {r.name for r in self._ordinary + self._searched}
+        existing.update(name for _start, _end, name, _family in self._blocks)
+        existing.add(_BANNER_RULE[0])
+        seen: set[str] = set()
+        for item in custom:
+            if item.name in existing or item.name in seen:
+                raise ValueError(f"custom rule {item.name!r}: duplicate rule name")
+            seen.add(item.name)
+        compiled = tuple(_build_rules(custom)[-len(custom):])
+        return type(self)(self._ordinary + compiled, self._searched, self._blocks)
+
+    def inventory(self) -> tuple[RuleInfo, ...]:
+        """Every rule in report order, without executable representations."""
+        source_patterns = {name: pattern for name, pattern, _family, _scope
+                           in _BUILTIN}
+        ordinary = tuple(
+            RuleInfo(r.name, r.family, r.vendor, r.custom, r.stanza, r.outside,
+                     source_patterns.get(r.name, r.regex.pattern))
+            for r in self._ordinary if not r.custom
+        )
+        custom = tuple(
+            RuleInfo(r.name, r.family, r.vendor, True, r.stanza, r.outside,
+                     r.regex.pattern)
+            for r in self._ordinary if r.custom
+        )
+        banner = (RuleInfo(_BANNER_RULE[0], _BANNER_RULE[1], None, False, None,
+                           (), _BANNER_RE.pattern),)
+        searched = tuple(
+            RuleInfo(r.name, r.family, r.vendor, r.custom, r.stanza, r.outside,
+                     r.regex.pattern)
+            for r in self._searched
+        )
+        blocks = tuple(
+            RuleInfo(name, family, _RULE_VENDORS.get(name), False, None, (),
+                     start.pattern, end.pattern)
+            for start, end, name, family in self._blocks
+        )
+        return ordinary + banner + searched + blocks + custom
+
+    @staticmethod
+    def _decision(value: RuleReplacement) -> RuleReplacement:
+        if not isinstance(value, RuleReplacement):
+            raise TypeError("rule replacement callback must return RuleReplacement")
+        return value
+
+    @staticmethod
+    def _spans(rule: _Rule, match: re.Match) -> list[tuple[int, int, str]]:
+        spans: list[tuple[int, int, str]] = []
+        for index in rule.targets:
+            start, end = match.span(index)
+            value = match.group(index)
+            if start < 0 or not value or not value.strip():
+                continue
+            if spans and start < spans[-1][1]:
+                continue
+            spans.append((start, end, value))
+        return spans
+
+    @staticmethod
+    def _scope(rule: _Rule, inside: tuple[str, ...]) -> bool:
+        return (not rule.stanza or rule.stanza in inside) and not any(
+            scope in inside for scope in rule.outside)
+
+    def _splice(self, rule: _Rule, match: re.Match, text: str,
+                replace: Callable[[RuleHit], RuleReplacement]) -> str:
+        for start, end, selected in reversed(self._spans(rule, match)):
+            quote = (selected[0] if len(selected) > 1
+                     and selected[0] == selected[-1]
+                     and selected[0] in "\"'" else "")
+            value = selected[1:-1] if quote else selected
+            if rule.handler == "snmp-host":
+                tokens, out, index = value.split(), [], 0
+                while index < len(tokens):
+                    token = tokens[index]
+                    if token.lower() in SNMP_HOST_KEYWORDS:
+                        out.append(token)
+                        index += 1
+                        continue
+                    decision = self._decision(replace(
+                        RuleHit(rule.name, rule.family, token)))
+                    out.append(token if decision.text is None else decision.text)
+                    out.extend(tokens[index + 1:])
+                    break
+                replacement = " ".join(out)
+            else:
+                decision = self._decision(replace(
+                    RuleHit(rule.name, rule.family, value)))
+                if decision.text is None:
+                    continue
+                replacement = decision.text
+            if quote:
+                replacement = f"{quote}{replacement}{quote}"
+            text = f"{text[:start]}{replacement}{text[end:]}"
+        return text
+
+    def _line(self, text: str, inside: tuple[str, ...],
+              replace: Callable[[RuleHit], RuleReplacement]) -> str:
+        for rule in self._ordinary:
+            if not self._scope(rule, inside):
+                continue
+            match = rule.regex.match(text)
+            if match:
+                text = self._splice(rule, match, text, replace)
+        for rule in self._searched:
+            for match in reversed(list(rule.regex.finditer(text))):
+                text = self._splice(rule, match, text, replace)
+        return text
+
+    def transform(self, lines: Iterable[str], *,
+                  replace: Callable[[RuleHit], RuleReplacement],
+                  finish_line: Callable[[str], str] = lambda line: line,
+                  ) -> list[str]:
+        """Transform rules in their canonical order, including scoped state."""
+        source = [line.rstrip("\n") for line in lines]
+        out: list[str] = []
+        stanza: list[str] = []
+        ios_block: str | None = None
+        index = 0
+        while index < len(source):
+            raw = source[index]
+            if raw.strip() and not raw[:1].isspace():
+                ios_block = next((name for name, pat in _BLOCK_SCOPES
+                                  if pat.match(raw)), None)
+            set_match = _SET_SCOPE.match(raw)
+            line_scope = (set_match.group(1).lower(),) if set_match else ()
+            inside = tuple(stanza) + ((ios_block,) if ios_block else ()) + line_scope
+
+            block = next(((start, end, name, family)
+                          for start, end, name, family in self._blocks
+                          if start.search(raw)), None)
+            if block:
+                _start, end, name, family = block
+                out.append(raw)
+                body: list[str] = []
+                index += 1
+                while index < len(source) and not end.search(source[index]):
+                    body.append(source[index])
+                    index += 1
+                value = "\n".join(body).strip()
+                decision = self._decision(replace(RuleHit(name, family, value))) \
+                    if value else RuleReplacement.unchanged()
+                if decision.text is None:
+                    out.extend(body)
+                else:
+                    indent = next((line[:len(line) - len(line.lstrip())]
+                                   for line in body if line.strip()), "")
+                    out.append(f"{indent or '  '}{decision.text}")
+                if index < len(source):
+                    out.append(source[index])
+                index += 1
+                continue
+
+            banner = _BANNER_RE.match(raw)
+            if banner:
+                kind, rest = banner.group(1), banner.group(2)
+                stripped = rest.strip()
+                if stripped:
+                    if len(stripped) <= 2 and not stripped[0].isalnum():
+                        delim, body, close = stripped, [], None
+                        cursor = index + 1
+                        while cursor < len(source):
+                            if delim in source[cursor]:
+                                close = cursor
+                                break
+                            body.append(source[cursor])
+                            cursor += 1
+                        value = "\n".join(body).strip()
+                        decision = self._decision(replace(
+                            RuleHit(_BANNER_RULE[0], _BANNER_RULE[1], value)))
+                        if decision.active:
+                            out.append(f"banner {kind} {delim}")
+                            out.extend(body if decision.text is None else [decision.text])
+                            if close is not None:
+                                out.append(delim)
+                            index = (close + 1) if close is not None else len(source)
+                            continue
+                    else:
+                        delim = stripped[0]
+                        closing = stripped.find(delim, 1)
+                        if closing >= 0:
+                            body = stripped[1:closing]
+                            decision = self._decision(replace(
+                                RuleHit(_BANNER_RULE[0], _BANNER_RULE[1], body)))
+                            if decision.active:
+                                out.append(raw if decision.text is None else
+                                           f"banner {kind} {delim}{decision.text}{delim}")
+                                index += 1
+                                continue
+            out.append(finish_line(self._line(raw, inside, replace)))
+            stanza_match = _STANZA_OPEN.match(raw)
+            if stanza_match:
+                stanza.append(stanza_match.group(1).lower())
+            elif _STANZA_CLOSE.match(raw) and stanza:
+                stanza.pop()
+            index += 1
+        return out
+
+    def verification_view(self, lines: Iterable[str], *,
+                          blind: Callable[[RuleInfo], bool]) -> list[str]:
+        """Return line-aligned text with selected rule values blanked out."""
+        selected = {info.name for info in self.inventory() if blind(info)}
+
+        def mask(hit: RuleHit) -> RuleReplacement:
+            if hit.name not in selected:
+                return RuleReplacement.keep()
+            if not hit.value:
+                return RuleReplacement.unchanged()
+            return RuleReplacement.with_text(" " * len(hit.value))
+
+        # _Rule values retain their length. Multi-line bodies are exceptional:
+        # transform can collapse an active body, so mask them line by line.
+        source = [line.rstrip("\n") for line in lines]
+        masked = list(source)
+        block_names = {name for _s, _e, name, _f in self._blocks} & selected
+        for start, end, name, _family in self._blocks:
+            if name not in block_names:
+                continue
+            active = False
+            for index, line in enumerate(source):
+                if not active and start.search(line):
+                    active = True
+                elif active and end.search(line):
+                    active = False
+                elif active:
+                    masked[index] = " " * len(line)
+        if _BANNER_RULE[0] in selected:
+            delim: str | None = None
+            for index, line in enumerate(source):
+                if delim is not None:
+                    if delim in line:
+                        delim = None
+                    else:
+                        masked[index] = " " * len(line)
+                    continue
+                match = _BANNER_RE.match(line)
+                if not match:
+                    continue
+                stripped = match.group(2).strip()
+                if (stripped and len(stripped) <= 2
+                        and not stripped[0].isalnum()):
+                    delim = stripped
+        return self.transform(masked, replace=mask)
 
 
 # ---------------------------------------------------------------------------
@@ -673,8 +935,8 @@ MAC_RE = re.compile(
 )
 EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
 
-STANZA_OPEN = re.compile(r"^\s*([\w-]+)[^{}]*\{\s*$")
-STANZA_CLOSE = re.compile(r"^\s*\}\s*$")
+_STANZA_OPEN = re.compile(r"^\s*([\w-]+)[^{}]*\{\s*$")
+_STANZA_CLOSE = re.compile(r"^\s*\}\s*$")
 
 #: IOS / EOS / NX-OS block headers, and the scope each opens: ``(scope, regex)``.
 #: A block is a line at column zero plus the indented lines under it, so these
@@ -690,7 +952,7 @@ STANZA_CLOSE = re.compile(r"^\s*\}\s*$")
 #: merely start with the word -- ``vlan internal allocation policy ascending``,
 #: ``vlan configuration 905`` -- outside any scope. ``interface Vlan905`` is
 #: scope ``interfaces``: an SVI is a port, not a VLAN definition.
-BLOCK_SCOPES = (
+_BLOCK_SCOPES = (
     ("interfaces", re.compile(r"^interface\s+\S", re.I)),
     ("vlans", re.compile(r"^vlan\s+(?:\d|database\b)", re.I)),
     # Arista's L2 cross-connects. This is the one scope whose name is not
@@ -705,4 +967,4 @@ BLOCK_SCOPES = (
 #: a JunOS ``set`` line, whose scope is the word after ``set`` and lasts for
 #: that line only -- ``set interfaces xe-0/0/0 description …`` is inside
 #: ``interfaces`` without any enclosing block to be inside of.
-SET_SCOPE = re.compile(r"\s*set\s+([\w-]+)\b", re.I)
+_SET_SCOPE = re.compile(r"\s*set\s+([\w-]+)\b", re.I)

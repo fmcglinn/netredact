@@ -131,9 +131,8 @@ _DESC_FAMILIES = ("text", "interfaces")
 #: tuple so a new family cannot be renderable but unknown here.
 _FAMILIES = frozenset(FAMILIES)
 
-#: rule -> family for every rule this module renders by name. Secrets rules
-#: fall through to ``rules.family_of`` (lazily imported, to keep this module
-#: independent of the rule table); custom rules to ``config.custom``.
+#: rule -> family for common rule names. Other built-ins fall through to the
+#: catalogue inventory; custom rules fall through to ``config.custom``.
 _KEY_FAMILY = {
     "description": "text", "acl-remark": "text", "login-message": "text",
     "banner": "text", "location": "text", "contact": "text",
@@ -315,7 +314,8 @@ class Pseudonymiser:
                 return rule.family
         try:
             from . import rules
-            fam = rules.family_of(key)
+            fam = next(info.family for info in rules.RuleCatalogue.builtins().inventory()
+                       if info.name == key)
         except Exception as exc:                       # unknown rule name
             raise ValueError(f"render: unknown key {key!r}") from exc
         if fam not in _FAMILIES:

@@ -9,13 +9,22 @@ from netredact import (
     Config,
     ConfigError,
     CustomRule,
-    family_of,
+    RuleCatalogue,
     find_config,
-    rule_names,
 )
 from netredact.config import RULE_SECTIONS
 
 from .conftest import SALT, policy
+
+_RULES = RuleCatalogue.builtins().inventory()
+
+
+def rule_names():
+    return [info.name for info in _RULES]
+
+
+def family_of(name):
+    return next(info.family for info in _RULES if info.name == name)
 
 
 def load(tmp_path, body: str) -> Config:

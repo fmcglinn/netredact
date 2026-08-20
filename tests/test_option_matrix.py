@@ -29,7 +29,7 @@ from dataclasses import fields
 
 import pytest
 
-from netredact import Config, family_of, rule_names, sanitise_text
+from netredact import Config, RuleCatalogue, sanitise_text
 from netredact.addresses import V4_CLASS_NAMES, V6_CLASS_NAMES
 from netredact.config import (
     ACTIONS,
@@ -48,6 +48,16 @@ from netredact.pseudonymise import DESC_REMOVED, REDACT_CONST, REMOVED
 from netredact.vendors import VENDOR_HINTS
 
 from .conftest import SALT, policy, section
+
+_RULES = RuleCatalogue.builtins().inventory()
+
+
+def rule_names():
+    return [info.name for info in _RULES]
+
+
+def family_of(name):
+    return next(info.family for info in _RULES if info.name == name)
 
 #: any ``<PREFIX-tag>`` marker, whichever family produced it
 MARKER_RE = re.compile(r"<[A-Z0-9-]+-[0-9a-f]{1,6}>")

@@ -175,8 +175,8 @@ _REDACTED_NAME = {family: REDACT_CONST[family].lower()
                   for family in ("hostnames", "domains", "usernames", "emails")}
 
 
-def _shape_blind(cfg: Config) -> tuple[re.Pattern | None, list[tuple]]:
-    """What the shape checks must not look at, given this policy.
+def _shape_blind(info: R.RuleInfo, cfg: Config) -> bool:
+    """Whether shape checks must ignore values selected by this rule.
 
     THE PRINCIPLE, which is subtle -- do not "simplify" it away:
 
@@ -191,18 +191,11 @@ def _shape_blind(cfg: Config) -> tuple[re.Pattern | None, list[tuple]]:
       the whole point of the safety net: setting ``enable-secret = "keep"`` must
       still fail ``--strict``. Nothing here ever exempts ``secrets``.
 
-    Returns the regex to blank out of the line, and the kept block rules whose
-    *body* -- lines the start/end regexes never see -- must be skipped too.
+    The catalogue applies this decision through the same traversal used by the
+    sanitiser, so verification never learns how a rule is represented.
     """
-    patterns: list[str] = []
-    for rule in R.build_rules(cfg.custom) + R.BLOB_RULES:
-        if rule.family in SHAPE_BLIND_FAMILIES and \
-                cfg.action_for_rule(rule.name) == "keep":
-            patterns.append(rule.regex.pattern)
-    blocks = [(start, end) for start, end, name, family in R.BLOCK_STARTS
-              if family in SHAPE_BLIND_FAMILIES and cfg.action_for_rule(name) == "keep"]
-    blind = re.compile("|".join(f"(?:{p})" for p in patterns), re.I) if patterns else None
-    return blind, blocks
+    return (info.family in SHAPE_BLIND_FAMILIES
+            and cfg.action_for_rule(info.name) == "keep")
 
 
 def _pem_handled(lines: list[str], idx: int) -> bool:
@@ -288,23 +281,13 @@ def verify(lines, config: Config | None = None) -> list[Finding]:
         policy = cfg.ipv4 if addr.version == 4 else cfg.ipv6
         return policy.action(klass) != "keep"
 
-    blind, kept_blocks = _shape_blind(cfg)
+    catalogue = R.RuleCatalogue.builtins().configured(cfg.custom)
+    shaped_lines = catalogue.verification_view(
+        lines, blind=lambda info: _shape_blind(info, cfg))
     findings: list[Finding] = []
-    block_end: re.Pattern | None = None
-    for i, line in enumerate(lines, 1):
+    for i, (line, shaped_line) in enumerate(zip(lines, shaped_lines, strict=True), 1):
         stripped = ignore.sub(" ", line)
-        # inside a kept identity / text block the body is the kept material
-        in_kept_block = block_end is not None
-        if block_end is not None:
-            if block_end.search(line):
-                block_end = None
-        else:
-            for start, end in kept_blocks:
-                if start.search(line):
-                    block_end, in_kept_block = end, True
-                    break
-        shaped = "" if in_kept_block else (blind.sub(" ", stripped) if blind
-                                           else stripped)
+        shaped = ignore.sub(" ", shaped_line)
         for name, pat in active:
             if pat.search(shaped if name in SHAPE_CHECKS else stripped):
                 findings.append(Finding(i, name, line.strip()))

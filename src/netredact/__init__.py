@@ -68,7 +68,7 @@ from .config import (
     find_config,
 )
 from .pseudonymise import PoolExhausted, Pseudonymiser
-from .rules import REMOVED, build_rules, family_of, rule_names
+from .rules import REMOVED, RuleCatalogue, RuleHit, RuleInfo, RuleReplacement
 from .sanitise import Result, Sanitiser, sanitise_text
 from .vendors import detect_vendor
 from .verify import Finding, check_names, verify
@@ -86,5 +86,5 @@ __all__ = [
     "sanitise_text", "Sanitiser", "Result",
     "Pseudonymiser", "PoolExhausted", "detect_vendor",
     "verify", "Finding", "check_names",
-    "build_rules", "rule_names", "family_of", "REMOVED",
+    "RuleCatalogue", "RuleInfo", "RuleHit", "RuleReplacement", "REMOVED",
 ]

@@ -5,12 +5,9 @@ Two passes over the input:
 1. :meth:`Sanitiser.collect` learns the identities this device uses -- its
    hostnames, domains and usernames -- because those are only recognisable
    from the lines that declare them. Nothing is rewritten here.
-2. :meth:`Sanitiser.run` transforms line by line, tracking which blocks the
-   line is inside (so ``community`` is an SNMP secret inside ``snmp { … }`` and
-   never a BGP community, and a ``description`` under ``interface Gi0/0`` is an
-   interface description and not any other kind) and the delimiter state of a
-   multi-line banner. Both kinds of block share one set of names: see
-   :meth:`Sanitiser._enter` and ``rules.BLOCK_SCOPES``.
+2. :meth:`Sanitiser.run` asks the rule catalogue to traverse the input. The
+   catalogue owns scope, multiline state and structural splicing; this module
+   supplies policy-dependent replacement and non-rule substitutions.
 
 A rule only ever *selects* a span. What happens to the span comes from the
 policy, resolved once per rule name in :meth:`Config.action_for_rule`, and is
@@ -143,25 +140,6 @@ def policy_summary(cfg: Config) -> str:
     return ", ".join(parts)
 
 
-@dataclass
-class _Block:
-    """A multi-line block being consumed: its body is the target."""
-
-    end: re.Pattern
-    name: str
-    action: str
-    body: list[str] = field(default_factory=list)
-
-
-@dataclass
-class _Banner:
-    """A banner being consumed, waiting for its closing delimiter."""
-
-    delim: str
-    action: str
-    body: list[str] = field(default_factory=list)
-
-
 class Sanitiser:
     """Stateful, single-use: build one per file."""
 
@@ -169,43 +147,27 @@ class Sanitiser:
                  pseudo: Pseudonymiser | None = None):
         self.cfg = config or Config()
         self.p = pseudo or Pseudonymiser(salt, self.cfg)
-        self.rules = R.build_rules(self.cfg.custom)
+        self.catalogue = R.RuleCatalogue.builtins().configured(self.cfg.custom)
         self.counts: Counter = Counter()
         self.kept_counts: Counter = Counter()
         self.hostnames: list[str] = []
         self.domains: list[str] = []
         self.usernames: list[str] = []
         self._name_res: list[tuple[re.Pattern, str]] = []
-        self.stanza: list[str] = []
-        #: the IOS-style block the current line is in, from R.BLOCK_SCOPES
-        self.block: str | None = None
-        #: every block the current line is inside, JunOS stanzas and IOS blocks
-        #: together, resolved once per line by :meth:`_enter`
-        self.inside: tuple[str, ...] = ()
-
         # name -> family for everything that can be counted, and name -> action
         # for every rule. Resolving the action once means a bad override is an
         # error before any output is produced, not halfway through a file.
         self.families: dict[str, str] = {}
         self._actions: dict[str, str] = {}
-        for name, family in self._rule_families():
-            self.families[name] = family
-            self._actions[name] = self.cfg.action_for_rule(name)
+        for info in self.catalogue.inventory():
+            self.families[info.name] = info.family
+            self._actions[info.name] = self.cfg.action_for_rule(info.name)
         for family in ("ipv4", "ipv6", "macs", "hostnames", "domains",
                        "usernames", "emails"):
             self.families[family] = family
         self._family_actions = {f: self.cfg.action_for(f)
                                 for f in ("hostnames", "domains", "usernames",
                                           "emails")}
-
-    def _rule_families(self):
-        for rule in self.rules:
-            yield rule.name, rule.family
-        for rule in R.BLOB_RULES:
-            yield rule.name, rule.family
-        for _start, _end, name, family in R.BLOCK_STARTS:
-            yield name, family
-        yield R.BANNER_RULE
 
     # -- pass 1: learn the identities this device uses ---------------------
     def collect(self, lines) -> None:
@@ -265,181 +227,25 @@ class Sanitiser:
 
     # -- pass 2: transform -------------------------------------------------
     def run(self, lines) -> list[str]:
-        out: list[str] = []
-        block: _Block | None = None
-        banner: _Banner | None = None
-        banner_action = self._actions[R.BANNER_RULE[0]]
+        return self.catalogue.transform(
+            lines, replace=self._replace_rule_hit, finish_line=self.line)
 
-        for line in lines:
-            raw = line.rstrip("\n")
-
-            if block is not None:
-                if block.end.search(raw):
-                    self._flush_block(block, out)
-                    out.append(raw)
-                    block = None
-                else:
-                    block.body.append(raw)
-                continue
-
-            if banner is not None:
-                if banner.delim in raw:
-                    self._flush_banner(banner, out)
-                    out.append(banner.delim)
-                    banner = None
-                else:
-                    banner.body.append(raw)
-                continue
-
-            self._enter(raw)
-
-            hit = False
-            for start, end, name, _family in R.BLOCK_STARTS:
-                if start.search(raw):
-                    out.append(raw)
-                    block = _Block(end, name, self._actions[name])
-                    hit = True
-                    break
-            if hit:
-                continue
-
-            m = R.BANNER_RE.match(raw)
-            if m and banner_action != "keep":
-                banner = self._banner(m, banner_action, out)
-                continue
-            if m:
-                # kept banners fall through to the normal path, as before; the
-                # body lines are then ordinary lines
-                self.kept_counts[R.BANNER_RULE[0]] += 1
-
-            out.append(self.line(raw))
-
-            # JunOS stanza tracking, so `community` is only an SNMP secret
-            # inside the snmp stanza and never a BGP community. The stack is
-            # tested for membership, so a nested stanza counts too.
-            sm = R.STANZA_OPEN.match(raw)
-            if sm:
-                self.stanza.append(sm.group(1).lower())
-            elif R.STANZA_CLOSE.match(raw) and self.stanza:
-                self.stanza.pop()
-
-        if block is not None:                 # truncated file: still act
-            self._flush_block(block, out)
-        if banner is not None:
-            self._flush_banner(banner, out)
-        return out
-
-    # -- scope: which blocks this line is inside ---------------------------
-    def _enter(self, raw: str) -> None:
-        """Resolve the blocks ``raw`` is inside, before it is transformed.
-
-        Two kinds of block, one set of names (see ``rules.BLOCK_SCOPES``):
-
-        * the JunOS brace stack, maintained in :meth:`run` *after* each line,
-          because a stanza opener is not inside itself -- ``location {`` is a
-          stanza opener, not a location;
-        * an IOS-style block, which is a line at column zero plus the indented
-          lines under it. Here the header IS part of its own block, and any
-          other unindented line -- including the bare ``!`` -- ends it. So this
-          is resolved before the line, not after.
-
-        A JunOS ``set`` line brings its own scope for that one line, so
-        ``set interfaces xe-0/0/0 description …`` is inside ``interfaces``
-        without any enclosing block at all.
-
-        Block bodies and banner bodies never reach here: their content is
-        arbitrary text, and a banner that mentions an interface must not open a
-        scope.
-        """
-        if raw.strip() and not raw[:1].isspace():
-            self.block = next((name for name, pat in R.BLOCK_SCOPES
-                               if pat.match(raw)), None)
-        m = R.SET_SCOPE.match(raw)
-        line_scope = (m.group(1).lower(),) if m else ()
-        self.inside = tuple(self.stanza) + (
-            (self.block,) if self.block else ()) + line_scope
-
-    def _in_scope(self, rule: R.Rule) -> bool:
-        """True if this rule may act on the line :meth:`_enter` last saw."""
-        if rule.stanza and rule.stanza not in self.inside:
-            return False
-        return not any(name in self.inside for name in rule.outside)
-
-    # -- multi-line material ----------------------------------------------
-    def _flush_block(self, block: _Block, out: list[str]) -> None:
-        """Emit the body of a block: one replacement, or the body verbatim."""
-        body = "\n".join(block.body).strip()
-        new = self._whole(block.name, block.action, body)
-        if new is None:
-            out.extend(block.body)
-            return
-        indent = ""
-        for raw in block.body:
-            if raw.strip():
-                indent = raw[:len(raw) - len(raw.lstrip())]
-                break
-        out.append(f"{indent or '  '}{new}")
-
-    def _banner(self, m, action: str, out: list[str]) -> _Banner | None:
-        """Start a banner. Returns the state, or None if it ended on this line."""
-        kind, rest = m.group(1), m.group(2)
-        stripped = rest.strip()
-        if not stripped:
-            out.append(m.group(0))
-            return None
-        if len(stripped) <= 2 and not stripped[0].isalnum():
-            out.append(f"banner {kind} {stripped}")    # e.g. `banner motd ^C`
-            return _Banner(stripped, action)
-        delim = stripped[0]
-        if delim in stripped[1:]:                      # all on one line
-            body = stripped[1:stripped.index(delim, 1)]
-            new = self._whole(R.BANNER_RULE[0], action, body)
-            out.append(m.group(0) if new is None
-                       else f"banner {kind} {delim}{new}{delim}")
-            return None
-        out.append(f"banner {kind} {delim}")
-        return _Banner(delim, action)
-
-    def _flush_banner(self, banner: _Banner, out: list[str]) -> None:
-        new = self._whole(R.BANNER_RULE[0], banner.action,
-                          "\n".join(banner.body).strip())
-        if new is None:
-            out.extend(banner.body)
-        else:
-            out.append(new)
-
-    def _whole(self, key: str, action: str, value: str) -> str | None:
-        """Replacement for a whole multi-line body, or None to leave it be.
-
-        None means one of three things, none of which is a change: the body was
-        empty, it is already one of this key's own renderings (so a second run
-        is a no-op), or the action is ``keep`` -- which is counted, because the
-        report has to name what survived.
-        """
+    def _replace_rule_hit(self, hit: R.RuleHit) -> R.RuleReplacement:
+        """Classify and render one value selected by the rule catalogue."""
+        key, value = hit.name, hit.value
+        action = self._actions[key]
         if not value:
-            return None
-        if self.p.is_rendered(key, value):
-            return None
+            return R.RuleReplacement.unchanged()
         if action == "keep":
             self.kept_counts[key] += 1
-            return None
+            return R.RuleReplacement.keep()
+        if self.p.is_rendered(key, value):
+            return R.RuleReplacement.unchanged()
         self.counts[key] += 1
-        return self.p.render(key, action, value)
+        return R.RuleReplacement.with_text(self.p.render(key, action, value))
 
     # -- one line ----------------------------------------------------------
     def line(self, text: str) -> str:
-        for rule in self.rules:
-            if not self._in_scope(rule):
-                continue
-            m = rule.regex.match(text)
-            if m:
-                text = self._splice(rule, m, text)
-
-        # searched, not anchored, so a line can hold several; right to left
-        for rule in R.BLOB_RULES:
-            for m in reversed(list(rule.regex.finditer(text))):
-                text = self._splice(rule, m, text)
-
         # MAC before IPv6 (both eat hex and colons); names last
         text = R.MAC_RE.sub(self._sub_mac, text)
         if self._family_actions["emails"] == "keep":
@@ -454,80 +260,6 @@ class Sanitiser:
         for pat, family in self._name_res:
             text = pat.sub(self._name_sub(family), text)
         return text
-
-    def _splice(self, rule: R.Rule, m, text: str) -> str:
-        """Rewrite every target group of one match, right to left.
-
-        Each of ``rule.targets`` is an independent span, so a rule can carry
-        several secrets on one line. Working from the last span backwards keeps
-        the spans that have not been rewritten yet at the offsets ``m.span``
-        reported.
-        """
-        action = self._actions.get(rule.name) or self.cfg.action_for_rule(rule.name)
-        for start, end, value in reversed(self._spans(rule, m)):
-            new = self._value(rule, action, value)
-            if new is not None:
-                text = f"{text[:start]}{new}{text[end:]}"
-        return text
-
-    @staticmethod
-    def _spans(rule: R.Rule, m) -> list[tuple[int, int, str]]:
-        """The target spans of a match, in order, non-overlapping.
-
-        A group that did not participate is skipped, and a nested group is
-        dropped in favour of the one that encloses it -- rewriting both would
-        splice a replacement into a span that no longer exists.
-        """
-        spans = []
-        for i in rule.targets:
-            start, end = m.span(i)
-            value = m.group(i)
-            if start < 0 or not value or not value.strip():
-                continue
-            if spans and start < spans[-1][1]:
-                continue
-            spans.append((start, end, value))
-        return spans
-
-    def _value(self, rule: R.Rule, action: str, value: str) -> str | None:
-        """The replacement for one target span, or None to leave it alone."""
-        if rule.handler == "snmp-host":
-            return self._snmp_host(rule.name, action, value)
-        if self.p.is_rendered(rule.name, value):
-            return None                       # already ours: a re-run is a no-op
-        if action == "keep":
-            self.kept_counts[rule.name] += 1
-            return None
-        quote = (value[0] if len(value) > 1 and value[0] == value[-1]
-                 and value[0] in "\"'" else "")
-        new = self.p.render(rule.name, action,
-                            value[1:-1] if quote else value)
-        self.counts[rule.name] += 1
-        return f"{quote}{new}{quote}" if quote else new
-
-    def _snmp_host(self, key: str, action: str, region: str) -> str:
-        """Act on the community / v3 user name in an `snmp-server host` line.
-
-        The target is the whole token region after the destination, because
-        which token is the secret depends on the keywords in front of it.
-        """
-        toks, out, i = region.split(), [], 0
-        while i < len(toks):
-            if toks[i].lower() in R.SNMP_HOST_KEYWORDS:
-                out.append(toks[i])
-                i += 1
-                continue
-            if self.p.is_rendered(key, toks[i]):
-                out.append(toks[i])
-            elif action == "keep":
-                self.kept_counts[key] += 1
-                out.append(toks[i])
-            else:
-                out.append(self.p.render(key, action, toks[i]))
-                self.counts[key] += 1
-            out.extend(toks[i + 1:])
-            break
-        return " ".join(out)
 
     # -- substitution callbacks -------------------------------------------
     # Addresses and MACs do not go through `render`: their action is finer than
