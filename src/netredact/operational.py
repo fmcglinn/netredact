@@ -15,6 +15,8 @@ _PREFIX = {
     "policy-statement": ("POLICY", "policy"),
     "vrf": ("VRF", "vrf"),
     "peer-group": ("PEER-GROUP", "peer-group"),
+    "label-switched-path": ("LSP", "lsp"),
+    "configuration-group": ("CONFIG-GROUP", "config-group"),
 }
 
 _RESERVED_VRFS = {"default", "global", "none"}
@@ -31,6 +33,8 @@ class OperationalNames:
         self.handled: set[str] = set()
         self._brace_depth = 0
         self._term_parents: list[tuple[int, str, str]] = []
+        #: brace depth at which a `groups {` block names its groups, if inside one
+        self._group_block_depth: int | None = None
 
     def _render(self, kind: str, value: str, *, term: bool = False,
                 context: str = "") -> str:
@@ -139,6 +143,49 @@ class OperationalNames:
         ):
             line = self._replace_group(line, pat, vrf)
 
+        # JunOS MPLS LSP names. The keyword carries the name in both
+        # syntaxes and at any depth, so a declaration inside a configuration
+        # group is the same match as one under `protocols mpls`. `lsp-next-hop`
+        # is guarded against `-`, so a p2mp tree name -- a namespace of its own,
+        # and not this type -- is left alone.
+        for pat in (
+            r"(\blabel-switched-path\s+)([^\s{};]+)",
+            r"((?<![\w-])lsp-next-hop\s+)([^\s{};]+)",
+        ):
+            line = self._replace_group(
+                line, pat,
+                lambda value: self._render("label-switched-path", value))
+
+        # JunOS configuration groups. In `set` form the name follows the
+        # keyword; in brace form `groups {` opens a block whose direct children
+        # ARE the names, which is why the declaration needs the depth and not
+        # just the line. `apply-groups` and `apply-groups-except` reference a
+        # group from any hierarchy level, in a bare or a bracketed list form.
+        if (self._group_block_depth is not None
+                and self._brace_depth < self._group_block_depth):
+            self._group_block_depth = None            # the block has closed
+        if self._brace_depth == self._group_block_depth:
+            line = re.sub(
+                r"^(\s*)([^\s{};]+)(?=\s*\{)",
+                lambda m: m.group(1) + self._render("configuration-group",
+                                                    m.group(2)),
+                line)
+        group_patterns = (
+            r"^(\s*(?:(?:set|delete|deactivate|activate)\s+)?groups\s+)"
+            r"([^\s{};]+)",
+            r"((?<![\w-])apply-groups(?:-except)?\s+)(?!\[)([^\s{};]+)",
+        )
+        for pat in group_patterns:
+            line = self._replace_group(
+                line, pat,
+                lambda value: self._render("configuration-group", value))
+        line = re.sub(
+            r"((?<![\w-])apply-groups(?:-except)?\s+\[)([^]]+)(\])",
+            lambda m: m.group(1) + re.sub(
+                r"[^\s{};]+",
+                lambda n: self._render("configuration-group", n.group(0)),
+                m.group(2)) + m.group(3), line, flags=re.I)
+
         # BGP peer-group/group declarations and references.
         for pat in (
             r"(\bneighbor\s+)([^\s]+)(?=\s+peer\s+group\s*$)",
@@ -166,6 +213,8 @@ class OperationalNames:
         opens, closes = original.count("{"), original.count("}")
         if parent and opens:
             self._term_parents.append((self._brace_depth + opens, *parent))
+        if opens and re.match(r"\s*groups\s*\{", original, re.I):
+            self._group_block_depth = self._brace_depth + opens
         self._brace_depth += opens - closes
         while self._term_parents and self._brace_depth < self._term_parents[-1][0]:
             self._term_parents.pop()

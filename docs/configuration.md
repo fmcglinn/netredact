@@ -140,10 +140,33 @@ junos-location-body = "redact"
 ## `[operational-names]`
 
 Typed operational identifiers default to `keep`. Options are
-`acl-firewall-filter`, `route-map`, `prefix-list`, `policy-statement`, `vrf`
-and `peer-group`. Firewall-filter and policy term names inherit their parent's
-action. `pseudo` preserves supported declarations and references; `redact`
-may make output unloadable.
+`acl-firewall-filter`, `route-map`, `prefix-list`, `policy-statement`, `vrf`,
+`peer-group`, `label-switched-path` and `configuration-group`. Firewall-filter
+and policy term names inherit their parent's action. `pseudo` preserves
+supported declarations and references; `redact` may make output unloadable.
+
+`label-switched-path` covers JunOS MPLS LSP names: the `label-switched-path`
+and `static-label-switched-path` declarations, and the `lsp-next-hop`
+references to them. The keyword carries the name in both the `set` and the
+curly-brace syntax and at any depth, so an LSP declared inside a `groups`
+stanza is treated the same as one under `protocols mpls`. Two names LSPs sit
+next to are namespaces of their own and are deliberately out of scope: a
+`primary` / `secondary` named path, and a `p2mp` tree.
+
+`configuration-group` covers JunOS configuration groups: the `set groups NAME`
+declaration, the names a `groups { ... }` block declares as its direct
+children, and every `apply-groups` / `apply-groups-except` reference, bare or
+in a bracketed list. The configuration nested *inside* a group is not a group
+name and is acted on by whichever selector owns it, so a group is not a hiding
+place and not a second set of rules. `groups` is selected as a statement, not
+as a word: Cisco's `object-group` is untouched.
+
+An operational name is treated as one whole value. Names very often encode
+other identities -- `gncg-cor1_to_rcbc-agr1-1` carries two device names -- and
+what separates them differs per network, so netredact does not take a name
+apart. The consequence is worth stating plainly: while a type is `keep`,
+anything embedded in its names stays, even where `[policy] hostnames` is
+acting. Act on the type to remove the whole name.
 
 ## `[as-numbers]`
 

@@ -116,7 +116,7 @@ The sections are the selectors:
 | Section | Selects |
 |---|---|
 | `[secrets]` / `[text]` / `[locations]` / `[identity]` / `[platform]` / `[interfaces]` / `[vlans]` / `[circuits]` | one action per named rule, plus a `default` for the family — between them, every rule |
-| `[operational-names]` | independent actions for ACL/firewall filters, route maps, prefix lists, policy statements, VRFs and peer groups |
+| `[operational-names]` | independent actions for ACL/firewall filters, route maps, prefix lists, policy statements, VRFs, peer groups, MPLS label-switched paths and JunOS configuration groups |
 | `[as-numbers]` | one consistent action for explicit AS-valued commands and AS-path prepends |
 | `[policy]` | the four families with no rules: `hostnames`, `domains`, `usernames`, `emails` |
 | `[ipv4]` / `[ipv6]` | one action per address class, plus `default`, `pool`, `well_known_resolvers`, `keep_networks` |

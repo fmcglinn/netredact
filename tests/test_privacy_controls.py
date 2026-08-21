@@ -1,5 +1,7 @@
 """End-to-end coverage for opt-in privacy controls."""
 
+import re
+
 import pytest
 
 from netredact import Config, sanitise_text
@@ -68,6 +70,8 @@ def test_every_operational_name_type_has_an_independent_option():
             "policy-statement": "hash",
             "vrf": "hash",
             "peer-group": "hash",
+            "label-switched-path": "hash",
+            "configuration-group": "hash",
         }
     })
 
@@ -77,6 +81,173 @@ def test_every_operational_name_type_has_an_independent_option():
     assert cfg.operational_names.action("policy-statement") == "hash"
     assert cfg.operational_names.action("vrf") == "hash"
     assert cfg.operational_names.action("peer-group") == "hash"
+    assert cfg.operational_names.action("label-switched-path") == "hash"
+    assert cfg.operational_names.action("configuration-group") == "hash"
+
+
+def test_lsp_names_are_one_type_inside_and_outside_a_configuration_group():
+    """The keyword carries the name, so nesting is not part of the selector.
+
+    An LSP declared under `groups`, one declared under `protocols mpls` and a
+    `lsp-next-hop` that refers to it are the same name in three places, and a
+    config that still loads needs all three to move together.
+    """
+    cfg = Config.from_dict(
+        {"operational-names": {"label-switched-path": "pseudo"}})
+    text = (
+        "set groups rise-mpls-lsp-automation protocols mpls "
+        "label-switched-path gncg-cor1_to_rcbc-agr1-1 apply-groups mpls-autobandwidth\n"
+        "set groups rise-mpls-lsp-automation protocols mpls "
+        "label-switched-path gncg-cor1_to_rcbc-agr1-1 to 10.255.0.1\n"
+        "set protocols mpls label-switched-path gncg-cor1_to_rcbc-agr1-1 bandwidth 100m\n"
+        "set protocols mpls static-label-switched-path STATIC-IN ingress\n"
+        "set routing-options static route 10.9.0.0/16 "
+        "lsp-next-hop gncg-cor1_to_rcbc-agr1-1\n"
+    )
+
+    result = sanitise_text(text, cfg, salt=SALT)
+    lines = result.lines
+
+    def named(line: str) -> str:
+        words = line.split()
+        return words[words.index("label-switched-path") + 1]
+
+    assert "gncg-cor1_to_rcbc-agr1-1" not in result.text
+    names = {named(line) for line in lines[:3]}
+    assert len(names) == 1                      # group and `protocols mpls` agree
+    name = names.pop()
+    assert name.startswith("lsp-")
+    assert lines[4].split()[-1] == name         # and the reference follows it
+    assert "STATIC-IN" not in lines[3]
+    assert result.findings == []
+
+
+def test_lsp_names_are_transformed_in_the_curly_brace_syntax_too():
+    cfg = Config.from_dict(
+        {"operational-names": {"label-switched-path": "hash"}})
+    text = (
+        "protocols {\n"
+        "    mpls {\n"
+        "        label-switched-path gncg-cor1_to_rcbc-agr1-1 {\n"
+        "            to 10.255.0.1;\n"
+        "        }\n"
+        "        label-switched-path-template autobw {\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+
+    result = sanitise_text(text, cfg, salt=SALT)
+
+    assert "gncg-cor1_to_rcbc-agr1-1" not in result.text
+    assert re.search(r"label-switched-path <LSP-[0-9a-f]{6}> \{", result.text)
+    # the template statement names a template, not an LSP
+    assert "label-switched-path-template autobw {" in result.text
+    assert result.findings == []
+
+
+def test_lsp_action_leaves_the_namespaces_next_to_it_alone():
+    """A named path and a p2mp tree are their own namespaces, not LSP names."""
+    cfg = Config.from_dict(
+        {"operational-names": {"label-switched-path": "redact"}})
+    text = (
+        "set protocols mpls path VIA-CORE2 10.255.0.2 strict\n"
+        "set protocols mpls label-switched-path GNC-TO-RCBC primary VIA-CORE2\n"
+        "set routing-options static route 232.1.1.1/32 p2mp-lsp-next-hop TREE-A\n"
+    )
+
+    result = sanitise_text(text, cfg, salt=SALT)
+
+    assert "GNC-TO-RCBC" not in result.text
+    assert result.text.count("VIA-CORE2") == 2
+    assert "TREE-A" in result.text
+
+
+def test_lsp_names_are_kept_by_default(edge_junos):
+    result = sanitise_text(edge_junos, Config(), salt=SALT)
+    assert "lab-rtr-01_to_core-rtr-07" in result.text
+    assert result.kept_counts["label-switched-path"] == 4
+
+
+def test_configuration_group_names_are_one_type_in_both_syntaxes():
+    """A `set groups` name, a `groups {` block name and every reference agree.
+
+    In `set` form the keyword carries the name. In brace form `groups {` opens
+    a block whose direct children are the names, so the declaration is selected
+    by depth -- and the arbitrary configuration nested below it is not.
+    """
+    cfg = Config.from_dict(
+        {"operational-names": {"configuration-group": "pseudo"}})
+    text = (
+        "set groups mpls-defaults protocols mpls optimize-timer 300\n"
+        "set apply-groups [ mpls-defaults re0 ]\n"
+        "set apply-groups-except re1-only\n"
+        "set interfaces ge-0/0/0 apply-groups mpls-defaults\n"
+        "groups {\n"
+        "    mpls-defaults {\n"
+        "        protocols {\n"
+        "            mpls {\n"
+        "                optimize-timer 300;\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "apply-groups [ mpls-defaults ];\n"
+    )
+
+    result = sanitise_text(text, cfg, salt=SALT)
+    lines = result.lines
+
+    assert "mpls-defaults" not in result.text
+    assert "re0" not in result.text
+    assert "re1-only" not in result.text
+    name = lines[0].split()[2]
+    assert name.startswith("config-group-")
+    assert lines[1].split()[3] == name              # the bracketed list form
+    assert lines[3].split()[-1] == name             # a reference lower down
+    assert lines[5].strip() == f"{name} {{"         # the brace-form declaration
+    assert lines[13] == f"apply-groups [ {name} ];"
+    # the hierarchy nested under a group is configuration, not a group name
+    assert "        protocols {" in result.text
+    assert "            mpls {" in result.text
+    assert "                optimize-timer 300;" in result.text
+    assert result.findings == []
+
+
+def test_a_configuration_group_and_a_bgp_peer_group_are_different_types():
+    cfg = Config.from_dict({"operational-names": {
+        "configuration-group": "pseudo", "peer-group": "keep"}})
+    text = "set groups edge-defaults protocols bgp group TRANSIT-CORE hold-time 30\n"
+
+    result = sanitise_text(text, cfg, salt=SALT)
+
+    assert "edge-defaults" not in result.text
+    assert "group TRANSIT-CORE" in result.text
+    assert result.counts["configuration-group"] == 1
+    assert result.kept_counts["peer-group"] == 1
+
+
+def test_object_group_is_not_a_configuration_group():
+    """`groups` is selected as a JunOS statement, not as a word."""
+    cfg = Config.from_dict(
+        {"operational-names": {"configuration-group": "redact"}})
+    text = (
+        "object-group network SERVERS\n"
+        " description customer groups for site A\n"
+    )
+
+    result = sanitise_text(text, cfg, salt=SALT)
+
+    assert result.text == text
+    assert result.counts["configuration-group"] == 0
+
+
+def test_configuration_groups_are_kept_by_default(juniper, edge_junos):
+    for text, occurrences in ((juniper, "mpls-defaults"),
+                              (edge_junos, "mpls-lsp-automation")):
+        result = sanitise_text(text, Config(), salt=SALT)
+        assert occurrences in result.text
+        assert result.kept_counts["configuration-group"] > 0
 
 
 def test_as_numbers_are_consistent_and_preserve_notation_and_class():

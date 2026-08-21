@@ -198,6 +198,8 @@ default = "keep"
 # policy-statement = "keep"
 # vrf = "keep"
 # peer-group = "keep"
+# label-switched-path = "keep"
+# configuration-group = "keep"
 
 [as-numbers]
 default = "keep"

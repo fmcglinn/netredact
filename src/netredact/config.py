@@ -294,7 +294,8 @@ class OperationalNamesPolicy:
     """Actions for typed configuration identifiers and their references."""
 
     TYPES = ("acl-firewall-filter", "route-map", "prefix-list",
-             "policy-statement", "vrf", "peer-group")
+             "policy-statement", "vrf", "peer-group", "label-switched-path",
+             "configuration-group")
 
     default: str = "keep"
     acl_firewall_filter: str | None = None
@@ -303,6 +304,8 @@ class OperationalNamesPolicy:
     policy_statement: str | None = None
     vrf: str | None = None
     peer_group: str | None = None
+    label_switched_path: str | None = None
+    configuration_group: str | None = None
 
     def __post_init__(self) -> None:
         _check_action("[operational-names] default", "text", self.default)

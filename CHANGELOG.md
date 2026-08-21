@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `[operational-names] label-switched-path` acts on JunOS MPLS LSP names --
+  the `label-switched-path` and `static-label-switched-path` declarations and
+  the `lsp-next-hop` references to them -- in both the `set` and curly-brace
+  syntaxes and at any depth, so an LSP declared inside a `groups` stanza is
+  covered on the same terms as one under `protocols mpls`. Named paths and
+  p2mp trees are separate namespaces and stay out of scope.
+
+- `[operational-names] configuration-group` acts on JunOS configuration group
+  names: the `set groups NAME` declaration, the names a `groups { ... }` block
+  declares as its direct children, and every `apply-groups` /
+  `apply-groups-except` reference, bare or in a bracketed list. Configuration
+  nested inside a group is acted on by the selector that owns it, not treated
+  as part of the name.
+
 - Library callers can associate labels such as filenames with a sanitising run.
   `Result.label_replacements` exposes immutable, replacement-only metadata so
   callers can derive safe display tokens without retaining unmatched label
