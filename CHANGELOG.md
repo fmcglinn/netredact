@@ -192,6 +192,19 @@ All notable changes to this project are documented here. The format follows
   vendor gate: a file with no such section in it cannot reach the rules that
   need one.
 
+- A wrap is undone with NOTHING in its place, not with a space. `/export` wraps
+  at whatever column it runs out of room at, which is regularly in the middle of
+  a token and even in the middle of a word inside a quoted string: a
+  `/routing filter rule` carries `{set bgp-path-\` + `prepend 1; accept}` as one
+  `bgp-path-prepend`, and `set bgp-large-communities orig\` + `in-inband-mgmt`
+  as one `origin-inband-mgmt`. Joining those with a space did not merely
+  reformat the file, it corrupted it -- `bgp-path- prepend` is not a keyword and
+  the list name became two words, so the output no longer loaded. Where a
+  separator is wanted the export has already written it before the backslash, so
+  the line up to the backslash is kept verbatim, trailing space and all, and
+  only the continuation's indent is dropped. A literal `\n` escape inside a rule
+  string now survives byte for byte.
+
 - A wrapped RouterOS command is joined into one logical line before any rule
   runs, and written back out unwrapped. `/export` breaks a long command with a
   trailing `\` and continues it indented on the next line, and a rule sees one

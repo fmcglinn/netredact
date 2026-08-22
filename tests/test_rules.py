@@ -187,6 +187,46 @@ def test_a_wrapped_line_at_the_end_of_a_file_continues_nothing():
     assert R.join_continuations(lines) == lines
 
 
+#: (wrapped source, the one logical line it is)
+#:
+#: `/export` wraps at whatever column it runs out of room at, NOT at a token
+#: boundary -- these are real shapes from a `/routing filter` section. Every
+#: wrap case here once joined with a space, which did not merely reformat the
+#: file: it corrupted it. `bgp-path- prepend` is not a keyword and
+#: `orig in-inband-mgmt` is not a list name, so the output no longer loaded.
+#: The bug survived a full suite because every case written before this was a
+#: token boundary, where a space happens to be right.
+ARBITRARY_WRAPS = [
+    # mid-token, inside a quoted string
+    (['add chain=to-corp rule="if (dst == 0.0.0.0/0) {set bgp-path-\\',
+      '    prepend 1; accept}"'],
+     'add chain=to-corp rule="if (dst == 0.0.0.0/0) {set bgp-path-prepend 1; '
+     'accept}"'),
+    # mid-WORD, inside a quoted string
+    (['add chain=from-oob rule="set bgp-large-communities orig\\',
+      '    in-inband-mgmt;"'],
+     'add chain=from-oob rule="set bgp-large-communities origin-inband-mgmt;"'),
+    # immediately after the `=`, with no space to preserve
+    (["set chain=block-default rule=\\", '    "if (dst == 0.0.0.0/0) {reject}"'],
+     'set chain=block-default rule="if (dst == 0.0.0.0/0) {reject}"'),
+    # a separator the export DID write survives, because the line up to the
+    # backslash is kept verbatim
+    (["add name=corp-wifi \\", "    wpa2-pre-shared-key=hunter2"],
+     "add name=corp-wifi wpa2-pre-shared-key=hunter2"),
+    # a literal `\n` escape is content, and no space may appear in front of it
+    (['add rule="set bgp-local-pref 100;\\', "    \\naccept\""],
+     'add rule="set bgp-local-pref 100;\\naccept"'),
+]
+
+
+@pytest.mark.parametrize("source,joined", ARBITRARY_WRAPS,
+                         ids=range(len(ARBITRARY_WRAPS)))
+def test_a_wrap_is_undone_with_nothing_in_its_place(source, joined):
+    """Whatever separator the wrap needs, the export wrote it before the
+    backslash -- so the two halves are concatenated, never spaced."""
+    assert R.join_continuations(source) == [joined]
+
+
 def test_masks_are_never_a_rule_target():
     assert R.IPV4_RE.fullmatch("255.255.255.0")
 
