@@ -127,22 +127,38 @@ All notable changes to this project are documented here. The format follows
   because a licence id is tied to the one device and not to a production line.
   `location=` and `contact=` reach the rules of those names.
 
-- `routeros-peer-name` puts the `name=` under `/interface wireguard peers` in
-  `[interfaces]`, alongside the description on the interface it hangs off: a
-  peer name is operator free text, and on a provider config it is a customer.
-  It is scoped to the peers section and NOT to `interfaces`, deliberately.
-  Everywhere else under `/interface …` a RouterOS `name=` is an identifier the
-  configuration references by name -- `/ip address add
-  interface=ether1-transit` names the `name=` that `/interface ethernet` set --
-  so acting on the declaration alone would break the file and leak the value
-  anyway, through every reference that kept it. A peer name is referenced by
-  nothing, which is what makes it safe to treat as text. Widening this needs the
-  references to move with the declaration, the way `pseudowire-name` carries
-  both in one rule; until then the scope is the guard.
+- A label `name=` is free text, and it is split into two rules by scope exactly
+  as `description` is: `routeros-peer-name` in `[interfaces]` inside a RouterOS
+  `/interface …` section, `routeros-object-name` in `[text]` everywhere else.
+  On a provider config this is where a customer and an order reference live --
+  `name="Cust: 4G - Quantum - BPI000000562604"` on a `/routing bgp connection`.
+
+  Both are scoped to `object-labels`, which is the one scope named for a
+  property rather than a block, and it earns that: it marks the sections whose
+  `name=` nothing else refers to, currently `/interface wireguard peers` and
+  `/routing bgp connection`. That distinction cannot be read off the line, the
+  key or even the value -- only off the section -- and it is the difference
+  between a rule that is safe and one that breaks the file. An interface, a
+  bridge, a BGP template, an OSPF area or an address list is named so that
+  another line can point at it (`interface=ether1-transit`,
+  `area=backbone-v2`), so acting on such a declaration alone would break the
+  configuration AND leak the value through every reference that kept it. The
+  list is therefore the guard rather than a convenience, and the way to cover a
+  referenced name is to carry its references in the same rule, as
+  `pseudowire-name` does, not to add it here.
 
   A RouterOS section now opens several scopes where its path nests, which is
   what lets a peer's `comment=` still be an interface comment while its `name=`
   is a rule of its own.
+
+- `routeros-auth-key` takes RouterOS's `auth-key=` and `authentication-key=`,
+  e.g. on `/routing ospf interface-template`. It is spelled out rather than
+  reached by a generic `key=`, which would also claim `public-key=` and put two
+  rules with two families on one span; `auth=md5` and `auth-id=1` on the same
+  line are a method and an index, and the `-key` is what tells them apart. This
+  one was leaving in silence -- `auth-key` was not a keyword the verifier knew
+  either, and an OSPF key is neither long enough nor hex enough for a shape
+  check -- so the keyword is now in `credential-left` as well.
 
 - A third kind of block for the scope names the rules already use: a RouterOS
   `/export` section, which a `/`-prefixed line opens and the next one ends.

@@ -148,14 +148,26 @@ RULE_NOTES = {
                              "description …`",
     "interface-comment": "the same RouterOS `comment=`, when it is inside a "
                          "`/interface …` section",
-    "routeros-peer-name": "`name=` under `/interface wireguard peers`, which is "
-                          "a LABEL and on a provider config a customer. Scoped "
-                          "to the peers section and not to `interfaces`, "
-                          "deliberately: everywhere else a RouterOS `name=` is "
-                          "an identifier the configuration references by name "
-                          "(`interface=ether1-transit`), and acting on the "
-                          "declaration alone would break the file and leak the "
-                          "value through every reference that kept it",
+    "routeros-peer-name": "a label `name=` inside a RouterOS `/interface …` "
+                          "section -- a WireGuard peer. The everywhere-else "
+                          "case is `routeros-object-name` in `text`, exactly "
+                          "as `description` is split",
+    "routeros-object-name": "a label `name=` outside a RouterOS `/interface …` "
+                            "section -- a `/routing bgp connection`, whose name "
+                            "on a provider config is a customer and an order "
+                            "reference. Both halves are scoped to "
+                            "`object-labels`, which marks only the sections "
+                            "whose `name=` nothing else refers to: everywhere "
+                            "else a RouterOS `name=` is an identifier the "
+                            "configuration points at "
+                            "(`interface=ether1-transit`, `area=backbone-v2`), "
+                            "and acting on the declaration alone would break "
+                            "the file and leak the value through every "
+                            "reference that kept it",
+    "routeros-auth-key": "RouterOS `auth-key=` / `authentication-key=`, e.g. on "
+                         "`/routing ospf interface-template`. Spelled out "
+                         "rather than reached by a generic `key=`, which would "
+                         "also claim `public-key=` -- a different family",
     "vlan-name": "the `name` under a `vlan <id>` block, and the one-line "
                  "`vlan <id> name <name>` form. Never an SVI: `interface "
                  "Vlan905` is an interface",

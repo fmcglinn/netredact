@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**65 rules**: 38 `secrets`, 6 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 3 `interfaces`, 1 `vlans`, 2 `circuits`.
+**67 rules**: 39 `secrets`, 7 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 3 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 16 verification checks
 
@@ -184,9 +184,11 @@ Each rule name links to its pattern, which is listed in full under
 | [`routeros-secret`](#routeros-secret) | `secrets` | RouterOS `secret=`, qualified or not -- a RADIUS shared secret, an L2TP `ipsec-secret=` -- mikrotik grammar |  |
 | [`routeros-pre-shared-key`](#routeros-pre-shared-key) | `secrets` | RouterOS `pre-shared-key=`, `wpa-pre-shared-key=`, `wpa2-pre-shared-key=`, and WireGuard's `preshared-key=` -- RouterOS spells it both ways -- mikrotik grammar |  |
 | [`routeros-private-key`](#routeros-private-key) | `secrets` | RouterOS `private-key=`, e.g. a WireGuard interface's own key -- mikrotik grammar |  |
+| [`routeros-auth-key`](#routeros-auth-key) | `secrets` | RouterOS `auth-key=` / `authentication-key=`, e.g. on `/routing ospf interface-template`. Spelled out rather than reached by a generic `key=`, which would also claim `public-key=` -- a different family -- mikrotik grammar |  |
 | [`routeros-public-key`](#routeros-public-key) | `identity` | RouterOS `public-key=`: the other half of a WireGuard pair, and NOT a credential. It is `identity` for the reason `ssh-public-key` is -- it ties the file to one device or peer, and a kept one has to be a rule the shape checks can be blinded to -- mikrotik grammar |  |
 | [`routeros-snmp-community`](#routeros-snmp-community) | `secrets` | `name=` under `/snmp community`, which is what RouterOS calls a community string. `name=` is NOT a secret anywhere else -- there it is an interface, a bridge or a firewall rule -- mikrotik grammar | inside `snmp-community` |
-| [`routeros-peer-name`](#routeros-peer-name) | `interfaces` | `name=` under `/interface wireguard peers`, which is a LABEL and on a provider config a customer. Scoped to the peers section and not to `interfaces`, deliberately: everywhere else a RouterOS `name=` is an identifier the configuration references by name (`interface=ether1-transit`), and acting on the declaration alone would break the file and leak the value through every reference that kept it -- mikrotik grammar | inside `wireguard-peers` |
+| [`routeros-peer-name`](#routeros-peer-name) | `interfaces` | a label `name=` inside a RouterOS `/interface …` section -- a WireGuard peer. The everywhere-else case is `routeros-object-name` in `text`, exactly as `description` is split -- mikrotik grammar | inside `wireguard-peers` |
+| [`routeros-object-name`](#routeros-object-name) | `text` | a label `name=` outside a RouterOS `/interface …` section -- a `/routing bgp connection`, whose name on a provider config is a customer and an order reference. Both halves are scoped to `object-labels`, which marks only the sections whose `name=` nothing else refers to: everywhere else a RouterOS `name=` is an identifier the configuration points at (`interface=ether1-transit`, `area=backbone-v2`), and acting on the declaration alone would break the file and leak the value through every reference that kept it -- mikrotik grammar | inside `object-labels` outside `interfaces` |
 | [`comment`](#comment) | `text` | RouterOS's `comment=`, anywhere EXCEPT inside a `/interface …` section -- a firewall rule, a DHCP lease, an address list. The interface case is its own rule in its own family, exactly as `description` is split -- mikrotik grammar |  outside `interfaces` |
 | [`interface-comment`](#interface-comment) | `interfaces` | the same RouterOS `comment=`, when it is inside a `/interface …` section -- mikrotik grammar | inside `interfaces` |
 | [`junos-type9`](#junos-type9) | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  |
@@ -513,6 +515,12 @@ block also carries the pattern that ends it.
 (?<![-\w])(?:[a-z\d]+-)*private-key=%VAL%
 ```
 
+### `routeros-auth-key`
+
+```
+(?<![-\w])auth(?:entication)?-key=%VAL%
+```
+
 ### `routeros-public-key`
 
 ```
@@ -526,6 +534,12 @@ block also carries the pattern that ends it.
 ```
 
 ### `routeros-peer-name`
+
+```
+(?<![-\w])name=%VAL%
+```
+
+### `routeros-object-name`
 
 ```
 (?<![-\w])name=%VAL%

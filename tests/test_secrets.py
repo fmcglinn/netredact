@@ -32,6 +32,7 @@ PLANTED = [
     "BngRadiusPass77", "AutoConfPass88",
     "R0uterPass77", "BackupPass88", "BakeryPPP123", "FabricPPP456",
     "Aut0mnBridge41", "L2tpPass99", "RadiusSecret55", "L2tpIpsecPsk88",
+    "OspfAuthKey42",
     # both PSK generations on ONE command line, which is why these rules are
     # searched and not matched: a rule that matched once left the first of the
     # two standing next to a marker saying the line had been dealt with
@@ -355,6 +356,12 @@ ROUTEROS_SECRETS = [
     ("/interface ovpn-client\nadd name=ovpn1 encryption-password=OvpnPass19",
      "OvpnPass19"),
     ("/interface wireless\nset [ find ] passphrase=Passphrase73", "Passphrase73"),
+    # `/routing ospf interface-template`. `auth=md5` and `auth-id=1` on the
+    # same line are a method and an index; the `-key` is what tells them apart.
+    ("/routing ospf interface-template\nadd area=backbone-v2 auth=md5 "
+     "auth-id=1 auth-key=awdkawdka", "awdkawdka"),
+    ("/routing ospf interface-template\nadd authentication-key=OspfAuthKey42",
+     "OspfAuthKey42"),
     # WireGuard spells its PSK without the inner hyphen, which the wireless
     # spelling of the rule did not reach
     ("/interface wireguard peers\nadd interface=wg-4g "

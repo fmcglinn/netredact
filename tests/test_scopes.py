@@ -432,6 +432,54 @@ def test_a_peer_name_follows_the_description_rule(action, expected):
         assert "a peer label" not in out
 
 
+#: a label `name=` OUTSIDE any `/interface ...` section, which is the other
+#: level of the same split. On a provider config this is where the customer and
+#: the order reference live.
+BGP_CONNECTION = (
+    "/routing bgp connection\n"
+    "add as=64512 disabled=no local.address=128.66.20.1 .role=ebgp "
+    'name="Cust: 4G - a customer - ORD000000562604" '
+    "remote.address=128.66.20.2 .as=64513 routing-table=main\n"
+)
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("keep", '"Cust: 4G - a customer - ORD000000562604"'),
+    ("pseudo", '"desc-'),
+    ("hash", '"<DESC-'),
+    ("redact", '"<DESCRIPTION-REMOVED>"'),
+])
+def test_a_label_name_outside_an_interface_is_text(action, expected):
+    out = sanitise_text(BGP_CONNECTION, section("text", action), salt=SALT).text
+    assert expected in out, out
+    if action != "keep":
+        assert "ORD000000562604" not in out
+
+
+def test_the_two_levels_of_the_name_rule_partition_the_labels():
+    """The same split as `description` / `interface-description`, and the same
+    contract: between them the two rules claim every label exactly once."""
+    text = WIREGUARD_PEER + BGP_CONNECTION
+    result = sanitise_text(text, policy(text="hash", interfaces="hash"),
+                           salt=SALT)
+    assert result.counts["routeros-peer-name"] == 1
+    assert result.counts["routeros-object-name"] == 1
+    assert "a peer label" not in result.text
+    assert "ORD000000562604" not in result.text
+
+
+def test_neither_level_reaches_a_referenced_name():
+    """`object-labels` marks only the sections nothing points at, so acting on
+    all free text still leaves an interface, a bridge or an OSPF area alone."""
+    text = ("/interface bridge\nadd name=bridge-lan protocol-mode=rstp\n"
+            "/routing ospf area\nadd name=backbone-v2 instance=default\n"
+            "/routing ospf interface-template\n"
+            "add area=backbone-v2 interfaces=bridge-lan\n")
+    out = sanitise_text(text, maximal(), salt=SALT).text
+    assert "name=bridge-lan" in out and "interfaces=bridge-lan" in out
+    assert "name=backbone-v2" in out and "area=backbone-v2" in out
+
+
 def test_a_referenced_interface_name_is_left_alone():
     """THE reason `routeros-peer-name` is scoped to the peers section.
 

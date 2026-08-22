@@ -654,6 +654,15 @@ _PAIRS: list[tuple[str, str, str, str | None]] = [
     # `long-base64-left` reported it -- loudly, but a reported credential is
     # still a credential in the file, and only a rule can destroy it.
     ("routeros-private-key", rf'{_ROS_KEY}private-key=%VAL%', "secrets", None),
+    # `/routing ospf interface-template auth-key=`, and the RIP and BGP forms of
+    # the same field. Spelled out rather than reached with a generic `key=`,
+    # because a generic one would ALSO claim `public-key=`, `private-key=` and
+    # `pre-shared-key=` -- and `public-key=` is `identity`, so two rules with two
+    # families would be fighting over one span. `auth=md5` and `auth-id=1` on the
+    # same line are a method and an index, and the `-key` is what tells them
+    # apart.
+    ("routeros-auth-key",
+     r'(?<![-\w])auth(?:entication)?-key=%VAL%', "secrets", None),
     # The other half of a WireGuard pair, and NOT a credential: a public key is
     # published on purpose. It is `identity` for exactly the reason
     # `ssh-public-key` is -- it ties the file to one real device or peer, and the
@@ -668,22 +677,21 @@ _PAIRS: list[tuple[str, str, str, str | None]] = [
     # learn about scope at all; see ``RuleCatalogue._line``.
     ("routeros-snmp-community", r'(?<![-\w])name=%VAL%', "secrets",
      "snmp-community"),
-    # A WireGuard peer's `name=` is a LABEL: operator free text, and on a
-    # provider config a customer, so it belongs to the same family as the
-    # description on the interface it hangs off.
+    # A LABEL `name=`: operator free text, and on a provider config a customer
+    # and an order reference -- `name="Cust: 4G - Quantum - BPI000000562604"` on
+    # a BGP connection. So it is split by scope the same way `description` and
+    # `comment` are, and into the same two families: inside a RouterOS
+    # `/interface …` section it is `routeros-peer-name` in `interfaces`,
+    # everywhere else it is `routeros-object-name` in `text`. :data:`_OUTSIDE`
+    # keeps them disjoint.
     #
-    # It is scoped to the peers section and NOT to `interfaces`, and that
-    # narrowness is the whole point. Everywhere else under `/interface …` a
-    # `name=` is an identifier the configuration REFERENCES by name -- `/ip
-    # address add interface=ether1-transit` names the `name=` that `/interface
-    # ethernet` set. Acting on the declaration alone would both break the file
-    # and leak the value anyway, through every reference that kept it. A peer
-    # name is referenced by nothing, which is what makes it safe to treat as
-    # text. Widening this to `interfaces` needs the references to move with it,
-    # the way `pseudowire-name` carries its definition and its references in one
-    # rule; until then the scope is the guard.
+    # Both are scoped to `object-labels` rather than to whole sections, and that
+    # narrowness is the whole point: see :data:`_ROUTEROS_SCOPES` for why only
+    # some sections open it. A `name=` the configuration REFERENCES cannot be
+    # acted on by a rule that only sees the declaration.
     ("routeros-peer-name", r'(?<![-\w])name=%VAL%', "interfaces",
      "wireguard-peers"),
+    ("routeros-object-name", r'(?<![-\w])name=%VAL%', "text", "object-labels"),
     # RouterOS's `description`, split by scope in exactly the same way and for
     # exactly the same reason: on an interface it is a port label a reviewer
     # needs, on a firewall rule or a DHCP lease it is ordinary free text. One
@@ -700,6 +708,7 @@ _PAIRS: list[tuple[str, str, str, str | None]] = [
 _OUTSIDE: dict[str, tuple[str, ...]] = {
     "description": ("interfaces",),
     "comment": ("interfaces",),
+    "routeros-object-name": ("interfaces",),
 }
 
 #: rule -> the dialect its grammar comes from. **ADVISORY ONLY.** Nothing in
@@ -736,6 +745,8 @@ _RULE_VENDORS: dict[str, str] = {
     # shape -- not because either is skipped on another vendor's file.
     "comment": "mikrotik",
     "interface-comment": "mikrotik",
+    "routeros-auth-key": "mikrotik",
+    "routeros-object-name": "mikrotik",
     "routeros-password": "mikrotik",
     "routeros-peer-name": "mikrotik",
     "routeros-pre-shared-key": "mikrotik",
@@ -1287,15 +1298,35 @@ _ROUTEROS_SECTION = re.compile(r"^/([a-z][\w-]*(?:\s+[a-z][\w-]*)*)")
 #:
 #: Those own-name sections are not decoration. ``name=`` is a community string
 #: under ``/snmp community``, a login under ``/user`` and ``/ppp secret``, the
-#: device's own name under ``/system identity``, a peer's label under
-#: ``/interface wireguard peers``, and a referenced object name everywhere else.
-#: The line is identical in all of them, so the section is the only evidence
-#: there is -- which is exactly the argument for scope in the first place, and
-#: exactly why none of this is a vendor gate: a file with no ``/user`` section in
-#: it cannot reach the rules and the collectors that need one.
+#: device's own name under ``/system identity``, a free-text label under
+#: ``/interface wireguard peers`` and ``/routing bgp connection``, and a
+#: referenced object name everywhere else. The line is identical in all of them,
+#: so the section is the only evidence there is -- which is exactly the argument
+#: for scope in the first place, and exactly why none of this is a vendor gate:
+#: a file with no ``/user`` section in it cannot reach the rules and the
+#: collectors that need one.
+#:
+#: ``object-labels`` is the one scope named for a PROPERTY rather than a block,
+#: and it earns that: it marks the sections whose ``name=`` is a label nothing
+#: else refers to. That distinction cannot be read off the line, off the key, or
+#: even off the value -- only off which section it is in, and it is the
+#: difference between a rule that is safe and one that breaks the file. An
+#: interface, a bridge, a BGP template, an OSPF area or an address list is
+#: named so that another line can point at it (``interface=ether1-transit``,
+#: ``area=backbone-v2``): acting on such a declaration alone would break the
+#: configuration AND leak the value through every reference that kept it. A
+#: WireGuard peer and a BGP connection are pointed at by nothing.
+#:
+#: So this list is deliberately short, and it is the guard rather than a
+#: convenience. Adding a section to it is a claim that nothing in the grammar
+#: references that section's ``name=`` -- and the way to cover one that IS
+#: referenced is to carry the references in the same rule, as
+#: ``pseudowire-name`` does, not to add it here.
 _ROUTEROS_SCOPES = (
-    (("wireguard-peers", "interfaces"),
+    (("wireguard-peers", "object-labels", "interfaces"),
      re.compile(r"interface\s+wireguard\s+peers(?![\w-])", re.I)),
+    (("bgp-connections", "object-labels"),
+     re.compile(r"routing\s+bgp\s+connection(?![\w-])", re.I)),
     (("snmp-community", "snmp"),
      re.compile(r"snmp\s+community(?![\w-])", re.I)),
     (("system-identity",), re.compile(r"system\s+identity(?![\w-])", re.I)),

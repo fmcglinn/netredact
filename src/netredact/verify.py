@@ -73,7 +73,7 @@ VTOK = ENC[:-1] + r"|type|value|key|level\s+\d+)"
 #: today, but a check that only knows a shape must not be the only thing
 #: standing between a regressed rule and a credential in the output.
 _CRED_KEYWORDS = (r"password|passwd|passphrase|secret|pre-?shared-key|"
-                  r"private-key|key-string|authentication-key|"
+                  r"private-key|key-string|auth(?:entication)?-key|"
                   r"encrypted-password|wpa-psk")
 
 #: ``community`` only where it is an SNMP community: after ``snmp-server`` /

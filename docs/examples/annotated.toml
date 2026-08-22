@@ -67,6 +67,7 @@ default = "redact"  # the action for every rule not named below
 # routeros-secret         = "redact"
 # routeros-pre-shared-key = "redact"
 # routeros-private-key    = "redact"
+# routeros-auth-key       = "redact"
 # routeros-snmp-community = "redact"
 # junos-type9             = "redact"
 # crypt-hash              = "redact"
@@ -86,12 +87,13 @@ default = "redact"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
-# contact       = "keep"
-# description   = "keep"
-# acl-remark    = "keep"
-# login-message = "keep"
-# banner        = "keep"
-# comment       = "keep"
+# contact              = "keep"
+# description          = "keep"
+# acl-remark           = "keep"
+# login-message        = "keep"
+# banner               = "keep"
+# routeros-object-name = "keep"
+# comment              = "keep"
 
 # Explicit physical locations: SNMP location values and structured
 # JunOS building, floor, rack, room and street-address fields.
