@@ -48,6 +48,15 @@ RULE_NOTES = {
     "username-secret": "`username U ... password|secret X`",
     "bare-password": "an indented `password` / `passwd` line, e.g. under `line vty`",
     "bare-secret": "a bare `secret` line, including JunOS `set ... secret`",
+    "fortios-encrypted": "FortiOS `set <key> ENC X` for a key `fortios-secret` "
+                         "does not name -- the marker is the evidence, so a key "
+                         "no release has invented yet is still covered",
+    "fortios-credential-key": "a qualified FortiOS credential key without the "
+                              "`ENC` marker -- `group-password`, "
+                              "`key-passphrase`, `password2`",
+    "fortios-object-name": "`set name` on a FortiOS object nothing refers to by "
+                           "name -- a firewall policy, which the configuration "
+                           "addresses by its `edit <id>`",
     "encoded-key": "any `key 0|7|8|encrypted X` anywhere on the line",
     "aaa-server-key": "`key X` on a tacacs / radius / ldap / server-private line",
     "quoted-key": "`key \"...\"`, e.g. JunOS OSPF MD5",

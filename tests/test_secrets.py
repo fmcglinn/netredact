@@ -660,3 +660,78 @@ def test_a_fortios_knob_is_not_a_credential(line):
     result = sanitise_text(line + "\n", Config(), salt=SALT)
     assert result.text.splitlines()[-1] == line
     assert not result.counts
+
+
+# ---------------------------------------------------------------------------
+# The FortiOS keys `fortios-secret` cannot name. That rule is a LIST of
+# attribute names, which is the right shape for the ones FortiOS has always
+# had. These two rules are for the ones it has not: the `ENC` marker and the
+# qualified key name are evidence in the line itself, so a key nobody has
+# written down is still covered.
+# ---------------------------------------------------------------------------
+
+#: (line, the secret that must not survive) -- keys absent from the list
+FORTIOS_UNLISTED_ENC = [
+    ("        set privatekey ENC cHJpdmF0ZWtleWJsb2IwMTIzNDU2Nzg5YWJjZGVm",
+     "cHJpdmF0ZWtleWJsb2IwMTIzNDU2Nzg5YWJjZGVm"),
+    ("        set secondary-secret ENC c2Vjb25kYXJ5c2VjcmV0YmxvYjAxMjM0NQ",
+     "c2Vjb25kYXJ5c2VjcmV0YmxvYjAxMjM0NQ"),
+    # a key this tool has never heard of: the marker is the evidence, so it is
+    # covered the day FortiOS invents it
+    ("        set some-future-credential ENC c29tZWZ1dHVyZWNyZWRlbnRpYWww",
+     "c29tZWZ1dHVyZWNyZWRlbnRpYWww"),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_UNLISTED_ENC,
+                         ids=range(len(FORTIOS_UNLISTED_ENC)))
+def test_the_enc_marker_covers_a_key_the_list_does_not_name(line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert "ENC <REMOVED>" in result.text, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+#: the qualified spelling WITHOUT the marker: what a typed or templated
+#: configuration carries where a backup carries `ENC`
+FORTIOS_PLAINTEXT = [
+    ("        set group-password GroupPass77", "GroupPass77"),
+    ("        set key-passphrase PassPhrase42", "PassPhrase42"),
+    # a numbered second credential, which is a real FortiOS key
+    ("        set password2 Sec0ndPass99", "Sec0ndPass99"),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_PLAINTEXT,
+                         ids=range(len(FORTIOS_PLAINTEXT)))
+def test_a_qualified_fortios_key_without_the_marker_is_still_a_credential(
+        line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+@pytest.mark.parametrize("line", FORTIOS_UNLISTED_ENC + FORTIOS_PLAINTEXT,
+                         ids=range(len(FORTIOS_UNLISTED_ENC)
+                                   + len(FORTIOS_PLAINTEXT)))
+def test_exactly_one_rule_claims_each_fortios_credential(line):
+    """Three FortiOS credential rules overlap in subject and must not overlap
+    in span: two rules matching one span splice twice, and the second hashes
+    the first's marker."""
+    result = sanitise_text(line[0] + "\n", policy(secrets="hash"), salt=SALT)
+    assert sum(result.counts.values()) == 1, dict(result.counts)
+    assert result.text.count("<SECRET-") == 1, result.text
+
+
+@pytest.mark.parametrize("line", [
+    # a hyphen after the credential word means a KNOB, and redacting the token
+    # after it would break the setting
+    "        set password-policy status enable",
+    "        set password-expire 5",
+    "        set password-expire-warning 15",
+    "config system password-policy",
+])
+def test_a_hyphenated_fortios_knob_is_not_a_credential(line):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.text.splitlines()[-1] == line, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)

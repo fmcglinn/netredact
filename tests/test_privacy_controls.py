@@ -495,3 +495,220 @@ def test_the_verifier_knows_the_same_asn_grammars_as_the_rule():
     # a surviving RouterOS ASN is now reported rather than passed over
     assert "as-number-left" in {
         f.check for f in verify(["add as=65501"], cfg)}
+
+
+# ---------------------------------------------------------------------------
+# RouterOS routing-filter chains. The declaration is `chain=` in `/routing
+# filter rule`; the references are a BGP connection's `input.filter=` and
+# `output.filter-chain=` and their abbreviated `.filter=` / `.filter-chain=`
+# forms. One TYPE carries both, so the two can never be given two actions and
+# left pointing at nothing.
+# ---------------------------------------------------------------------------
+
+ROS_CHAINS = (
+    "/routing filter rule\n"
+    "add chain=to-corp-1 disabled=no rule=accept\n"
+    "add chain=from-corp-1 disabled=no rule=accept\n"
+    "/ip firewall filter\n"
+    "add action=accept chain=input comment=noc\n"
+    "add action=jump chain=forward jump-target=mychain\n"
+    "/routing bgp connection\n"
+    "add input.filter=from-corp-1 output.filter-chain=to-corp-1 name=peer-1\n"
+    "add input.allow-as=1 .filter=from-corp-1 .filter-chain=to-corp-1\n"
+)
+
+
+def chains(action: str = "pseudo") -> Config:
+    return Config.from_dict(
+        {"operational-names": {"routing-filter-chain": action}})
+
+
+def test_a_filter_chain_and_every_reference_to_it_render_alike():
+    """THE contract: the tag is a function of the value, so a chain named in
+    one section and used in another still name the same thing afterwards."""
+    out = sanitise_text(ROS_CHAINS, chains(), salt=SALT).text
+    declared = [ln.split("chain=")[1].split()[0] for ln in out.splitlines()
+                if ln.startswith("add chain=")]
+    assert all(name.startswith("filter-chain-") for name in declared), out
+    # `from-corp-1` is declared once and referenced twice, all three alike
+    from_corp = declared[1]
+    assert out.count(f"input.filter={from_corp}") == 1
+    assert out.count(f".filter={from_corp}") == 2      # `input.filter=` too
+    to_corp = declared[0]
+    assert out.count(f"output.filter-chain={to_corp}") == 1
+    assert out.count(f".filter-chain={to_corp}") == 2
+
+
+def test_a_firewall_chain_is_not_a_routing_filter_chain():
+    """`input`, `forward` and `srcnat` are RouterOS's own firewall chain names,
+    and substituting one breaks the file. The section is the only evidence."""
+    out = sanitise_text(ROS_CHAINS, chains("redact"), salt=SALT).text
+    assert "chain=input" in out
+    assert "chain=forward" in out
+    assert "jump-target=mychain" in out
+
+
+def test_allow_as_is_a_count_and_not_a_chain_or_an_asn():
+    cfg = Config.from_dict({"operational-names": {"routing-filter-chain": "redact"},
+                            "as-numbers": {"default": "pseudo"}})
+    assert "input.allow-as=1" in sanitise_text(ROS_CHAINS, cfg, salt=SALT).text
+
+
+@pytest.mark.parametrize("action", ["keep", "pseudo", "hash", "redact"])
+def test_a_filter_chain_honours_every_action(action):
+    result = sanitise_text(ROS_CHAINS, chains(action), salt=SALT)
+    if action == "keep":
+        assert "chain=to-corp-1" in result.text
+        assert result.kept_counts["routing-filter-chain"] == 6
+    else:
+        assert "to-corp-1" not in result.text and "from-corp-1" not in result.text
+        assert result.counts["routing-filter-chain"] == 6
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_surviving_filter_chain_is_reported_when_the_type_acts():
+    from netredact.verify import verify
+
+    assert "operational-name-left" in {
+        f.check for f in verify(["add input.filter=from-corp-1"], chains())}
+
+
+# ---------------------------------------------------------------------------
+# FortiOS interface names. The same contract every operational name has, and
+# the one where getting it wrong is most visible: an interface is pointed at
+# from every firewall policy, static route and VPN in the file, so a
+# declaration acted on alone leaves the configuration unloadable AND leaks the
+# value through every reference that kept it.
+#
+# It is one TYPE carrying both halves for exactly that reason, and it defaults
+# to `keep` because coverage here is a list of reference spellings rather than
+# a closed grammar.
+# ---------------------------------------------------------------------------
+
+FOS_INTERFACES = (
+    "config system interface\n"
+    '    edit "port1"\n'
+    '        set alias "uplink"\n'
+    "    next\n"
+    '    edit "vl-bobsbakery"\n'
+    '        set interface "port1"\n'
+    "        set vlanid 220\n"
+    "    next\n"
+    '    edit "agg-core"\n'
+    "        set type aggregate\n"
+    '        set member "port3" "vl-bobsbakery"\n'
+    "    next\n"
+    "end\n"
+    "config system zone\n"
+    '    edit "CUSTOMER-EDGE"\n'
+    '        set interface "vl-bobsbakery"\n'
+    "    next\n"
+    "end\n"
+    "config router static\n"
+    "    edit 1\n"
+    '        set device "vl-bobsbakery"\n'
+    "    next\n"
+    "end\n"
+    "config firewall addrgrp\n"
+    '    edit "grp-bakery"\n'
+    '        set member "addr-bakery-lan"\n'
+    "    next\n"
+    "end\n"
+    "config firewall policy\n"
+    "    edit 1\n"
+    '        set srcintf "CUSTOMER-EDGE" "vl-bobsbakery"\n'
+    '        set dstintf "port1"\n'
+    "    next\n"
+    "    edit 2\n"
+    '        set srcintf "any"\n'
+    '        set dstintf "vl-bobsbakery"\n'
+    "    next\n"
+    "end\n"
+)
+
+
+def interfaces(action: str = "pseudo") -> Config:
+    return Config.from_dict({"operational-names": {"fortios-interface": action}})
+
+
+def test_a_fortios_interface_and_every_reference_to_it_render_alike():
+    """THE contract: the tag is a function of the value, so the `edit` that
+    declares an interface and every key that points at it render identically
+    and the file still loads."""
+    out = sanitise_text(FOS_INTERFACES, interfaces(), salt=SALT).text
+    assert "vl-bobsbakery" not in out, out
+    declared = [ln.split('edit "')[1].rstrip('"\n')
+                for ln in out.splitlines() if ln.strip().startswith('edit "vl')
+                or ln.strip().startswith('edit "fos-if')]
+    vlan = next(name for name in declared if name.startswith("fos-if-"))
+    # declared once; referenced by member, zone, device, srcintf and dstintf
+    assert out.count(vlan) == 6, out
+
+
+def test_a_factory_port_name_is_structural_and_is_not_substituted():
+    """`port1` is the FortiOS spelling of interface NUMBERING, which this tool
+    promises never to scrub, and `any` is the wildcard -- substituting it would
+    change what the policy does."""
+    out = sanitise_text(FOS_INTERFACES, interfaces("redact"), salt=SALT).text
+    assert 'set dstintf "port1"' in out
+    assert 'set member "port3"' in out
+    assert 'set srcintf "any"' in out
+
+
+def test_an_address_group_member_is_not_an_interface():
+    """`set member` names interfaces in a zone and ADDRESSES in an address
+    group, and the line is the same line. Substituting one with an interface's
+    tag would break the file in the way the scope exists to prevent."""
+    out = sanitise_text(FOS_INTERFACES, interfaces("redact"), salt=SALT).text
+    assert 'set member "addr-bakery-lan"' in out
+    assert 'edit "grp-bakery"' in out
+
+
+def test_a_zone_name_is_an_interface_name_because_a_policy_points_at_it():
+    """`set srcintf` takes a zone as readily as a port, so a zone left standing
+    while its references moved -- or the reverse -- is an unloadable file."""
+    out = sanitise_text(FOS_INTERFACES, interfaces(), salt=SALT).text
+    assert "CUSTOMER-EDGE" not in out
+
+
+def test_a_multi_valued_interface_list_moves_every_entry():
+    """`set srcintf "A" "B"` is one line and two names. A rule that took only
+    the first left the second pointing at an interface that no longer exists."""
+    out = sanitise_text(FOS_INTERFACES, interfaces(), salt=SALT).text
+    line = next(ln for ln in out.splitlines() if "srcintf" in ln and "any" not in ln)
+    assert line.count("fos-if-") == 2, line
+
+
+def test_a_pseudonymous_interface_name_still_fits_fortios():
+    """FortiOS caps an interface name at 15 characters. `pseudo` is only worth
+    having if what it writes still loads."""
+    out = sanitise_text(FOS_INTERFACES, interfaces(), salt=SALT).text
+    for name in re.findall(r'"(fos-if-[0-9a-f]+)"', out):
+        assert len(name) <= 15, name
+
+
+@pytest.mark.parametrize("action", ["keep", "pseudo", "hash", "redact"])
+def test_a_fortios_interface_honours_every_action(action):
+    result = sanitise_text(FOS_INTERFACES, interfaces(action), salt=SALT)
+    # nine values: three `edit` declarations (the VLAN, the aggregate and the
+    # zone) and six references. `port1`, `port3` and `any` are structural, and
+    # the address group's `member` is not an interface at all.
+    if action == "keep":
+        assert "vl-bobsbakery" in result.text
+        assert result.kept_counts["fortios-interface"] == 9
+    else:
+        assert "vl-bobsbakery" not in result.text
+        assert result.counts["fortios-interface"] == 9
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_surviving_fortios_interface_is_reported_when_the_type_acts():
+    assert verify(FOS_INTERFACES.splitlines(), interfaces()) != []
+    assert verify(FOS_INTERFACES.splitlines(), interfaces("keep")) == []
+
+
+def test_the_type_defaults_to_keep_so_interface_numbering_stays():
+    """The report's NOTE says interface numbering is never scrubbed, and a
+    type that acted by default would make that untrue."""
+    assert Config().operational_names.action("fortios-interface") == "keep"
+    assert sanitise_text(FOS_INTERFACES, Config(), salt=SALT).text == FOS_INTERFACES

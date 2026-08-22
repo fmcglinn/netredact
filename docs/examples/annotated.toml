@@ -61,6 +61,8 @@ default = "redact"  # the action for every rule not named below
 # ppp-credential          = "redact"
 # wpa-psk                 = "redact"
 # ftp-password            = "redact"
+# fortios-encrypted       = "redact"
+# fortios-credential-key  = "redact"
 # junos-password          = "redact"
 # fortios-secret          = "redact"
 # fortios-snmp-community  = "redact"
@@ -89,6 +91,7 @@ default = "redact"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
+# fortios-object-name  = "keep"
 # contact              = "keep"
 # description          = "keep"
 # acl-remark           = "keep"
@@ -220,6 +223,8 @@ default = "keep"
 # peer-group = "keep"
 # label-switched-path = "keep"
 # configuration-group = "keep"
+# routing-filter-chain = "keep"
+# fortios-interface = "keep"
 
 [as-numbers]
 default = "keep"

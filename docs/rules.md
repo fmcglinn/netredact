@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**70 rules**: 41 `secrets`, 7 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 4 `interfaces`, 1 `vlans`, 2 `circuits`.
+**73 rules**: 43 `secrets`, 8 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 4 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 16 verification checks
 
@@ -166,6 +166,9 @@ Each rule name links to its pattern, which is listed in full under
 | [`wpa-psk`](#wpa-psk) | `secrets` | `wpa-psk X` |  |
 | [`ftp-password`](#ftp-password) | `secrets` | `ip ftp\|tftp\|http client password X` |  |
 | [`routeros-license-id`](#routeros-license-id) | `identity` | RouterOS's licence identifier under both names it goes by -- `# software id = X` and `# system id = X` in the `/export` header, `system-id:` in `/system license print`. Tied to the one device, so `identity` and not `platform`. The `:` or `=` is required, because `system-id` is also an IS-IS keyword -- mikrotik grammar |  |
+| [`fortios-encrypted`](#fortios-encrypted) | `secrets` | FortiOS `set <key> ENC X` for a key `fortios-secret` does not name -- the marker is the evidence, so a key no release has invented yet is still covered -- fortinet grammar |  |
+| [`fortios-credential-key`](#fortios-credential-key) | `secrets` | a qualified FortiOS credential key without the `ENC` marker -- `group-password`, `key-passphrase`, `password2` -- fortinet grammar |  |
+| [`fortios-object-name`](#fortios-object-name) | `text` | `set name` on a FortiOS object nothing refers to by name -- a firewall policy, which the configuration addresses by its `edit <id>` -- fortinet grammar | inside `object-labels` |
 | [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
 | [`script-checksum`](#script-checksum) | `identity` |  |  |
 | [`fortios-secret`](#fortios-secret) | `secrets` | every FortiOS `set <attribute> <value>` credential: `password`, `passwd`, `psksecret`, `ppk-secret`, `auth-pwd`, `priv-pwd`, `passphrase`, `api-key`, `secret`, `key`. The keyword must be the first token after `set`, which is what keeps the two ordinary words off a JunOS `set` path -- fortinet grammar |  |
@@ -390,6 +393,24 @@ block also carries the pattern that ends it.
 \s*#?\s*(?:software|system)[-\s]id\s*[:=]\s*
 ```
 
+### `fortios-encrypted`
+
+```
+\s*set\s+(?!(?:passphrase|ppk-secret|psksecret|auth-pwd|password|priv-pwd|api-key|passwd|secret|key)\s)[\w-]+\s+ENC\s+
+```
+
+### `fortios-credential-key`
+
+```
+\s*set\s+(?!(?:passphrase|ppk-secret|psksecret|auth-pwd|password|priv-pwd|api-key|passwd|secret|key)\s)[\w-]*(?:password|passwd|pwd|secret|passphrase)\d*\s+(?!ENC\s)
+```
+
+### `fortios-object-name`
+
+```
+\s*set\s+name\s+
+```
+
 ### `junos-password`
 
 ```
@@ -609,7 +630,7 @@ block also carries the pattern that ends it.
 ### `serial-number`
 
 ```
-^\s*[!#]?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
+^\s*[!#]?\s*(?:set\s+)?(?:System\s+)?[Ss]erial[-\s]*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
 ```
 
 ### `certificate-block`

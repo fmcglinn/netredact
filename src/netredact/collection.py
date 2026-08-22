@@ -24,6 +24,26 @@ _PROMPT = re.compile(
 )
 _ARISTA_DEVICE = re.compile(r"^\s*!\s*device\s*:", re.I)
 
+#: a FortiOS prompt. FortiOS has no ``user@host`` form -- it writes ``fw-edge-01
+#: # show full-configuration``, optionally with the VDOM in brackets -- so
+#: :data:`_PROMPT`, which requires the ``@``, matched none of them and a
+#: FortiGate capture was returned whole with its diagnostics still in it.
+#:
+#: Two guards, and both are about the direction this module fails in. Once a
+#: capture is detected, everything outside an allowlisted command is DELETED, so
+#: a wrongly recognised prompt destroys configuration.
+#:
+#: * The comment leader is REQUIRED here where :data:`_PROMPT` makes it
+#:   optional. RANCID writes prompt lines as comments, and requiring the leader
+#:   keeps an ASCII-art banner body -- where ``a # b`` is perfectly ordinary --
+#:   from being read as a command boundary.
+#: * These prompts are boundaries only, never evidence for detection. A file
+#:   with two of them and no RANCID header is not treated as a capture at all,
+#:   so the worst a false match can do is split a section inside a file already
+#:   known to be one.
+_FORTIOS_PROMPT = re.compile(
+    r"^\s*[#!;]\s*([A-Za-z0-9_.-]+)(?:\s+\([\w.-]+\))?\s+#[ \t]+(\S.*?)[ \t]*$")
+
 
 def _normalise(command: str) -> str:
     return " ".join(command.strip().split()).lower()
@@ -36,6 +56,13 @@ def _is_configuration_command(command: str) -> bool:
         "show configuration | display set",
         "show running-config",
         "show startup-config",
+        # FortiOS. `show full-configuration` includes the defaults and `show`
+        # omits them; both dump the configuration and nothing else. A bare
+        # `show` is the configuration in JunOS configuration mode too, and is
+        # not a command at all in an IOS-style grammar, so admitting it cannot
+        # let another vendor's diagnostic output through.
+        "show full-configuration",
+        "show",
     }
 
 
@@ -62,6 +89,16 @@ def strip_rancid_diagnostics(lines: list[str]) -> tuple[list[str], list[RemovedS
                 or bool(headers) or len(prompts) >= 2)
     if not detected:
         return lines, []
+    # FortiOS prompts join AFTER the decision, never before it: see
+    # :data:`_FORTIOS_PROMPT` for why they are boundaries and not evidence.
+    # They are filtered to one device the same way, so a pasted transcript of
+    # two boxes cannot have one of them read as the other's output.
+    fortios = [(i, m) for i, line in enumerate(lines)
+               if (m := _FORTIOS_PROMPT.match(line))]
+    if fortios:
+        first = fortios[0][1].group(1).lower()
+        prompts += [(i, m.group(2)) for i, m in fortios
+                    if m.group(1).lower() == first]
 
     boundaries = sorted(
         [(i, command, "prompt") for i, command in prompts]

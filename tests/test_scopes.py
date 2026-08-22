@@ -613,3 +613,84 @@ def test_a_bare_end_with_nothing_open_is_harmless():
     for line in ("end", "end", "config system global", "end", "end"):
         blocks.feed(line)
     assert blocks.scopes() == ()
+
+
+# ---------------------------------------------------------------------------
+# `FortiBlocks` keeping its stack balanced. This is not bookkeeping: a `config`
+# header the recogniser misses is never pushed, but its `end` still pops -- and
+# what it closes is the block AROUND it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("header", [
+    # the shape that found this: a quoted argument after the path
+    'config system replacemsg auth "auth-password-page"',
+    "config system replacemsg-image",
+    "config hosts",
+    "config system global",
+])
+def test_any_config_line_opens_a_block(header):
+    """Permissive on purpose, because the two ways of being wrong are not
+    symmetric: a missed header can leave a secret in the file, a spurious one
+    can only over-apply a rule."""
+    forti = R.FortiBlocks()
+    depth = len(forti._stack)
+    forti.feed(header)
+    assert len(forti._stack) == depth + 1, header
+
+
+def test_an_unrecognised_header_would_close_the_block_around_it():
+    """The leak this cost, kept as a test because the failure was silent."""
+    forti = R.FortiBlocks()
+    forti.feed("config system snmp community")
+    forti.feed('    config system replacemsg auth "auth-password-page"')
+    forti.feed("    end")
+    assert "snmp-community" in forti.scopes()
+
+
+def test_a_community_survives_nothing_after_a_nested_unknown_block():
+    text = ("config system snmp community\n"
+            "    edit 1\n"
+            '        config replacemsg auth "auth-password-page"\n'
+            "        end\n"
+            '        set name "snmpNorthwindRO"\n'
+            "    next\n"
+            "end\n")
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert "snmpNorthwindRO" not in result.text, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_config_register_is_not_a_fortios_block():
+    """A hyphen follows the word, not whitespace."""
+    forti = R.FortiBlocks()
+    forti.feed("config-register 0x2102")
+    assert forti.scopes() == ()
+
+
+def test_a_nested_block_has_not_left_the_one_around_it():
+    """`config hosts` inside an `edit` inside `config system snmp community`."""
+    forti = R.FortiBlocks()
+    for line in ("config system snmp community", "    edit 1",
+                 "        config hosts"):
+        forti.feed(line)
+    assert "snmp-community" in forti.scopes()
+    forti.feed("        end")
+    assert "snmp-community" in forti.scopes()
+
+
+def test_one_path_can_open_several_scopes():
+    """`config system interface` answers two questions: a `set description` in
+    it is an interface description, and its `edit` names an interface."""
+    forti = R.FortiBlocks()
+    forti.feed("config system interface")
+    assert {"interfaces", "fortios-interface-names"} <= set(forti.scopes())
+
+
+def test_snmp_sysinfo_is_snmp_but_not_a_community():
+    """`config system snmp sysinfo` is `snmp` too, and a `set name` there is
+    not a community string -- which is why the community has a scope of its
+    own rather than sharing `snmp`."""
+    forti = R.FortiBlocks()
+    forti.feed("config system snmp sysinfo")
+    assert "snmp" in forti.scopes()
+    assert "snmp-community" not in forti.scopes()
