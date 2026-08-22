@@ -151,6 +151,27 @@ All notable changes to this project are documented here. The format follows
   what lets a peer's `comment=` still be an interface comment while its `name=`
   is a rule of its own.
 
+- `[operational-names] routing-filter-chain` acts on RouterOS routing-filter
+  chain names: the `chain=` declaration under `/routing filter rule`, and the
+  `input.filter=` / `output.filter-chain=` references on a `/routing bgp
+  connection`, including RouterOS's abbreviated `.filter=` and `.filter-chain=`
+  forms. On a service-provider router a chain name frequently carries the
+  operator or the customer it describes.
+
+  One type carries the declaration and every reference, which is the point: the
+  tag is a function of the value, so a chain named in one section and used in
+  another still name the same thing afterwards. Two types could be given two
+  actions and the file would no longer load -- the argument `pseudowire-name`
+  makes for being one rule.
+
+  The declaration is scoped to `/routing filter rule` and nothing else, because
+  `chain=` is firewall grammar too and `input`, `forward` and `srcnat` are
+  RouterOS's own names: substituting one of those would break the file.
+  `OperationalNames` tracks the RouterOS section itself, the way it already
+  tracks JunOS brace depth, so a scoped declaration needs nothing from its
+  caller. `input.allow-as=1` is a count and is left alone by this and by
+  `[as-numbers]` alike.
+
 - `[as-numbers]` reaches RouterOS's spellings. RouterOS writes an ASN as a
   `key=value` pair and RouterOS 7 abbreviates a nested property to a leading
   dot, so one `/routing bgp connection` line carries `as=65501` and `.as=65500`

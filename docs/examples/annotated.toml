@@ -217,6 +217,7 @@ default = "keep"
 # peer-group = "keep"
 # label-switched-path = "keep"
 # configuration-group = "keep"
+# routing-filter-chain = "keep"
 
 [as-numbers]
 default = "keep"

@@ -7,6 +7,7 @@ from collections import Counter
 from ipaddress import ip_address
 
 from .config import OperationalNamesPolicy
+from .rules import routeros_scope
 
 _PREFIX = {
     "acl-firewall-filter": ("ACL", "acl"),
@@ -17,6 +18,11 @@ _PREFIX = {
     "peer-group": ("PEER-GROUP", "peer-group"),
     "label-switched-path": ("LSP", "lsp"),
     "configuration-group": ("CONFIG-GROUP", "config-group"),
+    # RouterOS routing-filter chains. The token is not `chain`: a bare
+    # `chain-1a2b3c` is a plausible real chain name, and `_render` would then
+    # read its own output back as an already-sanitised value and leave a real
+    # one standing -- the reason `vlans` avoids `vlan` too.
+    "routing-filter-chain": ("FILTER-CHAIN", "filter-chain"),
 }
 
 _RESERVED_VRFS = {"default", "global", "none"}
@@ -35,6 +41,13 @@ class OperationalNames:
         self._term_parents: list[tuple[int, str, str]] = []
         #: brace depth at which a `groups {` block names its groups, if inside one
         self._group_block_depth: int | None = None
+        #: the RouterOS section, tracked here for the same reason brace depth is:
+        #: :meth:`line` sees every line in file order, so it can carry the state
+        #: a scoped declaration needs without the caller passing it in. A bare
+        #: `chain=` is a routing-filter chain under `/routing filter rule` and a
+        #: firewall chain under `/ip firewall filter`, where `input`, `forward`
+        #: and `srcnat` are RouterOS's own and substituting one breaks the file.
+        self._ros_section: tuple[str, ...] = ()
 
     def _render(self, kind: str, value: str, *, term: bool = False,
                 context: str = "") -> str:
@@ -68,6 +81,31 @@ class OperationalNames:
 
     def line(self, line: str) -> str:
         original = line
+        self._ros_section = routeros_scope(line, self._ros_section)
+
+        # RouterOS routing-filter chains. The declaration is `chain=` and it is
+        # scoped, because `chain=` is also firewall grammar; the references are
+        # the BGP connection's `input.filter=` / `output.filter-chain=` and their
+        # abbreviated `.filter=` / `.filter-chain=` forms, which name a filter
+        # chain and nothing else, so they need no scope.
+        #
+        # One TYPE carries both, which is the point: the tag is a function of the
+        # value, so a chain named in `/routing filter rule` and the same name on
+        # a `/routing bgp connection` render identically. Two types could be
+        # given two actions and the file would no longer load -- the same
+        # argument `pseudowire-name` makes for being one rule.
+        def chain(value: str) -> str:
+            return self._render("routing-filter-chain", value)
+
+        if "routing-filter-rules" in self._ros_section:
+            line = self._replace_group(
+                line, r"((?<![-\w])chain=)([^\s;]+)", chain)
+        line = self._replace_group(
+            line,
+            r"((?:(?:input|output)\.|(?<![-\w])\.)(?:filter|filter-chain)=)"
+            r"([^\s;]+)",
+            chain)
+
         parent = None
         match = re.search(r"\bpolicy-statement\s+(\S+)\s*\{", original, re.I)
         if match:

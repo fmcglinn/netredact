@@ -495,3 +495,79 @@ def test_the_verifier_knows_the_same_asn_grammars_as_the_rule():
     # a surviving RouterOS ASN is now reported rather than passed over
     assert "as-number-left" in {
         f.check for f in verify(["add as=65501"], cfg)}
+
+
+# ---------------------------------------------------------------------------
+# RouterOS routing-filter chains. The declaration is `chain=` in `/routing
+# filter rule`; the references are a BGP connection's `input.filter=` and
+# `output.filter-chain=` and their abbreviated `.filter=` / `.filter-chain=`
+# forms. One TYPE carries both, so the two can never be given two actions and
+# left pointing at nothing.
+# ---------------------------------------------------------------------------
+
+ROS_CHAINS = (
+    "/routing filter rule\n"
+    "add chain=to-corp-1 disabled=no rule=accept\n"
+    "add chain=from-corp-1 disabled=no rule=accept\n"
+    "/ip firewall filter\n"
+    "add action=accept chain=input comment=noc\n"
+    "add action=jump chain=forward jump-target=mychain\n"
+    "/routing bgp connection\n"
+    "add input.filter=from-corp-1 output.filter-chain=to-corp-1 name=peer-1\n"
+    "add input.allow-as=1 .filter=from-corp-1 .filter-chain=to-corp-1\n"
+)
+
+
+def chains(action: str = "pseudo") -> Config:
+    return Config.from_dict(
+        {"operational-names": {"routing-filter-chain": action}})
+
+
+def test_a_filter_chain_and_every_reference_to_it_render_alike():
+    """THE contract: the tag is a function of the value, so a chain named in
+    one section and used in another still name the same thing afterwards."""
+    out = sanitise_text(ROS_CHAINS, chains(), salt=SALT).text
+    declared = [ln.split("chain=")[1].split()[0] for ln in out.splitlines()
+                if ln.startswith("add chain=")]
+    assert all(name.startswith("filter-chain-") for name in declared), out
+    # `from-corp-1` is declared once and referenced twice, all three alike
+    from_corp = declared[1]
+    assert out.count(f"input.filter={from_corp}") == 1
+    assert out.count(f".filter={from_corp}") == 2      # `input.filter=` too
+    to_corp = declared[0]
+    assert out.count(f"output.filter-chain={to_corp}") == 1
+    assert out.count(f".filter-chain={to_corp}") == 2
+
+
+def test_a_firewall_chain_is_not_a_routing_filter_chain():
+    """`input`, `forward` and `srcnat` are RouterOS's own firewall chain names,
+    and substituting one breaks the file. The section is the only evidence."""
+    out = sanitise_text(ROS_CHAINS, chains("redact"), salt=SALT).text
+    assert "chain=input" in out
+    assert "chain=forward" in out
+    assert "jump-target=mychain" in out
+
+
+def test_allow_as_is_a_count_and_not_a_chain_or_an_asn():
+    cfg = Config.from_dict({"operational-names": {"routing-filter-chain": "redact"},
+                            "as-numbers": {"default": "pseudo"}})
+    assert "input.allow-as=1" in sanitise_text(ROS_CHAINS, cfg, salt=SALT).text
+
+
+@pytest.mark.parametrize("action", ["keep", "pseudo", "hash", "redact"])
+def test_a_filter_chain_honours_every_action(action):
+    result = sanitise_text(ROS_CHAINS, chains(action), salt=SALT)
+    if action == "keep":
+        assert "chain=to-corp-1" in result.text
+        assert result.kept_counts["routing-filter-chain"] == 6
+    else:
+        assert "to-corp-1" not in result.text and "from-corp-1" not in result.text
+        assert result.counts["routing-filter-chain"] == 6
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_surviving_filter_chain_is_reported_when_the_type_acts():
+    from netredact.verify import verify
+
+    assert "operational-name-left" in {
+        f.check for f in verify(["add input.filter=from-corp-1"], chains())}

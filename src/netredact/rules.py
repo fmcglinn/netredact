@@ -1327,6 +1327,11 @@ _ROUTEROS_SCOPES = (
      re.compile(r"interface\s+wireguard\s+peers(?![\w-])", re.I)),
     (("bgp-connections", "object-labels"),
      re.compile(r"routing\s+bgp\s+connection(?![\w-])", re.I)),
+    # `chain=` names a routing-filter chain here and a FIREWALL chain under
+    # `/ip firewall …`, where `input`, `forward` and `srcnat` are RouterOS's own
+    # names and substituting one breaks the file. Read by `OperationalNames`.
+    (("routing-filter-rules",),
+     re.compile(r"routing\s+filter\s+rule(?![\w-])", re.I)),
     (("snmp-community", "snmp"),
      re.compile(r"snmp\s+community(?![\w-])", re.I)),
     (("system-identity",), re.compile(r"system\s+identity(?![\w-])", re.I)),

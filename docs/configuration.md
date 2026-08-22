@@ -142,9 +142,10 @@ junos-location-body = "redact"
 
 Typed operational identifiers default to `keep`. Options are
 `acl-firewall-filter`, `route-map`, `prefix-list`, `policy-statement`, `vrf`,
-`peer-group`, `label-switched-path` and `configuration-group`. Firewall-filter
-and policy term names inherit their parent's action. `pseudo` preserves
-supported declarations and references; `redact` may make output unloadable.
+`peer-group`, `label-switched-path`, `configuration-group` and
+`routing-filter-chain`. Firewall-filter and policy term names inherit their
+parent's action. `pseudo` preserves supported declarations and references;
+`redact` may make output unloadable.
 
 `label-switched-path` covers JunOS MPLS LSP names: the `label-switched-path`
 and `static-label-switched-path` declarations, and the `lsp-next-hop`
@@ -161,6 +162,15 @@ in a bracketed list. The configuration nested *inside* a group is not a group
 name and is acted on by whichever selector owns it, so a group is not a hiding
 place and not a second set of rules. `groups` is selected as a statement, not
 as a word: Cisco's `object-group` is untouched.
+
+`routing-filter-chain` covers RouterOS routing-filter chains: the `chain=`
+declaration under `/routing filter rule`, and the `input.filter=` /
+`output.filter-chain=` references on a `/routing bgp connection`, including
+RouterOS's abbreviated `.filter=` and `.filter-chain=` forms. The declaration is
+scoped to that section and nothing else, because `chain=` is firewall grammar
+too and `input`, `forward` and `srcnat` are RouterOS's own names -- substituting
+one of those would break the file. On a service-provider router a chain name
+frequently carries the operator or the customer it describes.
 
 An operational name is treated as one whole value. Names very often encode
 other identities -- `gncg-cor1_to_rcbc-agr1-1` carries two device names -- and
