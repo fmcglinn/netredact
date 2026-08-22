@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**64 rules**: 38 `secrets`, 6 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 2 `interfaces`, 1 `vlans`, 2 `circuits`.
+**65 rules**: 38 `secrets`, 6 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 3 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 16 verification checks
 
@@ -186,6 +186,7 @@ Each rule name links to its pattern, which is listed in full under
 | [`routeros-private-key`](#routeros-private-key) | `secrets` | RouterOS `private-key=`, e.g. a WireGuard interface's own key -- mikrotik grammar |  |
 | [`routeros-public-key`](#routeros-public-key) | `identity` | RouterOS `public-key=`: the other half of a WireGuard pair, and NOT a credential. It is `identity` for the reason `ssh-public-key` is -- it ties the file to one device or peer, and a kept one has to be a rule the shape checks can be blinded to -- mikrotik grammar |  |
 | [`routeros-snmp-community`](#routeros-snmp-community) | `secrets` | `name=` under `/snmp community`, which is what RouterOS calls a community string. `name=` is NOT a secret anywhere else -- there it is an interface, a bridge or a firewall rule -- mikrotik grammar | inside `snmp-community` |
+| [`routeros-peer-name`](#routeros-peer-name) | `interfaces` | `name=` under `/interface wireguard peers`, which is a LABEL and on a provider config a customer. Scoped to the peers section and not to `interfaces`, deliberately: everywhere else a RouterOS `name=` is an identifier the configuration references by name (`interface=ether1-transit`), and acting on the declaration alone would break the file and leak the value through every reference that kept it -- mikrotik grammar | inside `wireguard-peers` |
 | [`comment`](#comment) | `text` | RouterOS's `comment=`, anywhere EXCEPT inside a `/interface …` section -- a firewall rule, a DHCP lease, an address list. The interface case is its own rule in its own family, exactly as `description` is split -- mikrotik grammar |  outside `interfaces` |
 | [`interface-comment`](#interface-comment) | `interfaces` | the same RouterOS `comment=`, when it is inside a `/interface …` section -- mikrotik grammar | inside `interfaces` |
 | [`junos-type9`](#junos-type9) | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  |
@@ -519,6 +520,12 @@ block also carries the pattern that ends it.
 ```
 
 ### `routeros-snmp-community`
+
+```
+(?<![-\w])name=%VAL%
+```
+
+### `routeros-peer-name`
 
 ```
 (?<![-\w])name=%VAL%

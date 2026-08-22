@@ -127,6 +127,23 @@ All notable changes to this project are documented here. The format follows
   because a licence id is tied to the one device and not to a production line.
   `location=` and `contact=` reach the rules of those names.
 
+- `routeros-peer-name` puts the `name=` under `/interface wireguard peers` in
+  `[interfaces]`, alongside the description on the interface it hangs off: a
+  peer name is operator free text, and on a provider config it is a customer.
+  It is scoped to the peers section and NOT to `interfaces`, deliberately.
+  Everywhere else under `/interface …` a RouterOS `name=` is an identifier the
+  configuration references by name -- `/ip address add
+  interface=ether1-transit` names the `name=` that `/interface ethernet` set --
+  so acting on the declaration alone would break the file and leak the value
+  anyway, through every reference that kept it. A peer name is referenced by
+  nothing, which is what makes it safe to treat as text. Widening this needs the
+  references to move with the declaration, the way `pseudowire-name` carries
+  both in one rule; until then the scope is the guard.
+
+  A RouterOS section now opens several scopes where its path nests, which is
+  what lets a peer's `comment=` still be an interface comment while its `name=`
+  is a rule of its own.
+
 - A third kind of block for the scope names the rules already use: a RouterOS
   `/export` section, which a `/`-prefixed line opens and the next one ends.
   Where more than one dialect has the block the name stays JunOS's own, so one

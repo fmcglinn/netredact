@@ -164,6 +164,7 @@ default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
 # interface-description = "keep"
+# routeros-peer-name    = "keep"
 # interface-comment     = "keep"
 
 # What a VLAN is called: the `name` under a `vlan <id>` block. NOT an

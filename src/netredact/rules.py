@@ -668,6 +668,22 @@ _PAIRS: list[tuple[str, str, str, str | None]] = [
     # learn about scope at all; see ``RuleCatalogue._line``.
     ("routeros-snmp-community", r'(?<![-\w])name=%VAL%', "secrets",
      "snmp-community"),
+    # A WireGuard peer's `name=` is a LABEL: operator free text, and on a
+    # provider config a customer, so it belongs to the same family as the
+    # description on the interface it hangs off.
+    #
+    # It is scoped to the peers section and NOT to `interfaces`, and that
+    # narrowness is the whole point. Everywhere else under `/interface …` a
+    # `name=` is an identifier the configuration REFERENCES by name -- `/ip
+    # address add interface=ether1-transit` names the `name=` that `/interface
+    # ethernet` set. Acting on the declaration alone would both break the file
+    # and leak the value anyway, through every reference that kept it. A peer
+    # name is referenced by nothing, which is what makes it safe to treat as
+    # text. Widening this to `interfaces` needs the references to move with it,
+    # the way `pseudowire-name` carries its definition and its references in one
+    # rule; until then the scope is the guard.
+    ("routeros-peer-name", r'(?<![-\w])name=%VAL%', "interfaces",
+     "wireguard-peers"),
     # RouterOS's `description`, split by scope in exactly the same way and for
     # exactly the same reason: on an interface it is a port label a reviewer
     # needs, on a firewall rule or a DHCP lease it is ordinary free text. One
@@ -721,6 +737,7 @@ _RULE_VENDORS: dict[str, str] = {
     "comment": "mikrotik",
     "interface-comment": "mikrotik",
     "routeros-password": "mikrotik",
+    "routeros-peer-name": "mikrotik",
     "routeros-pre-shared-key": "mikrotik",
     "routeros-private-key": "mikrotik",
     "routeros-public-key": "mikrotik",
@@ -991,7 +1008,7 @@ class RuleCatalogue:
         out: list[str] = []
         stanza: list[str] = []
         ios_block: str | None = None
-        ros_section: str | None = None
+        ros_section: tuple[str, ...] = ()
         index = 0
         while index < len(source):
             raw = source[index]
@@ -1008,7 +1025,7 @@ class RuleCatalogue:
             else:
                 line_scope = (set_match.group(1).lower(),) if set_match else ()
             inside = (tuple(stanza) + ((ios_block,) if ios_block else ())
-                      + ((ros_section,) if ros_section else ()) + line_scope)
+                      + ros_section + line_scope)
 
             block = next(((start, end, name, family)
                           for start, end, name, family in self._blocks
@@ -1253,7 +1270,7 @@ _SET_SCOPE = re.compile(r"\s*set\s+([\w-]+)\b", re.I)
 #: below will match it.
 _ROUTEROS_SECTION = re.compile(r"^/([a-z][\w-]*(?:\s+[a-z][\w-]*)*)")
 
-#: a RouterOS section path -> the scope it opens, longest path first, because
+#: a RouterOS section path -> the scopes it opens, longest path first, because
 #: ``/snmp community`` is not ``/snmp``.
 #:
 #: The naming follows the rule set out above :data:`_BLOCK_SCOPES`: where both
@@ -1262,26 +1279,35 @@ _ROUTEROS_SECTION = re.compile(r"^/([a-z][\w-]*(?:\s+[a-z][\w-]*)*)")
 #: as an ``interface Gi0/0`` block and an ``interfaces { … }`` stanza are. A
 #: section only RouterOS has keeps its own name.
 #:
+#: A section opens SEVERAL scopes where the paths nest, because that is what the
+#: path says: ``/interface wireguard peers`` is inside ``/interface``, so a
+#: peer's ``comment=`` is an interface comment while its ``name=`` is a rule of
+#: its own. Listing the general scope alongside the specific one is what lets
+#: the two coexist instead of the longest match hiding the shorter.
+#:
 #: Those own-name sections are not decoration. ``name=`` is a community string
 #: under ``/snmp community``, a login under ``/user`` and ``/ppp secret``, the
-#: device's own name under ``/system identity``, and an interface, bridge,
-#: firewall rule or address list everywhere else. The line is identical in all
-#: five cases, so the section is the only evidence there is -- which is exactly
-#: the argument for scope in the first place, and exactly why none of this is a
-#: vendor gate: a file with no ``/user`` section in it cannot reach the rules
-#: and the collectors that need one.
+#: device's own name under ``/system identity``, a peer's label under
+#: ``/interface wireguard peers``, and a referenced object name everywhere else.
+#: The line is identical in all of them, so the section is the only evidence
+#: there is -- which is exactly the argument for scope in the first place, and
+#: exactly why none of this is a vendor gate: a file with no ``/user`` section in
+#: it cannot reach the rules and the collectors that need one.
 _ROUTEROS_SCOPES = (
-    ("snmp-community", re.compile(r"snmp\s+community(?![\w-])", re.I)),
-    ("system-identity", re.compile(r"system\s+identity(?![\w-])", re.I)),
-    ("ppp-secret", re.compile(r"ppp\s+secret(?![\w-])", re.I)),
-    ("interfaces", re.compile(r"interface(?![\w-])", re.I)),
-    ("snmp", re.compile(r"snmp(?![\w-])", re.I)),
-    ("user", re.compile(r"user(?![\w-])", re.I)),
+    (("wireguard-peers", "interfaces"),
+     re.compile(r"interface\s+wireguard\s+peers(?![\w-])", re.I)),
+    (("snmp-community", "snmp"),
+     re.compile(r"snmp\s+community(?![\w-])", re.I)),
+    (("system-identity",), re.compile(r"system\s+identity(?![\w-])", re.I)),
+    (("ppp-secret",), re.compile(r"ppp\s+secret(?![\w-])", re.I)),
+    (("interfaces",), re.compile(r"interface(?![\w-])", re.I)),
+    (("snmp",), re.compile(r"snmp(?![\w-])", re.I)),
+    (("user",), re.compile(r"user(?![\w-])", re.I)),
 )
 
 
-def routeros_scope(line: str, current: str | None) -> str | None:
-    """The RouterOS section scope in force after ``line``.
+def routeros_scope(line: str, current: tuple[str, ...]) -> tuple[str, ...]:
+    """The RouterOS section scopes in force after ``line``.
 
     A ``/``-prefixed line always REPLACES the section, even when its path is one
     no scope names: an ``/ip address`` header has to end the ``/user`` section,
@@ -1292,8 +1318,8 @@ def routeros_scope(line: str, current: str | None) -> str | None:
     if not match:
         return current
     path = match.group(1)
-    return next((scope for scope, pat in _ROUTEROS_SCOPES if pat.match(path)),
-                None)
+    return next((scopes for scopes, pat in _ROUTEROS_SCOPES if pat.match(path)),
+                ())
 
 
 #: the opening line of a wrapped RouterOS command: an ``add`` / ``set`` /

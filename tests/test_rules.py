@@ -27,7 +27,7 @@ def test_every_rule_has_the_expected_family():
     counts = Counter(info.family for info in inventory())
     assert counts == {"secrets": 38, "text": 6, "locations": 2,
                       "identity": 9, "platform": 4,
-                      "interfaces": 2, "vlans": 1, "circuits": 2}
+                      "interfaces": 3, "vlans": 1, "circuits": 2}
     assert set(counts) <= set(FAMILIES)
 
 

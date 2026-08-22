@@ -148,6 +148,14 @@ RULE_NOTES = {
                              "description …`",
     "interface-comment": "the same RouterOS `comment=`, when it is inside a "
                          "`/interface …` section",
+    "routeros-peer-name": "`name=` under `/interface wireguard peers`, which is "
+                          "a LABEL and on a provider config a customer. Scoped "
+                          "to the peers section and not to `interfaces`, "
+                          "deliberately: everywhere else a RouterOS `name=` is "
+                          "an identifier the configuration references by name "
+                          "(`interface=ether1-transit`), and acting on the "
+                          "declaration alone would break the file and leak the "
+                          "value through every reference that kept it",
     "vlan-name": "the `name` under a `vlan <id>` block, and the one-line "
                  "`vlan <id> name <name>` form. Never an SVI: `interface "
                  "Vlan905` is an interface",

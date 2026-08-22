@@ -231,7 +231,7 @@ class Sanitiser:
         # cannot decide it. The scoped tables are consulted exactly like the
         # flat ones; the section tracker is the same one the rules use, so the
         # two can never disagree about where a line is.
-        section: str | None = None
+        section: tuple[str, ...] = ()
         for line in lines:
             section = R.routeros_scope(line, section)
             for pat in R.HOSTNAME_PATS:
@@ -239,11 +239,11 @@ class Sanitiser:
                 if m:
                     self._add(self.hostnames, m.group(1).strip('";'))
             for scopes, pat in R.SCOPED_HOSTNAME_PATS:
-                m = pat.search(line) if section in scopes else None
+                m = pat.search(line) if _in(section, scopes) else None
                 if m:
                     self._add(self.hostnames, m.group(1).strip('";'))
             for scopes, pat in R.SCOPED_USERNAME_PATS:
-                m = pat.search(line) if section in scopes else None
+                m = pat.search(line) if _in(section, scopes) else None
                 if m:
                     self._add(self.usernames, m.group(1).strip('";'))
             for pat in R.DOMAIN_PATS:
@@ -463,6 +463,16 @@ class Sanitiser:
             return new
 
         return sub
+
+
+def _in(section: tuple[str, ...], scopes: tuple[str, ...]) -> bool:
+    """Whether the section a line is in is one a scoped collector asked for.
+
+    A RouterOS section opens several scopes where its path nests, so this is an
+    intersection rather than a membership test -- the same question
+    ``RuleCatalogue._scope`` asks of a scoped rule.
+    """
+    return any(scope in section for scope in scopes)
 
 
 def _is_v4_address(text: str) -> bool:

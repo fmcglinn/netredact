@@ -396,3 +396,69 @@ def test_a_wrapped_command_keeps_the_scope_of_its_section():
     assert "a port note" not in out
     out = sanitise_text(text, section("text", "redact"), salt=SALT).text
     assert 'comment="a port note"' in out
+
+
+# -- a RouterOS `name=` is four different things ----------------------------
+#
+# The section decides which, and the peers case is the one where it is free
+# text. What makes that safe is exactly what makes the others unsafe: a peer
+# name is referenced by nothing, while an interface name is referenced by every
+# `interface=` in the file.
+
+WIREGUARD_PEER = (
+    "/interface wireguard peers\n"
+    "add allowed-address=100.64.254.2/32 interface=wg-4g "
+    'name="a peer label" comment="a port note"\n'
+    "/interface ethernet\n"
+    "set [ find default-name=ether1 ] name=ether1-transit\n"
+    "/ip address\n"
+    "add address=128.66.18.2/30 interface=ether1-transit\n"
+)
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("keep", '"a peer label"'),
+    ("pseudo", '"desc-'),
+    ("hash", '"<DESC-'),
+    ("redact", '"<DESCRIPTION-REMOVED>"'),
+])
+def test_a_peer_name_follows_the_description_rule(action, expected):
+    """It is a label, and on a provider config a customer -- so it belongs to
+    the same family as the description on the interface it hangs off."""
+    out = sanitise_text(WIREGUARD_PEER, section("interfaces", action),
+                        salt=SALT).text
+    assert expected in out, out
+    if action != "keep":
+        assert "a peer label" not in out
+
+
+def test_a_referenced_interface_name_is_left_alone():
+    """THE reason `routeros-peer-name` is scoped to the peers section.
+
+    `/ip address add interface=ether1-transit` names the `name=` that
+    `/interface ethernet` set. Acting on the declaration alone would break the
+    file AND leak the value through the reference that kept it, so a `name=`
+    outside the peers section is structure until the references move with it.
+    """
+    out = sanitise_text(WIREGUARD_PEER, maximal(), salt=SALT).text
+    assert "name=ether1-transit" in out
+    assert "interface=ether1-transit" in out
+    assert "interface=wg-4g" in out
+
+
+def test_a_peer_is_inside_its_own_section_and_inside_interfaces():
+    """The paths nest, so the scopes do: the peer's `comment=` is an interface
+    comment while its `name=` is a rule of its own."""
+    result = sanitise_text(WIREGUARD_PEER, policy(interfaces="hash"), salt=SALT)
+    assert result.counts["interface-comment"] == 1
+    assert result.counts["routeros-peer-name"] == 1
+
+
+def test_a_peer_name_is_not_collected_as_a_hostname_or_a_login():
+    """`/system identity`, `/user` and `/ppp secret` are the sections that make
+    a `name=` an identity. A peers section is not one of them."""
+    result = sanitise_text(WIREGUARD_PEER, policy(hostnames="pseudo",
+                                                 usernames="pseudo"), salt=SALT)
+    assert '"a peer label"' in result.text
+    assert not result.mapping.get("hostname")
+    assert not result.mapping.get("username")
