@@ -1507,10 +1507,26 @@ def join_continuations(lines: Iterable[str]) -> list[str]:
     one, which is worse than a plain miss -- so the wrap is undone BEFORE any
     rule runs.
 
-    The ``\``, the newline and the continuation's indent become one space, which
-    is what RouterOS itself does with them: it wraps at a token boundary
-    precisely because the continuation's leading whitespace is only a separator,
-    so the joined line is still valid RouterOS and still re-imports.
+    The ``\``, the newline and the continuation's indent are removed and the two
+    halves are concatenated with NOTHING between them. That is what RouterOS
+    itself does with them, and the "nothing" is load-bearing: ``/export`` wraps
+    at whatever column it runs out of room at, which is regularly in the middle
+    of a token and even in the middle of a word inside a quoted string --
+
+        rule="if (dst == 0.0.0.0/0) {set bgp-path-\
+            prepend 1; accept}
+
+    is one ``bgp-path-prepend``, and ``set bgp-large-communities orig\`` +
+    ``in-inband-mgmt`` is one ``origin-inband-mgmt``. Joining those with a space
+    does not merely reformat the file, it corrupts it: the keyword becomes
+    ``bgp-path- prepend`` and the list name becomes two words. Where a separator
+    IS wanted the export has already put it before the backslash, so keeping the
+    line up to the backslash verbatim -- trailing space and all -- is both
+    necessary and sufficient.
+
+    (This function first assumed a wrap always fell on a token boundary. It does
+    not, and nothing in a config says it does; the assumption came from the
+    shapes that happened to be in front of it.)
 
     The line count therefore changes, as it already can where a block body or a
     banner collapses. Idempotent, because nothing in the result ends in ``\``:
@@ -1528,17 +1544,22 @@ def join_continuations(lines: Iterable[str]) -> list[str]:
             out.append(line)
             index += 1
             continue
-        parts = [line[:-1].rstrip()]
+        # the backslash goes and NOTHING replaces it: whatever separator the
+        # wrap needs, the export already wrote before it. Only the continuation's
+        # leading indent is dropped, and the backslash is taken off before the
+        # indent is, so a space the export put in front of the backslash on a
+        # continuation line survives too.
+        parts = [line[:-1]]
         index += 1
         while index < len(source):
             nxt = source[index]
             index += 1
             if nxt.endswith("\\") and index < len(source):
-                parts.append(nxt[:-1].strip())
+                parts.append(nxt[:-1].lstrip())
                 continue
-            parts.append(nxt.strip())
+            parts.append(nxt.lstrip())
             break
-        out.append(" ".join(parts))
+        out.append("".join(parts))
     return out
 
 

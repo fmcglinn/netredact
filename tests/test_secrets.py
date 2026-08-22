@@ -538,8 +538,10 @@ def test_a_wrapped_secret_does_not_leak_its_tail():
 
 
 def test_a_wrapped_command_is_emitted_unwrapped_and_still_loads():
-    """The `\\`, the newline and the continuation's indent become one space,
-    which is what RouterOS itself does with them."""
+    """The `\\`, the newline and the continuation's indent go, and nothing
+    replaces them -- the space here is the one the export wrote before the
+    backslash. See `ARBITRARY_WRAPS` in test_rules for why that distinction
+    matters."""
     out = sanitise_text(WRAPPED_PSK, Config(), salt=SALT).text
     assert out.splitlines() == [
         "/interface wireless security-profiles",
