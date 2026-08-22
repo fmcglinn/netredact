@@ -72,9 +72,26 @@ VTOK = ENC[:-1] + r"|type|value|key|level\s+\d+)"
 #: is 44 characters of base64, so ``long-base64-left`` happens to catch one
 #: today, but a check that only knows a shape must not be the only thing
 #: standing between a regressed rule and a credential in the output.
+#:
+#: The FortiOS half was the same lesson twice. ``psksecret`` and ``ppk-secret``
+#: end in a word this list already had, but the check reads whole words, so
+#: ``\bsecret\b`` never saw them: an IPsec pre-shared key and an SNMPv3 auth
+#: secret left the tool in the device's encrypted form with no finding at all,
+#: which is the one failure mode this module exists to make impossible.
 _CRED_KEYWORDS = (r"password|passwd|passphrase|secret|pre-?shared-key|"
                   r"private-key|key-string|auth(?:entication)?-key|"
-                  r"encrypted-password|wpa-psk")
+                  r"encrypted-password|wpa-psk|"
+                  r"psksecret|ppk-secret|auth-pwd|priv-pwd|api-key")
+
+#: credential keywords that are only credentials in the FortiOS ``set
+#: <attribute> <value>`` shape. ``key`` and ``secret`` are far too ordinary to
+#: name unqualified -- a `key chain`, a `key 1` id, `enable secret` -- and the
+#: `set` at the head of the line is the evidence that narrows them, exactly as
+#: it does in the rule that handles them (``rules._FORTIOS_SECRET_KEYS``).
+#: The boundary is spelled ``(?![-\w])`` rather than ``\b`` because a hyphen is
+#: a word boundary: ``set key-id 7`` is a key *id*, and the credential it
+#: numbers is on another line.
+_CRED_SET = r"^\s*set\s+(?:key|secret)(?![-\w])"
 
 #: ``community`` only where it is an SNMP community: after ``snmp-server`` /
 #: ``snmp`` / ``set snmp``, or first on the line (the JunOS ``snmp { community
@@ -98,9 +115,15 @@ VERIFY_RULES = [
     # the optional `=` is RouterOS's separator: `password=<REMOVED>` is a
     # credential this tool has already dealt with, and without it every
     # `key=value` pair netredact had destroyed was reported as a survivor
+    # a value that OPENS a PEM block is not this check's to judge: the body
+    # under it is `pem-left`'s, which still fires if a key body ever survives,
+    # so passing the `-----BEGIN` line here reports nothing twice and hides
+    # nothing once -- FortiOS `set private-key "-----BEGIN …` is the line that
+    # was reported after its key was already destroyed
     ("credential-left", re.compile(
-        rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b)"
-        rf"(?!\s*=?\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<))", re.I)),
+        rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b|{_CRED_SET})"
+        rf"(?!\s*=?\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<|\"?-----BEGIN\b))",
+        re.I | re.M)),
 ]
 
 #: the ``identity`` half of ``pem-left``: a certificate is public material that

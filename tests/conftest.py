@@ -10,7 +10,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 #: every shipped fixture, by file name. Named once: the sweeps that run over
 #: all of them read this, so a fixture added here is inside "every fixture" the
 #: day it exists rather than the day someone remembers all four lists.
-FIXTURE_NAMES = ("cisco.cfg", "arista.cfg", "juniper.cfg",
+FIXTURE_NAMES = ("cisco.cfg", "arista.cfg", "juniper.cfg", "fortinet.cfg",
                  "edge.cfg", "edge-junos.cfg", "qk.cfg", "mikrotik.cfg")
 
 
@@ -36,6 +36,11 @@ def arista():
 @pytest.fixture
 def juniper():
     return read("juniper.cfg")
+
+
+@pytest.fixture
+def fortinet():
+    return read("fortinet.cfg")
 
 
 @pytest.fixture

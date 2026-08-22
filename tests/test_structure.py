@@ -123,3 +123,33 @@ def test_a_truncated_block_is_still_acted_on():
     result = sanitise_text(text, policy(identity="redact"), salt=SALT)
     assert "30820330" not in result.text
     assert result.counts["certificate-block"] == 1
+
+
+def test_fortios_blocks_stay_balanced(fortinet):
+    """`config` … `end` and `edit` … `next` are the file's whole structure."""
+    out = sanitise_text(fortinet, maximal(), salt=SALT).text
+    for keyword in ("config", "edit", "next", "end"):
+        before = sum(1 for line in fortinet.splitlines()
+                     if line.strip().split(" ")[0] == keyword)
+        after = sum(1 for line in out.splitlines()
+                    if line.strip().split(" ")[0] == keyword)
+        assert before == after, keyword
+
+
+def test_a_fortios_pem_value_keeps_the_quoting_around_it(fortinet):
+    """FortiOS puts a whole PEM block inside one quoted value, so the opening
+    `set private-key "` and the closing quote on its own line are structure
+    the block rules have to leave where they are."""
+    out = sanitise_text(fortinet, maximal(), salt=SALT).text
+    assert 'set private-key "-----BEGIN ENCRYPTED PRIVATE KEY-----' in out
+    assert "-----END ENCRYPTED PRIVATE KEY-----\n\"\n" in out
+    assert "privatekeymaterial" not in out
+
+
+def test_a_fortios_config_still_says_what_it_configures(fortinet):
+    """The attribute names are grammar; only their values may move."""
+    out = sanitise_text(fortinet, maximal(), salt=SALT).text
+    for keeper in ("config system snmp community", "set password ENC",
+                   "set psksecret ENC", "set allowaccess ping https ssh snmp",
+                   "set security wpa2-only-personal", "set remote-as"):
+        assert keeper in out, keeper

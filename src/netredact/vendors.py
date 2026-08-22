@@ -12,7 +12,9 @@ That is also why no vendor rests on a single marker. Each table below carries
 several independent hints, so a config whose platform lines have been redacted
 still names its vendor from the shapes that remain: the ``! device:`` comment
 without its parenthesised contents, ``! Command: show running-config``,
-``switchname``, ``boot-start-marker``, a ``set system`` line.
+``switchname``, ``boot-start-marker``, a ``set system`` line, or -- for
+FortiOS, whose whole header is ``platform`` material -- the ``config <path>`` /
+``edit "<name>"`` / ``next`` shapes its grammar cannot do without.
 """
 
 from __future__ import annotations
@@ -76,6 +78,29 @@ VENDOR_HINTS = (
         (r"set\s+\[\s*find\b", STRONG),
         (r"^add\s+\S+=", WEAK),
         (r"^#\s*model\s*=", WEAK),
+    )),
+    ("fortinet", (
+        (r"^#config-version=", DECISIVE),
+        # `ENC` is FortiOS's own marker that the value after it is the
+        # device's encrypted form of a credential. No other dialect writes it,
+        # and it does not survive `secrets` acting -- which is why it is one
+        # hint of several rather than the whole answer.
+        (r"\bENC\s+[A-Za-z0-9+/=]{12,}", DECISIVE),
+        # the rest of the `#`-prefixed header. `platform` acts on the values
+        # after the `=` and keeps the keys, so these shapes remain.
+        (r"^#(?:conf_file_ver|buildno|global_vdom|branch_pt)=", STRONG),
+        # The grammar itself, which is what a headerless fragment leaves us:
+        # `config <path>` at column zero, `edit "<name>"` under it, and the
+        # bare `next` that closes an edit. A bare `end` is deliberately NOT
+        # here -- an IOS running-config ends with one.
+        (r"^config\s+system\s+\S", STRONG),
+        (r"^config\s+(?:firewall|vpn|user|router|log|wireless-controller)\s+\S", STRONG),
+        (r"^\s*edit\s+\"", STRONG),
+        (r"^\s*next\s*$", STRONG),
+        (r"^\s*set\s+vdom\b", STRONG),
+        # FortiOS's spelling of "return this to its default". JunOS deletes and
+        # IOS says `no`, so the word is suggestive on its own but no more.
+        (r"^\s*unset\s+\S", WEAK),
     )),
     ("cisco", (
         (r"^\s*boot-start-marker", DECISIVE),

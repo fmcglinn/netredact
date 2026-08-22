@@ -165,7 +165,8 @@ def test_applying_the_marker_twice_leaves_one(cisco):
 
 
 def test_the_marker_is_a_comment_in_the_grammar_it_lands_in():
-    assert provenance.marker_for("juniper", "1.0").startswith("# ")
+    for vendor in ("juniper", "fortinet"):
+        assert provenance.marker_for(vendor, "1.0").startswith("# ")
     for vendor in ("cisco", "arista", "unknown"):
         assert provenance.marker_for(vendor, "1.0").startswith("! ")
 

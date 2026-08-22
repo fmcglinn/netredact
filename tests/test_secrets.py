@@ -47,6 +47,17 @@ PLANTED = [
     # first physical line the value matcher cannot close the quote, so without
     # the join a marker lands on the opening fragment and this survives.
     "Lantern 77",
+    # FortiOS: every one of these is a `set <attribute> [ENC] <value>` line,
+    # which is the one grammar the whole family shares
+    "SH2NwEdgeAdminPassEXAMPLEyqe7C3E5xUkAQjV3wIhLZbCxT1QYyqe7C3E5=",
+    "AK1FgtBackupPassEXAMPLE9wQwErTy==", "AK1FgtApiKeyEXAMPLEz0982kQ==",
+    "snmpNorthwindRO", "AK1SnmpAuthPassEXAMPLE0aQ==",
+    "AK1SnmpPrivPassEXAMPLE1bQ==", "NtpSharedSecret123",
+    "AK1LocalUserPassEXAMPLE2cQ==", "AK1LdapBindPassEXAMPLE3dQ==",
+    "AK1RadiusSecretEXAMPLE4eQ==", "AK1CertKeyPassEXAMPLE5fQ==",
+    "MIIFDjBABgkqhkiG9w0BBQ0wMzAbBgkqEXAMPLEprivatekeymaterial0123456789",
+    "AK1PskEXAMPLEsEcReTkEyMaTeRiAl==", "AK1PpkEXAMPLEsEcReT6gQ==",
+    "AK1WifiPassphraseEXAMPLE7hQ==", "AK1BgpNeighborPassEXAMPLE8iQ==",
 ]
 
 
@@ -549,3 +560,101 @@ def test_a_trailing_backslash_in_another_dialect_is_left_alone():
             "description a plain description \\\n")
     out = sanitise_text(text, Config(), salt=SALT).text
     assert out == text
+
+
+# ---------------------------------------------------------------------------
+# FortiOS. Every credential the platform has is written the same way -- `set
+# <attribute> [ENC] <value>`, with the block above saying what the value
+# belongs to -- so one rule covers the lot, and what confines it is the shape:
+# the keyword has to be the FIRST token after `set`.
+#
+# That matters because two of the keywords are ordinary words. JunOS puts
+# `secret` and `key` at the END of a long `set` path, where `bare-secret` and
+# `quoted-key` own them; FortiOS puts them immediately after `set`, where it
+# owns nothing else. The collision tests below are the whole justification for
+# reading the keywords at all.
+# ---------------------------------------------------------------------------
+
+#: (line, the credential that must not survive)
+FORTIOS_SECRETS = [
+    ("        set password ENC AK1BgpNeighborPassEXAMPLE8iQ==",
+     "AK1BgpNeighborPassEXAMPLE8iQ=="),
+    ("        set passwd ENC AK1LocalUserPassEXAMPLE2cQ==",
+     "AK1LocalUserPassEXAMPLE2cQ=="),
+    ("        set psksecret ENC AK1PskEXAMPLEsEcReTkEyMaTeRiAl==",
+     "AK1PskEXAMPLEsEcReTkEyMaTeRiAl=="),
+    ("        set ppk-secret ENC AK1PpkEXAMPLEsEcReT6gQ==",
+     "AK1PpkEXAMPLEsEcReT6gQ=="),
+    ("        set auth-pwd ENC AK1SnmpAuthPassEXAMPLE0aQ==",
+     "AK1SnmpAuthPassEXAMPLE0aQ=="),
+    ("        set priv-pwd ENC AK1SnmpPrivPassEXAMPLE1bQ==",
+     "AK1SnmpPrivPassEXAMPLE1bQ=="),
+    ("        set passphrase ENC AK1WifiPassphraseEXAMPLE7hQ==",
+     "AK1WifiPassphraseEXAMPLE7hQ=="),
+    ("        set api-key ENC AK1FgtApiKeyEXAMPLEz0982kQ==",
+     "AK1FgtApiKeyEXAMPLEz0982kQ=="),
+    ("        set secret ENC AK1RadiusSecretEXAMPLE4eQ==",
+     "AK1RadiusSecretEXAMPLE4eQ=="),
+    ('            set key "NtpSharedSecret123"', "NtpSharedSecret123"),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_SECRETS,
+                         ids=[line.split()[1] for line, _ in FORTIOS_SECRETS])
+def test_every_fortios_credential_is_one_rule(line, secret):
+    """One rule, ten attributes, and the keyword itself always survives."""
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text
+    assert result.counts["fortios-secret"] == 1
+    assert line.split()[1] in result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_the_fortios_encoding_token_is_not_mistaken_for_the_secret():
+    """`ENC` says the value is encrypted; eating it would leave the blob.
+
+    This is the `wpa-psk ascii 0 <key>` lesson in FortiOS spelling: a hint
+    consumed as if it were the value emits a marker, so the line reads as
+    handled while the credential stays where it was.
+    """
+    out = sanitise_text("    set password ENC AK1FgtBackupPassEXAMPLE9wQwErTy==\n",
+                        Config(), salt=SALT).text
+    assert out.strip() == "set password ENC <REMOVED>"
+
+
+#: (line, the rule that must claim it) -- the shapes another dialect owns, all
+#: of which contain a FortiOS credential keyword somewhere on the line
+NOT_FORTIOS = [
+    ('    key "OspfKey1";', "quoted-key"),
+    ("    key-string 7 0822455D0A16", "key-string"),
+    ("    server-private 203.0.113.44 key 7 070C285F4D06", "encoded-key"),
+    ("set groups BNG system services dhcp-local-server dual-stack-group BNG"
+     " authentication password BngRadiusPass77", "authentication-password"),
+    ("    radius-server host 128.66.16.21 key SuperSecretTacacsKey",
+     "aaa-server-key"),
+    ("set snmp community publicRO authorization read-only", "snmp-community"),
+    ("    username admin secret sha512 $6$Ab2C$zyxwvutsrq", "username-secret"),
+    ("    enable secret 5 $1$abc$def123", "enable-secret"),
+]
+
+
+@pytest.mark.parametrize("line,owner", NOT_FORTIOS,
+                         ids=[owner for _line, owner in NOT_FORTIOS])
+def test_the_fortios_rule_does_not_poach_another_dialects_line(line, owner):
+    """Two rules on one line would count twice and splice twice."""
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.counts[owner] == 1
+    assert result.counts["fortios-secret"] == 0
+
+
+@pytest.mark.parametrize("line", [
+    "    set key-id 7",                       # a key id; the key is elsewhere
+    "    set type password",                  # the kind of account
+    "    set password-policy enable",
+    "    set secondary 203.0.113.54",
+    "    set security wpa2-only-personal",
+])
+def test_a_fortios_knob_is_not_a_credential(line):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.text.splitlines()[-1] == line
+    assert not result.counts

@@ -185,6 +185,7 @@ def test_a_decisive_hint_outweighs_repeated_weak_ones():
 @pytest.mark.parametrize("name,vendor", [
     ("cisco.cfg", "cisco"), ("arista.cfg", "arista"),
     ("juniper.cfg", "juniper"), ("edge-junos.cfg", "juniper"),
+    ("fortinet.cfg", "fortinet"),
 ])
 def test_the_fixtures_are_detected_correctly(fixtures, name, vendor):
     assert detect_vendor((fixtures / name).read_text()) == vendor

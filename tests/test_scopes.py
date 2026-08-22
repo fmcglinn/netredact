@@ -1,9 +1,11 @@
 """Scope: the block a line is inside, and the two families that need it.
 
 Some material is only recognisable from what encloses it -- a bare ``name`` line
-is a VLAN name under ``vlan 905`` and a route-map name under ``route-map``. Two
-kinds of block answer that question under one set of names (a JunOS stanza and
-an IOS-style block), and these tests hold both halves of the contract:
+is a VLAN name under ``vlan 905``, a route-map name under ``route-map`` and an
+SNMP community under a FortiOS ``config system snmp community``. Three kinds of
+block answer that question under one set of names (a JunOS stanza, an IOS-style
+block and a FortiOS ``config … end``), and these tests hold both halves of the
+contract:
 
 * the scoped rules act inside their block and nowhere else;
 * the generic ``description`` rule and the interface one **partition** the
@@ -19,7 +21,7 @@ import pytest
 from netredact import Config, sanitise_text
 from netredact import rules as R
 
-from .conftest import SALT, maximal, policy, section
+from .conftest import FIXTURE_NAMES, SALT, maximal, policy, section
 
 #: one file, every dialect, with a description in five different places and a
 #: VLAN name in two. The comment on each line says which rule owns it.
@@ -510,3 +512,104 @@ def test_a_peer_name_is_not_collected_as_a_hostname_or_a_login():
     assert '"a peer label"' in result.text
     assert not result.mapping.get("hostname")
     assert not result.mapping.get("username")
+
+
+# -- the FortiOS block, which is the fourth grammar the scope names span -------
+#
+# FortiOS nests `config <path>` … `end`, with `edit <id>` … `next` inside, and
+# every value it holds is a bare `set <attribute> <value>`. So the block is not
+# a hint here, it is the ONLY thing that says what a line means: `set name` is
+# a firewall policy's name, an address object's name, an admin profile's name
+# and -- inside one block and one block only -- an SNMP community.
+#
+# Every identifier below is invented.
+
+FORTIOS = """config system global
+    set alias "FGT-EDGE-01"
+    set hostname "FGT-EDGE-01"
+end
+config system snmp community
+    edit 1
+        set name "snmpNorthwindRO"
+        config hosts
+            edit 1
+                set ip 203.0.113.99 255.255.255.255
+            next
+        end
+        set trap-v1-status disable
+    next
+end
+config system interface
+    edit "wan1"
+        set alias "TRANSIT: TransitCo - CID TC-772311"
+        set description "uplink to TransitCo"
+    next
+end
+config firewall policy
+    edit 1
+        set name "acme-to-internet"
+        set comments "ACME PTY LTD - ticket NW-88412"
+    next
+end
+"""
+
+
+def test_a_set_name_is_a_community_only_inside_the_snmp_block():
+    """The scope is the whole rule: the shape says nothing on its own."""
+    result = sanitise_text(FORTIOS, Config(), salt=SALT)
+    assert "snmpNorthwindRO" not in result.text
+    assert result.counts["fortios-snmp-community"] == 1
+    # the same shape, one block along, is a policy name and no rule's business
+    assert 'set name "acme-to-internet"' in result.text
+
+
+def test_a_nested_config_block_does_not_close_the_one_around_it():
+    """`config hosts` … `end` is inside the community, and `next` closes no
+    block netredact counts -- so the lines after it are still in `snmp`."""
+    text = FORTIOS.replace('        set trap-v1-status disable',
+                           '        set name "snmpSecondName"')
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert "snmpSecondName" not in result.text, result.text
+    assert result.counts["fortios-snmp-community"] == 2
+
+
+def test_a_fortios_interface_is_the_interfaces_scope():
+    """`config system interface` shares the name, so one rule reaches three
+    dialects: the description rule needs nothing FortiOS-specific at all."""
+    out = sanitise_text(FORTIOS, section("interfaces", "redact"), salt=SALT).text
+    assert "TransitCo" not in out
+    assert "ACME PTY LTD" in out, "a firewall policy is not an interface"
+
+
+def test_the_global_alias_is_the_device_and_the_port_alias_is_a_port():
+    """One keyword, two meanings, told apart by the block and nothing else."""
+    out = sanitise_text(FORTIOS, policy(hostnames="pseudo",
+                                        interfaces="redact"), salt=SALT).text
+    assert "FGT-EDGE-01" not in out
+    assert "TransitCo" not in out
+    alias = next(line for line in out.splitlines() if "set alias" in line)
+    assert alias.strip().startswith('set alias "device-')
+
+
+@pytest.mark.parametrize("name", [n for n in FIXTURE_NAMES if n != "fortinet.cfg"])
+def test_no_fortios_block_opens_on_another_dialects_file(fixtures, name):
+    """The mechanism itself, asserted where it must never fire.
+
+    A FortiOS block needs a whole line of `config` plus bare words. A JunOS
+    stanza ends in `{`, an IOS block header is a command, and the bare `end` an
+    IOS config finishes with pops an empty stack. So no line of any other
+    fixture can put a rule in scope.
+    """
+    blocks = R.FortiBlocks()
+    for line in (fixtures / name).read_text().splitlines():
+        blocks.feed(line)
+        assert blocks.scopes() == (), f"{name}: {line!r} opened a block"
+
+
+def test_a_bare_end_with_nothing_open_is_harmless():
+    """An IOS running-config ends with `end`, and that is the shape that made
+    a bare `end` too weak to be a detection hint. It must also not underflow."""
+    blocks = R.FortiBlocks()
+    for line in ("end", "end", "config system global", "end", "end"):
+        blocks.feed(line)
+    assert blocks.scopes() == ()

@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**67 rules**: 39 `secrets`, 7 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 3 `interfaces`, 1 `vlans`, 2 `circuits`.
+**70 rules**: 41 `secrets`, 7 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 4 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 16 verification checks
 
@@ -26,7 +26,7 @@ Three tokens stand in for material that recurs in every pattern.
 and its secret:
 
 ```
-(?:\d+|sha512|sha256|sha1|md5|encrypted|clear|ascii|ascii-text|hex|hexadecimal|plain-text)
+(?:\d+|sha512|sha256|sha1|md5|encrypted|enc|clear|ascii|ascii-text|hex|hexadecimal|plain-text)
 ```
 
 `<VAL>` -- the value matcher: a quoted string, or a run of
@@ -63,20 +63,23 @@ route-map name under `route-map`, and the line itself cannot tell you
 which. So a rule may name the block it needs, or the blocks it must
 stay out of, and three kinds of block share one set of names:
 
-JunOS stanzas, IOS-style blocks, RouterOS `/export` sections, and
-the one-line forms of the last two — a JunOS `set` command and a
-`/export terse` line — share the scope names shown in the rule
-catalogue below.
+JunOS stanzas, IOS-style blocks, RouterOS `/export` sections,
+FortiOS `config <path>` … `end` blocks, and the one-line forms —
+a JunOS `set` command and a `/export terse` line — share the
+scope names shown in the rule catalogue below.
 
 Where more than one dialect has the block the name is JunOS's own —
 `interfaces`, `vlans`, `snmp` — so one rule covers every dialect: an
 IOS `interface Gi0/0` block, a JunOS `interfaces { … }` stanza, a
-`set interfaces … description …` line and a RouterOS `/interface
-ethernet` section are all inside `interfaces`. A block only one
-vendor has keeps its own name: `patch-panel`, `snmp-community`,
-`system-identity`, `user`, `ppp-secret`. Any other unindented line
+FortiOS `config system interface` block, a `set interfaces …
+description …` line and a RouterOS `/interface ethernet` section
+are all inside `interfaces`. A block only one vendor has keeps its
+own name: `patch-panel`, `snmp-community`, `system-identity`,
+`user`, `ppp-secret`, `system-admin`. Any other unindented line
 ends an IOS-style block, including the bare `!`; a RouterOS section
-lasts until the next `/`-prefixed line.
+lasts until the next `/`-prefixed line; a FortiOS block ends at its
+own `end`, and a nested `config` inside an `edit` nests rather
+than replaces.
 
 `interface Vlan905` is scope `interfaces`, not `vlans`: an SVI is a
 port, and only a `vlan <id>` block defines a VLAN.
@@ -105,7 +108,8 @@ word is the evidence that has to be present first.
 
 Some rules only make sense in one vendor's grammar, and the table
 below says which — `arista` on `patch-name`, `juniper` on
-`junos-type9`. That label is documentation. **Every rule is applied
+`junos-type9`, `fortinet` on `fortios-secret`. That label is
+documentation. **Every rule is applied
 to every file**, and nothing netredact does depends on the vendor it
 reports.
 
@@ -164,18 +168,21 @@ Each rule name links to its pattern, which is listed in full under
 | [`routeros-license-id`](#routeros-license-id) | `identity` | RouterOS's licence identifier under both names it goes by -- `# software id = X` and `# system id = X` in the `/export` header, `system-id:` in `/system license print`. Tied to the one device, so `identity` and not `platform`. The `:` or `=` is required, because `system-id` is also an IS-IS keyword -- mikrotik grammar |  |
 | [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
 | [`script-checksum`](#script-checksum) | `identity` |  |  |
+| [`fortios-secret`](#fortios-secret) | `secrets` | every FortiOS `set <attribute> <value>` credential: `password`, `passwd`, `psksecret`, `ppk-secret`, `auth-pwd`, `priv-pwd`, `passphrase`, `api-key`, `secret`, `key`. The keyword must be the first token after `set`, which is what keeps the two ordinary words off a JunOS `set` path -- fortinet grammar |  |
+| [`fortios-snmp-community`](#fortios-snmp-community) | `secrets` | `set name X` inside a `config system snmp community` block. A bare `set name` is everywhere in FortiOS, so the block is the whole of the evidence -- fortinet grammar | inside `snmp` |
+| [`fortios-interface-alias`](#fortios-interface-alias) | `interfaces` | FortiOS `set alias X` on an interface. The `set alias` in `config system global` is the device's own name and is collected as a hostname instead -- fortinet grammar | inside `interfaces` |
 | [`unsupported-transceiver`](#unsupported-transceiver) | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar |  |
-| [`hardware-model`](#hardware-model) | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; the model in Arista's `! device: <name> (<model>, <release>)` header; and RouterOS's `# model = X` |  |
-| [`os-version`](#os-version) | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; the release in Arista's `! device:` header; and the one in RouterOS's `# ... by RouterOS X` export header, where `by RouterOS` itself survives so the detector still works on redacted output |  |
+| [`hardware-model`](#hardware-model) | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; the model in Arista's `! device: <name> (<model>, <release>)` header; the model in FortiOS's `#config-version=` header; and RouterOS's `# model = X` |  |
+| [`os-version`](#os-version) | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; the release in Arista's `! device:` header; the release, build and `#buildno=` / `#branch_pt=` lines of FortiOS's `#config-version=` header; and the one in RouterOS's `# ... by RouterOS X` export header, where `by RouterOS` itself survives so the detector still works on redacted output |  |
 | [`software-image`](#software-image) | `platform` | `Software image version:`, `System image file is ...`, `Software version:`; and the bare `Junos:` / `EOS:` forms, where a colon is required |  |
 | [`boot-image`](#boot-image) | `platform` | `boot system <image>`, commented out or not |  |
-| [`location`](#location) | `locations` | the whole value of a `location` line, and RouterOS's `location=`; never a JunOS `location {` stanza opener |  |
-| [`contact`](#contact) | `text` | the whole value of a `contact` line, and RouterOS's `contact=` |  |
+| [`location`](#location) | `locations` | the whole value of a `location` line, including FortiOS `set location`, and RouterOS's `location=`; never a JunOS `location {` stanza opener |  |
+| [`contact`](#contact) | `text` | the whole value of a `contact` line, FortiOS `set contact-info`, and RouterOS's `contact=` |  |
 | [`junos-location-body`](#junos-location-body) | `locations` | the street address inside a JunOS `location { ... }` stanza -- juniper grammar | inside `location` |
-| [`description`](#description) | `text` | a `description` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down |  outside `interfaces` |
+| [`description`](#description) | `text` | a `description` or FortiOS `comments` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down |  outside `interfaces` |
 | [`acl-remark`](#acl-remark) | `text` | an ACL `remark` |  |
 | [`login-message`](#login-message) | `text` | `banner login`-style `message` and `announcement` text |  |
-| [`interface-description`](#interface-description) | `interfaces` | the same `description` line, when it is inside an interface: `interface Gi0/0`, JunOS `interfaces { … }`, `set interfaces … description …` | inside `interfaces` |
+| [`interface-description`](#interface-description) | `interfaces` | the same `description` line, when it is inside an interface: `interface Gi0/0`, JunOS `interfaces { … }`, `set interfaces … description …`, FortiOS `set description` / `set comments` under `config system interface` | inside `interfaces` |
 | [`vlan-name`](#vlan-name) | `vlans` | the `name` under a `vlan <id>` block, and the one-line `vlan <id> name <name>` form. Never an SVI: `interface Vlan905` is an interface | inside `vlans` |
 | [`patch-name`](#patch-name) | `circuits` | the name of a `patch` inside a `patch panel` block. The `patch panel` header itself is never the value -- arista grammar | inside `patch-panel` |
 | [`pseudowire-name`](#pseudowire-name) | `circuits` | a pseudowire name, both where it is defined under `mpls ldp` -> `pseudowires` and where a `connector` line refers to it (`pseudowire ldp X alternate Y`). One rule, so a definition and its references can never be given two different actions -- arista grammar |  |
@@ -395,6 +402,24 @@ block also carries the pattern that ends it.
 .*\bchecksum\s+(?:md5|sha-?1|sha-?256|sha-?512)\s+
 ```
 
+### `fortios-secret`
+
+```
+\s*set\s+(?:passphrase|ppk-secret|psksecret|auth-pwd|password|priv-pwd|api-key|passwd|secret|key)\s+(?:<ENC>\s+)*
+```
+
+### `fortios-snmp-community`
+
+```
+\s*set\s+name\s+
+```
+
+### `fortios-interface-alias`
+
+```
+\s*set\s+alias\s+
+```
+
 ### `unsupported-transceiver`
 
 ```
@@ -404,13 +429,13 @@ block also carries the pattern that ends it.
 ### `hardware-model`
 
 ```
-(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),)
+(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),|^#config-version=([\w-]+?)-(?=\d+\.\d))
 ```
 
 ### `os-version`
 
 ```
-(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$)
+(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$|^#config-version=.*?-(\d+\.\d[^\s:]*)|^\s*#(?:buildno|branch_pt)=(\S+)\s*$)
 ```
 
 ### `software-image`
@@ -428,13 +453,13 @@ block also carries the pattern that ends it.
 ### `location`
 
 ```
-(?:^\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
+(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
 ```
 
 ### `contact`
 
 ```
-(?:^\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
+(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?contact(?:-info)?\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
 ```
 
 ### `junos-location-body`
@@ -446,7 +471,7 @@ block also carries the pattern that ends it.
 ### `description`
 
 ```
-^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+^\s*(?:(?:set\s+(?:\S.*?\s)?)?description|(?:set\s+)?comments?)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
 ```
 
 ### `acl-remark`
@@ -464,7 +489,7 @@ block also carries the pattern that ends it.
 ### `interface-description`
 
 ```
-^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+^\s*(?:(?:set\s+(?:\S.*?\s)?)?description|(?:set\s+)?comments?)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
 ```
 
 ### `vlan-name`

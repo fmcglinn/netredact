@@ -272,6 +272,8 @@ def test_the_section_defaults_to_keep_and_names_every_platform_rule():
     # no header at all: the section paths and the selector expression carry it
     ("/interface ethernet\nset [ find default-name=ether1 ] name=ether1\n",
      "mikrotik"),
+    ("#config-version=FGVM64-7.4.4-FW-build2662-240514:opmode=0\n", "fortinet"),
+    ("config system global\n    set hostname \"fw\"\nend\n", "fortinet"),
 ])
 def test_a_platform_line_names_the_vendor_on_its_own(text, vendor):
     assert detect_vendor(text) == vendor
@@ -309,3 +311,83 @@ def test_detection_survives_the_platform_family_destroying_its_evidence():
     assert detect_vendor(out) == "arista"
     assert sanitise_text(EOS_HEADER, policy(platform="redact"),
                          salt=SALT).vendor == "arista"
+
+
+# -- FortiOS: the same problem, one line further ------------------------------
+#
+# `#config-version=FGVM64-7.4.4-FW-build2662-240514:opmode=0:vdom=0:user=admin`
+# carries a model, a release, a build and the name of the administrator who
+# saved the file, all introduced by position alone -- and unlike Arista's
+# header it is the ONLY platform material a FortiOS config has, which is also
+# what makes the vendor detector rely on the grammar instead.
+
+FORTIOS_HEADER = (
+    "#config-version=FGVM64-7.4.4-FW-build2662-240514:opmode=0:vdom=0:user=fgtadmin\n"
+    "#conf_file_ver=71963manual\n"
+    "#buildno=2662\n"
+)
+
+
+def test_the_fortios_header_loses_its_model_and_release_but_keeps_its_shape():
+    out = redacted(FORTIOS_HEADER)
+    assert out.splitlines()[0] == ("#config-version=<REMOVED>-<REMOVED>"
+                                  ":opmode=0:vdom=0:user=fgtadmin")
+    assert "FGVM64" not in out and "7.4.4" not in out and "build2662" not in out
+    assert out.splitlines()[-1] == "#buildno=<REMOVED>"
+
+
+def test_each_field_of_the_fortios_header_belongs_to_its_own_rule():
+    """Two families on one line again, and for the same reason as Arista's.
+
+    The administrator's name is `usernames`, kept at this policy, and the model
+    and the release are two rules of `platform` -- so `[platform]
+    hardware-model = "keep"` can hold the model while the release goes.
+    """
+    cfg = policy(platform="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    result = sanitise_text(FORTIOS_HEADER, cfg, salt=SALT)
+    assert result.counts["hardware-model"] == 1        # FGVM64
+    assert result.counts["os-version"] == 2            # the release, #buildno
+    assert "fgtadmin" in result.text
+
+
+def test_the_release_still_goes_when_the_model_is_kept():
+    """The order the two rules run in must not decide what survives.
+
+    `hardware-model` runs first and has already replaced the model by the time
+    `os-version` reads the line, so the release branch cannot be written as a
+    character class that stops at `<REMOVED>`.
+    """
+    cfg = section("platform", "redact", hardware_model="keep")
+    cfg.collection.rancid_diagnostics = "keep"
+    out = sanitise_text(FORTIOS_HEADER, cfg, salt=SALT).text
+    assert out.splitlines()[0] == ("#config-version=FGVM64-<REMOVED>"
+                                   ":opmode=0:vdom=0:user=fgtadmin")
+
+
+def test_the_administrator_in_the_fortios_header_is_a_username():
+    """It is the one name in a FortiOS config that appears in two places."""
+    text = FORTIOS_HEADER + 'config system admin\n    edit "fgtadmin"\n    next\nend\n'
+    out = sanitise_text(text, policy(usernames="pseudo"), salt=SALT).text
+    assert "fgtadmin" not in out
+    header = out.splitlines()[0].rsplit("user=", 1)[1]
+    assert 'edit "' + header + '"' in out, out
+
+
+def test_fortios_detection_survives_the_platform_family_destroying_its_evidence():
+    """The FortiOS case of the risk `platform` carries everywhere.
+
+    Its decisive markers -- the `#config-version=` header, an `ENC` blob -- are
+    exactly what `platform` and `secrets` remove. The grammar is what remains,
+    and a config with no `config`/`edit`/`next` shapes in it is not a FortiOS
+    config at all.
+    """
+    text = FORTIOS_HEADER + (
+        'config system admin\n'
+        '    edit "fgtadmin"\n'
+        '        set password ENC AK1FgtBackupPassEXAMPLE9wQwErTy==\n'
+        '    next\n'
+        'end\n')
+    out = sanitise_text(text, policy(platform="redact"), salt=SALT).text
+    assert "FGVM64" not in out and "AK1FgtBackupPass" not in out
+    assert detect_vendor(out) == "fortinet"

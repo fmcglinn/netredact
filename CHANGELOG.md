@@ -8,6 +8,50 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Fortinet FortiOS / FortiGate support.** A FortiOS config states nothing
+  twice: the grammar is `config <path>` … `end` with `edit <id>` … `next`
+  inside it, and every value is a bare `set <attribute> <value>` whose meaning
+  comes from the block above it rather than from the line. So the sanitiser now
+  tracks that block as a fourth kind of scope, sharing JunOS's names wherever
+  the grammars share the block -- `config system interface` is scope
+  `interfaces`, `config system snmp community` is scope `snmp` -- and one new
+  rule, `fortios-secret`, covers every credential the platform has: `password`,
+  `passwd`, `psksecret`, `ppk-secret`, `auth-pwd`, `priv-pwd`, `passphrase`,
+  `api-key`, `secret` and `key`, with or without the `ENC` token FortiOS marks
+  its encrypted values with. The keyword has to be the first token after `set`,
+  which is what keeps the two ordinary words in that list off a JunOS `set`
+  path where `bare-secret` and `quoted-key` own them. `fortios-snmp-community`
+  selects a `set name` inside an SNMP community block and nowhere else -- a
+  bare `set name` is everywhere in FortiOS, so the block is the whole of the
+  evidence -- and `fortios-interface-alias` puts a port's `set alias` in the
+  `interfaces` family beside its description. The `#config-version=` header is
+  split across the families that own its parts, as Arista's `! device:` line
+  already was: the model to `hardware-model`, the release, its build and the
+  `#buildno=` / `#branch_pt=` lines to `os-version`, and the administrator in
+  its `user=` field to `usernames`. `location`, `contact`, `description` and
+  the hostname sources learned FortiOS's spellings of fields they already had
+  (`set location`, `set contact-info`, `set comments`, `set hostname`), and the
+  `set alias` in `config system global` is collected as a second name for the
+  device itself -- so it and the hostname render as one pseudonym. An admin,
+  API, local or SNMPv3 user's `edit "<name>"` is collected as a username, which
+  is what makes one pseudonym reach both the account and the header that names
+  it. Detection is reporting-only as ever, and its FortiOS hints are chosen to
+  survive sanitising: the header it reads is exactly what `platform` deletes,
+  so the `config` / `edit "` / `next` shapes carry the answer once it is gone.
+  A bare `end` is deliberately not one of them -- an IOS running-config ends
+  with one.
+
+- FortiOS credentials are covered by the verification pass, which had a silent
+  blind spot over them: `psksecret` and `ppk-secret` end in a word
+  `credential-left` already knew, but the check reads whole words, so an IPsec
+  pre-shared key, an SNMPv3 secret and an NTP `set key` left the tool in the
+  device's encrypted form with **no finding at all** and `--strict` exiting 0.
+  The keyword list gained the FortiOS spellings, and `key` / `secret` -- too
+  ordinary to name unqualified -- are recognised in the `set <attribute>` shape
+  that narrows them. `ENC` is now one of the encoding hints the rules and the
+  check share, so a FortiOS line whose credential netredact destroyed is not
+  reported as a leak by the check that exists to catch them.
+
 - A command-line argument may be a directory, walked recursively, so a backup
   tree can be sanitised in one run: `netredact backups/ -r`. The walk skips
   what plainly is not a configuration -- dot-files, dot-directories pruned

@@ -1,7 +1,7 @@
 # netredact documentation
 
-Strip secrets and identifying data out of Cisco IOS/IOS-XE/NX-OS, Arista EOS
-and Juniper JunOS configurations.
+Strip secrets and identifying data out of Cisco IOS/IOS-XE/NX-OS, Arista EOS,
+Juniper JunOS and Fortinet FortiOS configurations.
 
 ## Start here
 
@@ -66,7 +66,7 @@ it before you send anything.
 
 Interface numbering, key-chain names, BGP communities and unsupported grammar
 are not transformed. Operational names and ASNs are opt-in and limited to the
-documented Cisco, Arista and JunOS forms.
+documented Cisco, Arista, JunOS and FortiOS forms.
 
 **Warning:** netredact reduces exposure; it does not guarantee anonymisation.
 Review every output and decide whether it is safe and lawful to share.

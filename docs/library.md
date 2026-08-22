@@ -233,7 +233,7 @@ whatever text you hand it.
 |---|---|---|
 | `text` | `str` | The sanitised configuration. |
 | `lines` | `list[str]` | Same, split. |
-| `vendor` | `str` | `arista`, `cisco`, `juniper`, `mikrotik`, or `unknown`. |
+| `vendor` | `str` | `arista`, `cisco`, `fortinet`, `juniper`, `mikrotik`, or `unknown`. |
 | `already_sanitised` | `bool` | The input carried netredact's provenance marker, i.e. was itself output. The run still happened — you decide what that means — but any `pseudo` value in it has now been mapped twice. |
 | `labels` | `dict[str, str]` | Sanitised associated filename/display-label values, keyed exactly as supplied. Empty when none were passed. |
 | `label_replacements` | `Mapping[str, Mapping[str, tuple[str, ...]]]` | Immutable label key → family → rendered replacements. Contains no originals or kept values. |
