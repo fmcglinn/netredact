@@ -19,7 +19,7 @@
 marker = true  # write one comment line at the top of the output naming this tool. It is
 # what lets netredact refuse to sanitise its own output a second time -- turn it
 # off and a re-run maps pseudonyms again, with nothing to warn you.
-vendor = "auto"  # auto | arista | cisco | juniper
+vendor = "auto"  # auto | arista | cisco | fortinet | juniper
 
 # Passwords, keys, community strings and password hashes. This is
 # the one family that acts by default, and the whole of netredact's
@@ -62,6 +62,8 @@ default = "redact"  # the action for every rule not named below
 # wpa-psk                 = "redact"
 # ftp-password            = "redact"
 # junos-password          = "redact"
+# fortios-secret          = "redact"
+# fortios-snmp-community  = "redact"
 # unsupported-transceiver = "redact"
 # junos-type9             = "redact"
 # crypt-hash              = "redact"
@@ -155,7 +157,8 @@ default = "keep"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
-# interface-description = "keep"
+# fortios-interface-alias = "keep"
+# interface-description   = "keep"
 
 # What a VLAN is called: the `name` under a `vlan <id>` block. NOT an
 # SVI -- an `interface Vlan905` block is an interface, and its

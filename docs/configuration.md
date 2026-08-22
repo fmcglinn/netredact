@@ -63,8 +63,8 @@ of keep, pseudo, hash, redact
 | Key | Default | Meaning |
 |---|---|---|
 | `salt_file` | unset | CLI-oriented file holding the HMAC salt, created `0600` by the CLI if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Library callers pass `salt=` bytes to `sanitise_text`; the library never reads or writes this path. |
-| `marker` | `true` | Write one comment line at the top of the output naming netredact and its version — `!` for IOS-style grammar, `#` for JunOS. It is the only thing in a sanitised file that says it is one, and so the only evidence a re-run can be refused on: turn it off and a second pass re-maps pseudonyms with nothing to warn you. CLI-oriented — `sanitise_text` never adds it, see [the library docs](library.md). |
-| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
+| `marker` | `true` | Write one comment line at the top of the output naming netredact and its version — `!` for IOS-style grammar, `#` for JunOS and FortiOS. It is the only thing in a sanitised file that says it is one, and so the only evidence a re-run can be refused on: turn it off and a second pass re-maps pseudonyms with nothing to warn you. CLI-oriented — `sanitise_text` never adds it, see [the library docs](library.md). |
+| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `fortinet`, `juniper` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
 
 ## Every rule has exactly one home
 
@@ -444,7 +444,7 @@ boot-image = "redact"        # and the image path
 | Rule | Line |
 |---|---|
 | `hardware-model` | `Model Number : WS-C3850-48P`, `Hardware: …`, `Chassis type: …`, `PID: …` |
-| `os-version` | a version declaration: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6` |
+| `os-version` | a version declaration: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; FortiOS `#buildno=` and `#branch_pt=` |
 | `software-image` | `Software image version: …`, `System image file is "…"`, `Junos: …` |
 | `boot-image` | `boot system flash:/EOS64-4.32.1F.swi`, commented out or not |
 
@@ -483,6 +483,31 @@ default = "hash"
 ```
 ! device: device-a1b2c3 (<MODEL-d4e5f6>, <VERSION-7890ab>)
 ```
+
+### FortiOS's header
+
+```
+#config-version=FGVM64-7.4.4-FW-build2662-240514:opmode=0:vdom=0:user=fgtadmin
+#buildno=2662
+```
+
+The same shape as Arista's, one line further: a model, a release, a build and
+the name of the administrator who saved the file, introduced by position alone.
+It is split the same way — `hardware-model` takes `FGVM64`, `os-version` takes
+`7.4.4-FW-build2662-240514` and the `#buildno=` line, and `user=fgtadmin` goes
+to `usernames`, which substitutes the same pseudonym over the `edit "fgtadmin"`
+that declares the account.
+
+```
+#config-version=<REMOVED>-<REMOVED>:opmode=0:vdom=0:user=user-c565
+#buildno=<REMOVED>
+```
+
+This header is *all* the platform material a FortiOS config has, which makes it
+the clearest case for the rule below it: destroying it must not cost netredact
+the ability to say what the file is. It does not, because detection also reads
+the FortiOS grammar itself — `config <path>`, `edit "<name>"`, `next` — and a
+file without those shapes is not a FortiOS config.
 
 ### False positives, and the vendor detector
 

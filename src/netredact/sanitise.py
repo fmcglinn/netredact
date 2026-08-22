@@ -225,7 +225,22 @@ class Sanitiser:
 
     # -- pass 1: learn the identities this device uses ---------------------
     def collect(self, lines) -> None:
+        # The FortiOS block a line is inside, for the name sources that only
+        # the block makes recognisable: `edit "fgtadmin"` is an account under
+        # `config system admin` and a port under `config system interface`.
+        # The tracker is the sanitiser's own, not the catalogue's, because this
+        # pass rewrites nothing and so has no rules to confine.
+        forti = R.FortiBlocks()
+        buckets = {"hostnames": self.hostnames, "usernames": self.usernames}
         for line in lines:
+            scopes = forti.scopes()
+            forti.feed(line)
+            for scope, pat, family in R.SCOPED_NAME_PATS:
+                if scope not in scopes:
+                    continue
+                m = pat.match(line)
+                if m:
+                    self._add(buckets[family], m.group(1).strip('";'))
             for pat in R.HOSTNAME_PATS:
                 m = pat.search(line)
                 if m:

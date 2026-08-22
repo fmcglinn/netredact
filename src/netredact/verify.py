@@ -68,8 +68,25 @@ VTOK = ENC[:-1] + r"|type|value|key|level\s+\d+)"
 #: once redacted the encoding type instead of the key, and because no
 #: check named the keyword, a cleartext passphrase left the tool with
 #: ``--strict`` reporting success.
+#:
+#: The FortiOS half was the same lesson twice. ``psksecret`` and ``ppk-secret``
+#: end in a word this list already had, but the check reads whole words, so
+#: ``\bsecret\b`` never saw them: an IPsec pre-shared key and an SNMPv3 auth
+#: secret left the tool in the device's encrypted form with no finding at all,
+#: which is the one failure mode this module exists to make impossible.
 _CRED_KEYWORDS = (r"password|passwd|secret|pre-shared-key|key-string|"
-                  r"authentication-key|encrypted-password|wpa-psk")
+                  r"authentication-key|encrypted-password|wpa-psk|"
+                  r"psksecret|ppk-secret|auth-pwd|priv-pwd|passphrase|api-key")
+
+#: credential keywords that are only credentials in the FortiOS ``set
+#: <attribute> <value>`` shape. ``key`` and ``secret`` are far too ordinary to
+#: name unqualified -- a `key chain`, a `key 1` id, `enable secret` -- and the
+#: `set` at the head of the line is the evidence that narrows them, exactly as
+#: it does in the rule that handles them (``rules._FORTIOS_SECRET_KEYS``).
+#: The boundary is spelled ``(?![-\w])`` rather than ``\b`` because a hyphen is
+#: a word boundary: ``set key-id 7`` is a key *id*, and the credential it
+#: numbers is on another line.
+_CRED_SET = r"^\s*set\s+(?:key|secret)(?![-\w])"
 
 #: ``community`` only where it is an SNMP community: after ``snmp-server`` /
 #: ``snmp`` / ``set snmp``, or first on the line (the JunOS ``snmp { community
@@ -91,8 +108,8 @@ VERIFY_RULES = [
     ("long-hex-left", re.compile(r"(?<![\w.])[0-9A-Fa-f]{24,}(?![\w.])")),
     ("long-base64-left", re.compile(r"(?<![\w+/=])[A-Za-z0-9+/]{40,}={0,2}(?![\w+/=])")),
     ("credential-left", re.compile(
-        rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b)"
-        rf"(?!\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<))", re.I)),
+        rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b|{_CRED_SET})"
+        rf"(?!\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<))", re.I | re.M)),
 ]
 
 #: the ``identity`` half of ``pem-left``: a certificate is public material that
