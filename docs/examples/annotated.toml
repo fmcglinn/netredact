@@ -120,7 +120,7 @@ default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
 # snmp-engineid       = "keep"
-# software-id         = "keep"
+# routeros-license-id = "keep"
 # script-checksum     = "keep"
 # routeros-public-key = "keep"
 # ssh-public-key      = "keep"

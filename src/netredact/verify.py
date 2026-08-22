@@ -142,9 +142,21 @@ SHAPE_CHECKS = ("ssh-key-left", "pem-left", "long-hex-left", "long-base64-left")
 SHAPE_BLIND_FAMILIES = ("identity", "text", "locations", "interfaces",
                         "vlans", "circuits")
 
+#: A RouterOS ``/export`` provenance-header comment that still names a value:
+#: ``# software id = ABCD-EFGH``, ``# model = RB4011iGS+``.
+#:
+#: The ``=`` is what makes the shape recognisable and what keeps other dialects'
+#: comments out of it: a RANCID content-type line and JunOS's ``## Last
+#: changed:`` both use a colon, and netredact's own marker has no separator at
+#: all. The key is a short lower-case word phrase, which is all RouterOS ever
+#: writes there.
+ROUTEROS_HEADER_RE = re.compile(
+    r"^#\s*(?P<key>[a-z][a-z ]{0,22}[a-z])\s*=\s*(?P<value>\S.*?)\s*$")
+
 #: checks that only make sense when the policy acts on that family
 CONDITIONAL_CHECKS = ("email-left", "ipv4-left", "ipv6-left", "mac-left",
-                      "operational-name-left", "as-number-left", "location-left")
+                      "operational-name-left", "as-number-left",
+                      "location-left", "routeros-header-left")
 
 #: our own hash markers. ``<SECRET-a1b2c3>`` says the credential is gone, but
 #: it contains the word "secret", so without this the ``credential-left`` check
@@ -303,6 +315,12 @@ def verify(lines, config: Config | None = None, *,
     check_asn = cfg.as_numbers.any_active() and "as-number-left" not in disabled
     check_location = (cfg.locations.any_active()
                       and "location-left" not in disabled)
+    # Gated on `identity`, and on the family default rather than any one rule:
+    # the material this check is about is by definition material no rule owns,
+    # and an unclaimed value in a device's provenance header is that device's
+    # identity. With `identity` kept it is kept on purpose and not a miss.
+    check_ros_header = (cfg.action_for("identity") != "keep"
+                        and "routeros-header-left" not in disabled)
     well_known = {4: frozenset(cfg.ipv4.well_known_resolvers),
                   6: frozenset(cfg.ipv6.well_known_resolvers)}
     keep_nets = [ipaddress.ip_network(n) for n in
@@ -348,6 +366,24 @@ def verify(lines, config: Config | None = None, *,
         return R.RuleReplacement.with_text("<LOCATION-PROBE>")
 
     location_probe_lines = catalogue.transform(lines, replace=location_probe)
+
+    def owned(line: str) -> bool:
+        """True if any rule selects anything on this line.
+
+        Asked per line, on a one-line input, and deliberately so: a whole-file
+        probe that replaced every hit would collapse a banner body or a block
+        and put the loop below out of step with the file it is reporting line
+        numbers for. Only header-shaped lines ever reach here, so the cost is a
+        handful of one-line traversals per file.
+
+        The question is asked of the RULE TABLE rather than of a list of keys
+        written out here, so a header key that gains a rule leaves this check
+        the day it does, with nothing to keep in step by hand.
+        """
+        return catalogue.transform(
+            [line],
+            replace=lambda hit: R.RuleReplacement.with_text("\x00")) != [line]
+
     findings: list[Finding] = []
     for i, (line, shaped_line) in enumerate(zip(lines, shaped_lines, strict=True), 1):
         stripped = ignore.sub(" ", line)
@@ -386,4 +422,16 @@ def verify(lines, config: Config | None = None, *,
                 findings.append(Finding(i, "as-number-left", line.strip()))
         if check_location and location_probe_lines[i - 1] != line:
             findings.append(Finding(i, "location-left", line.strip()))
+        if check_ros_header:
+            # THE POINT of this check: every other one recognises a shape or a
+            # keyword, and a provenance-header value has neither -- an opaque
+            # licence id is a word. So a RouterOS header key that no rule knew
+            # about left the tool with nothing reported at all, which is the one
+            # outcome this project treats as worse than a miss. Here the
+            # evidence is structural: the value sits in a header, and no rule
+            # claimed it.
+            header = ROUTEROS_HEADER_RE.match(line)
+            if (header and not HANDLED_BODY_RE.fullmatch(header.group("value"))
+                    and not owned(line)):
+                findings.append(Finding(i, "routeros-header-left", line.strip()))
     return findings

@@ -443,9 +443,20 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # pairs belonging to one rule, so they are searched rather than matched --
     # see :data:`_PAIRS`. This one is a header comment and can only occur once.
     #
+    # RouterOS's licence identifier, under both the names it goes by: the
+    # `/export` header writes `# software id = ` on some versions and platforms
+    # and `# system id = ` on others, and `/system license print` writes
+    # `system-id:`. They are one value with one meaning, so they are one rule --
+    # naming only the first spelling let the second leave the tool untouched.
+    #
     # Licence-tied to one device, not to a production line: two routers of the
-    # same model never share a software id. So `identity`, not `platform`.
-    ("software-id", r"\s*#?\s*software[-\s]id\s*[:=]\s*", "identity", None),
+    # same model never share one. So `identity`, not `platform`.
+    #
+    # The `[:=]` is the safety margin, exactly as it is for `hardware-model`:
+    # `system-id` is also an IS-IS and FabricPath keyword, and neither of those
+    # carries a separator.
+    ("routeros-license-id",
+     r"\s*#?\s*(?:software|system)[-\s]id\s*[:=]\s*", "identity", None),
 
     # ---- Juniper specifics -------------------------------------------------
     ("junos-password", r".*\b(?:encrypted-password|plain-text-password-value)\s+", "secrets", None),
@@ -715,7 +726,7 @@ _RULE_VENDORS: dict[str, str] = {
     "routeros-public-key": "mikrotik",
     "routeros-secret": "mikrotik",
     "routeros-snmp-community": "mikrotik",
-    "software-id": "mikrotik",
+    "routeros-license-id": "mikrotik",
 }
 
 #: rules whose value needs a code path rather than a plain span replacement

@@ -99,6 +99,24 @@ All notable changes to this project are documented here. The format follows
   chose. Getting that asymmetry wrong was silent in the worst direction: a bare
   `secret=` did not merely fail to help with `ipsec-secret=`, it refused it.
 
+  `routeros-license-id` reads RouterOS's licence identifier under both names it
+  goes by: the `/export` header writes `# software id = ` on some versions and
+  platforms and `# system id = ` on others, and `/system license print` writes
+  `system-id:`. One value, one meaning, one rule. The `:` or `=` is required,
+  because `system-id` is IS-IS and FabricPath grammar too and neither carries a
+  separator -- the same margin `hardware-model` keeps.
+
+- A new conditional check, `routeros-header-left`, gated on `[identity]`
+  acting. Every other check knows a shape or a keyword, and a value in a
+  RouterOS `/export` provenance header has neither -- a licence id is an opaque
+  word -- so a header key that no rule knew about left the tool with nothing
+  reported at all. Silence is the one outcome this project treats as worse than
+  a miss, so this check's evidence is structural instead: the value sits in a
+  header comment, and no rule claimed it. Ownership is asked of the rule table
+  rather than of a list of key names written out in the verifier, so a key that
+  gains a rule leaves the check the same day, and values netredact itself wrote
+  are recognised from the marker and constant tables.
+
   `comment=` is RouterOS's `description`, and it is split by scope in exactly
   the same way: `interface-comment` in `[interfaces]` inside a `/interface …`
   section, `comment` in `[text]` everywhere else, the two made disjoint so no

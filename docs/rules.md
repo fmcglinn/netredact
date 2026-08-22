@@ -9,7 +9,7 @@ matches the code exactly.
 
 **64 rules**: 38 `secrets`, 6 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 2 `interfaces`, 1 `vlans`, 2 `circuits`.
 
-- 15 verification checks
+- 16 verification checks
 
 A rule does not decide what happens to what it finds. Its **family**
 does, and every family of rules is a section: the action is
@@ -161,7 +161,7 @@ Each rule name links to its pattern, which is listed in full under
 | [`ppp-credential`](#ppp-credential) | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` |  |
 | [`wpa-psk`](#wpa-psk) | `secrets` | `wpa-psk X` |  |
 | [`ftp-password`](#ftp-password) | `secrets` | `ip ftp\|tftp\|http client password X` |  |
-| [`software-id`](#software-id) | `identity` | `# software id = X`: RouterOS's licence id, tied to the one device, so `identity` and not `platform` -- mikrotik grammar |  |
+| [`routeros-license-id`](#routeros-license-id) | `identity` | RouterOS's licence identifier under both names it goes by -- `# software id = X` and `# system id = X` in the `/export` header, `system-id:` in `/system license print`. Tied to the one device, so `identity` and not `platform`. The `:` or `=` is required, because `system-id` is also an IS-IS keyword -- mikrotik grammar |  |
 | [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
 | [`script-checksum`](#script-checksum) | `identity` |  |  |
 | [`unsupported-transceiver`](#unsupported-transceiver) | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar |  |
@@ -374,10 +374,10 @@ block also carries the pattern that ends it.
 \s*ip\s+(?:ftp|tftp|http\s+client)\s+password\s+(?:<ENC>\s+)*
 ```
 
-### `software-id`
+### `routeros-license-id`
 
 ```
-\s*#?\s*software[-\s]id\s*[:=]\s*
+\s*#?\s*(?:software|system)[-\s]id\s*[:=]\s*
 ```
 
 ### `junos-password`
@@ -647,3 +647,4 @@ block. A kept `secrets` rule never blinds anything.
 | `operational-name-left` | a supported operational name survived | some `[operational-names]` type acts |
 | `as-number-left` | an ASN survived in supported explicit grammar | `[as-numbers] default` is not `"keep"` |
 | `location-left` | an explicit physical location survived | the matching `[locations]` rule acts |
+| `routeros-header-left` | a value in a RouterOS `/export` provenance header that NO rule claimed -- the one check whose evidence is structural rather than a shape or a keyword, because a licence id is an opaque word and every other check would miss it in silence | `[identity] default` is not `"keep"` -- an unclaimed value in a device's provenance header is that device's identity |

@@ -108,9 +108,10 @@ PREFIX: dict[str, tuple[str, str | None]] = {
     # checksum-1a2b3c` reads as a parser error.
     "script-checksum": ("CKSUM", "cksum"),
     # RouterOS's licence id. Its own prefix for the same reason: the marker has
-    # to say what was taken out, and the token is not `software` -- `software id
-    # = swid-1a2b3c` is what a reader of the output should see.
-    "software-id": ("SWID", "swid"),
+    # to say what was taken out. Not named after either keyword the rule
+    # matches, because it matches two of them -- `software id` and `system id`
+    # are one value under two names, and the marker should not pick a side.
+    "routeros-license-id": ("LICID", "licid"),
     # platform. The pseudo token is never the rule's own keyword: `version
     # version-1a2b3c` reads as a parser error, `version ver-1a2b3c` does not.
     "hardware-model": ("MODEL", "model"),

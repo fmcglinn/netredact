@@ -106,8 +106,13 @@ RULE_NOTES = {
                                "RouterOS calls a community string. `name=` is "
                                "NOT a secret anywhere else -- there it is an "
                                "interface, a bridge or a firewall rule",
-    "software-id": "`# software id = X`: RouterOS's licence id, tied to the one "
-                   "device, so `identity` and not `platform`",
+    "routeros-license-id": "RouterOS's licence identifier under both names it "
+                           "goes by -- `# software id = X` and `# system id = "
+                           "X` in the `/export` header, `system-id:` in "
+                           "`/system license print`. Tied to the one device, so "
+                           "`identity` and not `platform`. The `:` or `=` is "
+                           "required, because `system-id` is also an IS-IS "
+                           "keyword",
     "junos-password": "`encrypted-password`, `plain-text-password-value`",
     "unsupported-transceiver": "Arista `service unsupported-transceiver "
                                "<label> <code>`: a TAC-issued code, and a "
@@ -189,6 +194,11 @@ VERIFY_NOTES = {
     "operational-name-left": "a supported operational name survived",
     "as-number-left": "an ASN survived in supported explicit grammar",
     "location-left": "an explicit physical location survived",
+    "routeros-header-left": "a value in a RouterOS `/export` provenance header "
+                            "that NO rule claimed -- the one check whose "
+                            "evidence is structural rather than a shape or a "
+                            "keyword, because a licence id is an opaque word "
+                            "and every other check would miss it in silence",
 }
 
 #: what switches a conditional check on. Unconditional checks say so.
@@ -200,6 +210,9 @@ VERIFY_GATE = {
     "operational-name-left": "some `[operational-names]` type acts",
     "as-number-left": '`[as-numbers] default` is not `"keep"`',
     "location-left": "the matching `[locations]` rule acts",
+    "routeros-header-left": '`[identity] default` is not `"keep"` -- an '
+                            "unclaimed value in a device's provenance header is "
+                            "that device's identity",
     "ssh-key-left": '`[policy] identity` is not `"keep"`',
     "pem-left": "always for a private key; the certificate half needs "
                 "`identity` to act",

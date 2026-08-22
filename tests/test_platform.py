@@ -133,10 +133,36 @@ def test_the_routeros_header_fields_belong_to_four_different_rules():
     assert result.counts["os-version"] == 1         # 7.15.3
     assert result.counts["hardware-model"] == 1     # RB4011iGS+
     assert result.counts["serial-number"] == 1      # HEA08XXXXXX
-    assert result.counts["software-id"] == 1        # ABCD-EFGH
+    assert result.counts["routeros-license-id"] == 1  # ABCD-EFGH
 
 
-def test_a_software_id_is_identity_and_not_platform():
+@pytest.mark.parametrize("line", [
+    "# software id = ABCD-EFGH\n",      # the `/export` header on most versions
+    "# system id = ABCD-EFGH\n",        # ...and on the others
+    "  system-id: ABCD-EFGH\n",         # `/system license print`
+])
+def test_the_license_id_goes_under_every_name_it_has(line):
+    """One value, three spellings, one rule.
+
+    Naming only `software id` let `# system id = ...` leave the tool untouched,
+    and in silence: an opaque licence id has no shape for any check to catch.
+    """
+    result = sanitise_text(line, policy(identity="redact"), salt=SALT)
+    assert "ABCD-EFGH" not in result.text, result.text
+    assert result.counts["routeros-license-id"] == 1
+
+
+@pytest.mark.parametrize("line", [
+    # `system-id` is IS-IS and FabricPath grammar too, and neither carries the
+    # separator this rule insists on -- the same margin `hardware-model` keeps
+    "net 49.0001.0000.0000.0007.00\n",
+    " system-id 0000.0000.0001\n",
+])
+def test_a_system_id_without_a_separator_is_not_a_license_id(line):
+    assert sanitise_text(line, policy(identity="redact"), salt=SALT).text == line
+
+
+def test_a_license_id_is_identity_and_not_platform():
     """It is licence-tied: two routers of one model never share it, so
     `platform = "redact"` on a fleet must leave it standing and `identity` must
     take it."""

@@ -16,7 +16,8 @@ UNCONDITIONAL = ("crypt-hash-left", "junos-type9-left", "pem-left",
                  "type7-left", "long-hex-left", "long-base64-left",
                  "credential-left")
 CONDITIONAL = ("email-left", "ipv4-left", "ipv6-left", "mac-left",
-               "operational-name-left", "as-number-left", "location-left")
+               "operational-name-left", "as-number-left", "location-left",
+               "routeros-header-left")
 
 #: a PEM block is judged by its body, so every case here is a whole block
 PEM_BODY = "MIIEowIBAAKCAQEAprivatekeymaterialAAAABBBBCCCCDDDDEEEEFFFF0123456789"
@@ -263,3 +264,59 @@ def test_a_routeros_section_path_is_not_a_surviving_credential():
     assert "credential-left" in {
         f.check for f in verify(["/ip ipsec identity add secret=hunter2"],
                                 Config())}
+
+
+# ---------------------------------------------------------------------------
+# The RouterOS provenance header. Every other check knows a shape or a keyword,
+# and a header value has neither: a licence id is an opaque word. So a header
+# key no rule knew about left the tool with NOTHING reported -- silence, which
+# this project treats as worse than a miss. This check's evidence is structural
+# instead: the value sits in a header, and no rule claimed it.
+# ---------------------------------------------------------------------------
+
+ROS_HEADER = ["# 2025-10-15 16:00:14 by RouterOS 7.16.2",
+              "# software id = ABCD-EFGH",
+              "# model = RB5009UG+S+"]
+
+
+def test_an_unclaimed_header_value_is_reported_when_identity_acts():
+    lines = ROS_HEADER + ["# unit id = HQ-4471"]
+    assert "routeros-header-left" in {
+        f.check for f in verify(lines, policy(identity="redact"))}
+
+
+def test_a_header_key_a_rule_owns_is_never_reported():
+    """Ownership is asked of the rule table, not of a list written out in the
+    verifier, so a key that gains a rule leaves this check the same day."""
+    checks = {f.check for f in verify(ROS_HEADER, policy(identity="redact"))}
+    assert "routeros-header-left" not in checks
+
+
+def test_a_kept_identity_header_is_not_a_miss():
+    """The gate: with `identity` kept, an unclaimed header value is kept on
+    purpose and the report says so elsewhere."""
+    assert verify(ROS_HEADER + ["# unit id = HQ-4471"], Config()) == []
+
+
+@pytest.mark.parametrize("line", [
+    # a colon is not this shape: RANCID and JunOS both use one
+    "# RANCID-CONTENT-TYPE: mikrotik",
+    "## Last changed: 2026-08-19 09:22:11 AEST by opsadmin",
+    # netredact's own marker has no separator at all
+    "# netredact-sanitised 0.1.0 -- sanitised output, not a device "
+    "configuration; re-run from the original",
+    # a separator line
+    "#",
+])
+def test_the_header_check_stays_off_other_comment_shapes(line):
+    assert verify([line], policy(identity="redact")) == []
+
+
+@pytest.mark.parametrize("value", ["<REMOVED>", "<LICID-a1b2c3>"])
+def test_a_header_value_netredact_already_wrote_is_not_a_finding(value):
+    """Otherwise the check would fail `--strict` on netredact's own output.
+
+    The recognised set is derived from the marker and constant tables, so a new
+    marker cannot fall out of step with the check that has to see past it.
+    """
+    assert verify([f"# unit id = {value}"], policy(identity="redact")) == []
