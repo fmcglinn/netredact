@@ -321,9 +321,64 @@ def test_a_blob_no_rule_covers_still_flags():
     assert [f.check for f in result.findings] == ["long-base64-left"]
 
 
+#: a synthetic RSA public key: the real `ssh-rsa` header, then filler. Wrapped
+#: only to keep the line length honest.
+PUBKEY_BLOB = (
+    "AAAAB3NzaC1yc2EAAAADAQABAAABAQCfixtureKeyMaterialForTestsOnly0123456789"
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/abcdefg"
+    "hijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZfixture")
+
+#: an IOS `ip ssh pubkey-chain` entry in both of its forms: a key-hash line
+#: whose comment is a pasted key blob, and one whose comment is `user@host`
+PUBKEY_CHAIN = f"""ip ssh pubkey-chain
+  username ordadmin
+   key-hash ssh-rsa 0011223344556677889AABBCCDDEEFF0 {PUBKEY_BLOB}
+   key-hash ssh-rsa FFEEDDCCBBAA99887766554433221100 root@lab-rtr-01
+"""
+
+
+def test_a_key_blob_is_found_with_its_fingerprint_in_the_way():
+    """IOS `key-hash <alg> <fingerprint> <blob>` splits the pair.
+
+    `ssh-public-key` used to require the algorithm token immediately before
+    the blob, so the key survived and only `long-base64-left` spoke -- a
+    reported miss rather than a decision.
+    """
+    kept = sanitise_text(PUBKEY_CHAIN, Config(), salt=SALT)
+    assert kept.kept_counts["ssh-public-key"] == 1
+    assert kept.findings == [], "\n".join(str(f) for f in kept.findings)
+
+    acting = sanitise_text(PUBKEY_CHAIN, policy(identity="hash"), salt=SALT)
+    assert PUBKEY_BLOB not in acting.text
+    assert "key-hash ssh-rsa <REMOVED> <KEY-" in acting.text
+    assert acting.findings == [], "\n".join(str(f) for f in acting.findings)
+
+
+def test_the_ordinary_glued_form_still_works():
+    """The new branch must not displace the shape that already worked."""
+    text = "username bob ssh-key ssh-rsa AAAAB3NzaC1yc2Eabcdefghij0123456789\n"
+    result = sanitise_text(text, policy(identity="redact"), salt=SALT)
+    assert result.counts["ssh-public-key"] == 1
+    assert "AAAAB3Nza" not in result.text
+
+
+def test_a_key_comment_naming_the_device_goes_with_the_hostname():
+    """`root@<host>` is free text; the collect pass reaches it via the name."""
+    text = "hostname lab-rtr-01\n" + PUBKEY_CHAIN
+    out = sanitise_text(text, policy(hostnames="pseudo"), salt=SALT).text
+    assert "lab-rtr-01" not in out
+    assert "root@device-" in out
+
+
 def test_the_exemption_lifts_as_soon_as_the_family_acts():
-    """With identity acting, an unhandled key shape is a genuine miss again."""
-    text = "hostname x\nweird-vendor pubkey AAAAB3NzaC1yc2EAAAADAQABAAABgQ\n"
+    """With identity acting, an unhandled key shape is a genuine miss again.
+
+    The blob deliberately does NOT start with an SSH type-string header: that
+    header is what `ssh-public-key` recognises on its own, so a blob carrying
+    one is handled material rather than an unhandled shape.
+    """
+    text = ("hostname x\n"
+            "weird-vendor pubkey ssh-rsa QUJDREVGR0hJSktMTU5PUFFSU1RVVldY\n")
     kept = sanitise_text(text, Config(), salt=SALT)
     assert "ssh-key-left" not in {f.check for f in kept.findings}
     acting = sanitise_text(text, policy(identity="redact"), salt=SALT)

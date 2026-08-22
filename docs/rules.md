@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**53 rules**: 32 `secrets`, 5 `text`, 2 `locations`, 6 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`, 2 `circuits`.
+**55 rules**: 33 `secrets`, 5 `text`, 2 `locations`, 7 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 15 verification checks
 
@@ -20,15 +20,23 @@ to the section each belongs to.
 
 ## Placeholders used in the patterns
 
-| Token | Expands to |
-|---|---|
-| `<ENC>` | `(?:\d+\|sha512\|sha256\|sha1\|md5\|encrypted\|clear\|ascii\|ascii-text\|hex\|hexadecimal\|plain-text)` |
-| `<VAL>` | `(?!(?:/\*\s*(?:ACCESS-DENIED\|SECRET-DATA)\s*\*/))(?:(?:"[^"]*")\|(?:\'[^\']*\')\|[^\s;]+)` |
-| `%VAL%` | `<VAL>` as a *capturing* group |
+Three tokens stand in for material that recurs in every pattern.
 
-`<ENC>` is the optional encoding or algorithm hint between a keyword
-and its secret. `<VAL>` is the value matcher: a quoted string, or a run
-of characters that is neither space nor `;`.
+`<ENC>` -- the optional encoding or algorithm hint between a keyword
+and its secret:
+
+```
+(?:\d+|sha512|sha256|sha1|md5|encrypted|clear|ascii|ascii-text|hex|hexadecimal|plain-text)
+```
+
+`<VAL>` -- the value matcher: a quoted string, or a run of
+characters that is neither space nor `;`:
+
+```
+(?!(?:/\*\s*(?:ACCESS-DENIED|SECRET-DATA)\s*\*/))(?:(?:"[^"]*")|(?:\'[^\']*\')|[^\s;]+)
+```
+
+`%VAL%` -- `<VAL>` as a *capturing* group.
 
 ## How a pattern says where the value is
 
@@ -99,61 +107,428 @@ Scope is the gate; the dialect column is a caption.
 The catalogue owns whether a rule is matched at the start of a line,
 searched inline, or consumed as structured multi-line material.
 
-| Rule | Family | Matches | Scope | Pattern | End |
-|---|---|---|---|---|---|
-| `enable-secret` | `secrets` | `enable secret` / `enable password`, any encoding |  | `\s*enable\s+(?:secret\|password)\s+(?:level\s+\d+\s+)?(?:<ENC>\s+)*` |  |
-| `username-secret` | `secrets` | `username U ... password\|secret X` |  | `\s*username\s+\S+\s+(?:\S+\s+)*?(?:password\|secret)\s+(?:<ENC>\s+)*` |  |
-| `bare-password` | `secrets` | an indented `password` / `passwd` line, e.g. under `line vty` |  | `\s*(?:password\|passwd)\s+(?:<ENC>\s+)*` |  |
-| `bare-secret` | `secrets` | a bare `secret` line, including JunOS `set ... secret` |  | `\s*(?:set\s+\S.*?\s)?secret\s+(?:<ENC>\s+)*` |  |
-| `encoded-key` | `secrets` | any `key 0\|7\|8\|encrypted X` anywhere on the line |  | `.*\bkey\s+(?!(?:(?:0\|7\|8\|encrypted)\s+)?(?:single-connection\|source-interface\|retransmit\|acct-port\|auth-port\|udp-port\|dynamic\|informs\|maxpoll\|minpoll\|timeout\|version\|iburst\|inform\|prefer\|source\|burst\|traps\|port\|trap\|nat\|vrf)(?![-\w]))(?:0\|7\|8\|encrypted)\s+` |  |
-| `aaa-server-key` | `secrets` | `key X` on a tacacs / radius / ldap / server-private line |  | `.*\b(?:tacacs\|radius\|ldap\|server-private\|server)\b.*?\bkey\s+(?!(?:<ENC>\s+)?(?:single-connection\|source-interface\|retransmit\|acct-port\|auth-port\|udp-port\|dynamic\|informs\|maxpoll\|minpoll\|timeout\|version\|iburst\|inform\|prefer\|source\|burst\|traps\|port\|trap\|nat\|vrf)(?![-\w]))(?:<ENC>\s+)*` |  |
-| `quoted-key` | `secrets` | `key "..."`, e.g. JunOS OSPF MD5 |  | `\s*(?:set\s+\S.*?\s)?key\s+(?=\")` |  |
-| `key-string` | `secrets` | `key-string X` in a key chain |  | `\s*key-string\s+(?:<ENC>\s+)*` |  |
-| `key-hash` | `secrets` | `key-hash <alg> X`, `hash <alg> X` |  | `\s*(?:key-hash\|hash)\s+\S+\s+` |  |
-| `license-entitlement-key` | `secrets` | `license keys key X` -- the entitlement key, not the UDI |  | `\s*(?:set\s+system\s+)?license\s+keys\s+key\s+` |  |
-| `snmp-community` | `secrets` | `snmp-server community X`, `set snmp community X` |  | `\s*(?:snmp-server\|set\s+snmp)\s+community\s+` |  |
-| `junos-community` | `secrets` | JunOS `community X { ... }` -- juniper grammar | inside `snmp` | `\s*community\s+` |  |
-| `snmp-host` | `secrets` | the community or v3 user on an `snmp-server host` line |  | `^\s*snmp-server\s+host\s+\S+\s+(.*)$` |  |
-| `snmp-v3-auth` | `secrets` | `auth md5\|sha X` |  | `.*\bauth\s+(?:md5\|sha\d*)\s+` |  |
-| `snmp-v3-priv` | `secrets` | `priv [aes N\|des\|3des] X`, cipher optional for NX-OS |  | `.*\bpriv\s+(?:(?:aes(?:\s+\d+)?\|des\|3des)\s+)?` |  |
-| `snmp-engineid` | `identity` | `snmp-server engineID <type> X` -- identifies the device, and is derived from a real MAC |  | `\s*snmp-server\s+engineID\s+\S+\s+` |  |
-| `isakmp-key` | `secrets` | `crypto isakmp key X` |  | `\s*crypto\s+isakmp\s+key\s+(?:<ENC>\s+)*` |  |
-| `pre-shared-key` | `secrets` | `pre-shared-key [address A] [key] X` |  | `.*\bpre-shared-key\s+(?:address\s+\S+\s+)?(?:key\s+)?(?:<ENC>\s+)*` |  |
-| `auth-key` | `secrets` | `authentication-key` / `encryption-key`, skipping JunOS grammar keywords |  | `\s*(?:set\s+\S.*?\s)?(?:authentication-key\|encryption-key)\s+(?!(?:<ENC>\s+)?(?:authentication\|hexadecimal\|ascii-text\|plain-text\|start-time\|algorithm\|sha256\|value\|sha1\|type\|\d+\|key\|md5)(?![-\w]))(?:<ENC>\s+)*` |  |
-| `message-digest-key` | `secrets` | `message-digest-key N md5 X` (OSPF) |  | `.*\bmessage-digest-key\s+\d+\s+md5\s+(?:<ENC>\s+)*` |  |
-| `bgp-neighbor-password` | `secrets` | `neighbor A password X` |  | `.*\bneighbor\s+\S+\s+password\s+(?:<ENC>\s+)*` |  |
-| `hsrp-vrrp-auth` | `secrets` | `standby N` / `vrrp N` `authentication text\|md5 ... X` |  | `\s*(?:standby\s+\d+\s+\|vrrp\s+\d+\s+)?authentication\s+(?:text\|md5\s+key-string\|md5\s+key-chain)\s+(?:<ENC>\s+)*` |  |
-| `isis-password` | `secrets` | `lsp-password`, `area-password`, `domain-password`, and the interface-level `isis password` |  | `\s*(?:(?:lsp\|area\|domain)-password\|isis\s+password)\s+(?:<ENC>\s+)*` |  |
-| `ntp-auth-key` | `secrets` | `ntp authentication-key N <alg> X` |  | `\s*ntp\s+authentication-key\s+\d+\s+\S+\s+` |  |
-| `ppp-credential` | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` |  | `\s*ppp\s+(?:chap\|pap\|eap)\s+(?:password\|secret\|sent-username\s+\S+\s+password)\s+(?:<ENC>\s+)*` |  |
-| `wpa-psk` | `secrets` | `wpa-psk X` |  | `.*\bwpa-psk\s+(?:<ENC>\s+)*` |  |
-| `ftp-password` | `secrets` | `ip ftp\|tftp\|http client password X` |  | `\s*ip\s+(?:ftp\|tftp\|http\s+client)\s+password\s+(?:<ENC>\s+)*` |  |
-| `junos-password` | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  | `.*\b(?:encrypted-password\|plain-text-password-value)\s+` |  |
-| `unsupported-transceiver` | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar |  | `^\s*service\s+unsupported-transceiver\s+(?![{}\s]*$)%VAL%(?:\s+%VAL%)?\s*$` |  |
-| `hardware-model` | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; and the model in Arista's `! device: <name> (<model>, <release>)` header |  | `(?:^\s*!?\s*(?:hardware(?:\s+(?:model\|version\|revision))?\|model(?:\s+(?:number\|name))?\|chassis(?:\s+type)?\|product(?:\s+id)?\|platform\|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*!\s*device:\s*\S+\s*\(([^)]+),)` |  |
-| `os-version` | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; and the release in Arista's `! device:` header |  | `(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$)` |  |
-| `software-image` | `platform` | `Software image version:`, `System image file is ...`, `Software version:`; and the bare `Junos:` / `EOS:` forms, where a colon is required |  | `^\s*!?\s*(?:(?:software\s+image\s+version\|system\s+image\s+file(?:\s+is)?\|(?:software\|firmware\|image\|junos\|eos\|os)\s+version)(?:\s*[:=]\s*\|\s+)\|(?:junos\|eos)\s*[:=]\s*)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `boot-image` | `platform` | `boot system <image>`, commented out or not |  | `^\s*!?\s*boot\s+system\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `location` | `locations` | the whole value of a `location` line; never a JunOS `location {` stanza opener |  | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `contact` | `text` | the whole value of a `contact` line |  | `^\s*(?:set\s+snmp\s+\|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `junos-location-body` | `locations` | the street address inside a JunOS `location { ... }` stanza -- juniper grammar | inside `location` | `(?:^\s*set\s+system\s+location\s+(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$\|^\s*(?:street-address\|country-code\|postal-code\|longitude\|altitude\|building\|latitude\|npa-nxx\|hcoord\|vcoord\|floor\|lata\|rack\|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$)` |  |
-| `description` | `text` | a `description` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down |  outside `interfaces` | `^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `acl-remark` | `text` | an ACL `remark` |  | `^\s*remark\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `login-message` | `text` | `banner login`-style `message` and `announcement` text |  | `^\s*(?:set\s+system\s+login\s+)?(?:message\|announcement)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `interface-description` | `interfaces` | the same `description` line, when it is inside an interface: `interface Gi0/0`, JunOS `interfaces { … }`, `set interfaces … description …` | inside `interfaces` | `^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$` |  |
-| `vlan-name` | `vlans` | the `name` under a `vlan <id>` block, and the one-line `vlan <id> name <name>` form. Never an SVI: `interface Vlan905` is an interface | inside `vlans` | `\s*(?:vlan\s+\d+\s+)?name\s+` |  |
-| `patch-name` | `circuits` | the name of a `patch` inside a `patch panel` block. The `patch panel` header itself is never the value -- arista grammar | inside `patch-panel` | `\s+patch\s+(?!panel(?![-\w]))` |  |
-| `pseudowire-name` | `circuits` | a pseudowire name, both where it is defined under `mpls ldp` -> `pseudowires` and where a `connector` line refers to it (`pseudowire ldp X alternate Y`). One rule, so a definition and its references can never be given two different actions -- arista grammar |  | `(?:^\s*connector\s+\d+\s+pseudowire\s+ldp\s+%VAL%(?:\s+alternate\s+%VAL%)?\s*$\|^\s+pseudowire\s+(?![{}\s]*$)%VAL%\s*$)` |  |
-| `banner` | `text` | `banner <type> <delim>` through its closing delimiter |  | `^\s*banner\s+([\w-]+)\s+(.*)$` |  |
-| `junos-type9` | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  | `(\$9\$[^\s";]+)` |  |
-| `crypt-hash` | `secrets` | any `$1$ $2a/b/x/y$ $5$ $6$ $y$` hash, wherever it appears |  | `(\$(?:1\|2[abxy]?\|5\|6\|y)\$[^\s";]+)` |  |
-| `ssh-public-key` | `identity` | `ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` plus `AAAA...`, and JunOS `ssh-known-hosts` key forms |  | `(?:\b(?:ssh-(?:rsa\|dss\|ed25519)\|ecdsa-sha2-[\w-]+)\s+\|\bssh-known-hosts\s+host\s+\S+\s+(?:rsa\|dsa\|ecdsa\|ed25519)-key\s+)("?AAAA[0-9A-Za-z+/=]+"?)` |  |
-| `license-udi` | `identity` | `License UDI: ...` |  | `^\s*!?\s*(?>License\s+UDI:?\s*)(.+)$` |  |
-| `serial-number` | `identity` | `Serial Number: ...`, `System serial number ...` |  | `^\s*!?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$` |  |
-| `certificate-block` | `identity` | a Cisco `certificate self-signed ... quit` body |  | `^\s*certificate\s+(?:self-signed\|ca)?\s*\S*\s*(?:nvram:\S+)?\s*$` | `^\s*quit\s*$` |
-| `key-string-block` | `secrets` | a multi-line `key-string ... quit` body |  | `^\s*key-string\s*$` | `^\s*quit\s*$` |
-| `pem-key` | `secrets` | a PEM private key or DH parameter block |  | `-----BEGIN [A-Z0-9 ]*(?:KEY\|PARAMETERS)-----` | `-----END [A-Z0-9 ]*(?:KEY\|PARAMETERS)-----` |
-| `pem-cert` | `identity` | a PEM certificate block |  | `-----BEGIN [A-Z0-9 ]*CERTIFICATE-----` | `-----END [A-Z0-9 ]*CERTIFICATE-----` |
+Each rule name links to its pattern, which is listed in full under
+[rule patterns](#rule-patterns) below.
+
+| Rule | Family | Matches | Where |
+|---|---|---|---|
+| [`enable-secret`](#enable-secret) | `secrets` | `enable secret` / `enable password`, any encoding |  |
+| [`username-secret`](#username-secret) | `secrets` | `username U ... password\|secret X` |  |
+| [`bare-password`](#bare-password) | `secrets` | an indented `password` / `passwd` line, e.g. under `line vty` |  |
+| [`bare-secret`](#bare-secret) | `secrets` | a bare `secret` line, including JunOS `set ... secret` |  |
+| [`authentication-password`](#authentication-password) | `secrets` |  |  |
+| [`encoded-key`](#encoded-key) | `secrets` | any `key 0\|7\|8\|encrypted X` anywhere on the line |  |
+| [`aaa-server-key`](#aaa-server-key) | `secrets` | `key X` on a tacacs / radius / ldap / server-private line |  |
+| [`quoted-key`](#quoted-key) | `secrets` | `key "..."`, e.g. JunOS OSPF MD5 |  |
+| [`key-string`](#key-string) | `secrets` | `key-string X` in a key chain |  |
+| [`key-hash`](#key-hash) | `secrets` | `key-hash <alg> X`, `hash <alg> X` |  |
+| [`license-entitlement-key`](#license-entitlement-key) | `secrets` | `license keys key X` -- the entitlement key, not the UDI |  |
+| [`snmp-community`](#snmp-community) | `secrets` | `snmp-server community X`, `set snmp community X` |  |
+| [`junos-community`](#junos-community) | `secrets` | JunOS `community X { ... }` -- juniper grammar | inside `snmp` |
+| [`snmp-host`](#snmp-host) | `secrets` | the community or v3 user on an `snmp-server host` line |  |
+| [`snmp-v3-auth`](#snmp-v3-auth) | `secrets` | `auth md5\|sha X` |  |
+| [`snmp-v3-priv`](#snmp-v3-priv) | `secrets` | `priv [aes N\|des\|3des] X`, cipher optional for NX-OS |  |
+| [`snmp-engineid`](#snmp-engineid) | `identity` | `snmp-server engineID <type> X` -- identifies the device, and is derived from a real MAC |  |
+| [`isakmp-key`](#isakmp-key) | `secrets` | `crypto isakmp key X` |  |
+| [`pre-shared-key`](#pre-shared-key) | `secrets` | `pre-shared-key [address A] [key] X` |  |
+| [`auth-key`](#auth-key) | `secrets` | `authentication-key` / `encryption-key`, skipping JunOS grammar keywords |  |
+| [`message-digest-key`](#message-digest-key) | `secrets` | `message-digest-key N md5 X` (OSPF) |  |
+| [`bgp-neighbor-password`](#bgp-neighbor-password) | `secrets` | `neighbor A password X` |  |
+| [`hsrp-vrrp-auth`](#hsrp-vrrp-auth) | `secrets` | `standby N` / `vrrp N` `authentication text\|md5 ... X` |  |
+| [`isis-password`](#isis-password) | `secrets` | `lsp-password`, `area-password`, `domain-password`, and the interface-level `isis password` |  |
+| [`ntp-auth-key`](#ntp-auth-key) | `secrets` | `ntp authentication-key N <alg> X` |  |
+| [`ppp-credential`](#ppp-credential) | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` |  |
+| [`wpa-psk`](#wpa-psk) | `secrets` | `wpa-psk X` |  |
+| [`ftp-password`](#ftp-password) | `secrets` | `ip ftp\|tftp\|http client password X` |  |
+| [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
+| [`script-checksum`](#script-checksum) | `identity` |  |  |
+| [`unsupported-transceiver`](#unsupported-transceiver) | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar |  |
+| [`hardware-model`](#hardware-model) | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; and the model in Arista's `! device: <name> (<model>, <release>)` header |  |
+| [`os-version`](#os-version) | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; and the release in Arista's `! device:` header |  |
+| [`software-image`](#software-image) | `platform` | `Software image version:`, `System image file is ...`, `Software version:`; and the bare `Junos:` / `EOS:` forms, where a colon is required |  |
+| [`boot-image`](#boot-image) | `platform` | `boot system <image>`, commented out or not |  |
+| [`location`](#location) | `locations` | the whole value of a `location` line; never a JunOS `location {` stanza opener |  |
+| [`contact`](#contact) | `text` | the whole value of a `contact` line |  |
+| [`junos-location-body`](#junos-location-body) | `locations` | the street address inside a JunOS `location { ... }` stanza -- juniper grammar | inside `location` |
+| [`description`](#description) | `text` | a `description` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down |  outside `interfaces` |
+| [`acl-remark`](#acl-remark) | `text` | an ACL `remark` |  |
+| [`login-message`](#login-message) | `text` | `banner login`-style `message` and `announcement` text |  |
+| [`interface-description`](#interface-description) | `interfaces` | the same `description` line, when it is inside an interface: `interface Gi0/0`, JunOS `interfaces { … }`, `set interfaces … description …` | inside `interfaces` |
+| [`vlan-name`](#vlan-name) | `vlans` | the `name` under a `vlan <id>` block, and the one-line `vlan <id> name <name>` form. Never an SVI: `interface Vlan905` is an interface | inside `vlans` |
+| [`patch-name`](#patch-name) | `circuits` | the name of a `patch` inside a `patch panel` block. The `patch panel` header itself is never the value -- arista grammar | inside `patch-panel` |
+| [`pseudowire-name`](#pseudowire-name) | `circuits` | a pseudowire name, both where it is defined under `mpls ldp` -> `pseudowires` and where a `connector` line refers to it (`pseudowire ldp X alternate Y`). One rule, so a definition and its references can never be given two different actions -- arista grammar |  |
+| [`banner`](#banner) | `text` | `banner <type> <delim>` through its closing delimiter |  |
+| [`junos-type9`](#junos-type9) | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  |
+| [`crypt-hash`](#crypt-hash) | `secrets` | any `$1$ $2a/b/x/y$ $5$ $6$ $y$` hash, wherever it appears |  |
+| [`ssh-public-key`](#ssh-public-key) | `identity` | `ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` plus `AAAA...`, and JunOS `ssh-known-hosts` key forms |  |
+| [`license-udi`](#license-udi) | `identity` | `License UDI: ...` |  |
+| [`serial-number`](#serial-number) | `identity` | `Serial Number: ...`, `System serial number ...` |  |
+| [`certificate-block`](#certificate-block) | `identity` | a Cisco `certificate self-signed ... quit` body |  |
+| [`key-string-block`](#key-string-block) | `secrets` | a multi-line `key-string ... quit` body |  |
+| [`pem-key`](#pem-key) | `secrets` | a PEM private key or DH parameter block |  |
+| [`pem-cert`](#pem-cert) | `identity` | a PEM certificate block |  |
+
+## Rule patterns
+
+One block per rule, in catalogue order, exactly as the code holds
+it bar the `<ENC>` / `<VAL>` placeholders above -- so a pattern can
+be copied straight into a regex tester and checked against the
+claim its catalogue row makes. A rule that consumes a multi-line
+block also carries the pattern that ends it.
+
+### `enable-secret`
+
+```
+\s*enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?(?:<ENC>\s+)*
+```
+
+### `username-secret`
+
+```
+\s*username\s+\S+\s+(?:\S+\s+)*?(?:password|secret)\s+(?:<ENC>\s+)*
+```
+
+### `bare-password`
+
+```
+\s*(?:password|passwd)\s+(?:<ENC>\s+)*
+```
+
+### `bare-secret`
+
+```
+\s*(?:set\s+\S.*?\s)?secret\s+(?:<ENC>\s+)*
+```
+
+### `authentication-password`
+
+```
+.*\bauthentication\s+password\s+(?:<ENC>\s+)*
+```
+
+### `encoded-key`
+
+```
+.*\bkey\s+(?!(?:(?:0|7|8|encrypted)\s+)?(?:single-connection|source-interface|retransmit|acct-port|auth-port|udp-port|dynamic|informs|maxpoll|minpoll|timeout|version|iburst|inform|prefer|source|burst|traps|port|trap|nat|vrf)(?![-\w]))(?:0|7|8|encrypted)\s+
+```
+
+### `aaa-server-key`
+
+```
+.*\b(?:tacacs|radius|ldap|server-private|server)\b.*?\bkey\s+(?!(?:<ENC>\s+)?(?:single-connection|source-interface|retransmit|acct-port|auth-port|udp-port|dynamic|informs|maxpoll|minpoll|timeout|version|iburst|inform|prefer|source|burst|traps|port|trap|nat|vrf)(?![-\w]))(?:<ENC>\s+)*
+```
+
+### `quoted-key`
+
+```
+\s*(?:set\s+\S.*?\s)?key\s+(?=\")
+```
+
+### `key-string`
+
+```
+\s*key-string\s+(?:<ENC>\s+)*
+```
+
+### `key-hash`
+
+```
+\s*(?:key-hash|hash)\s+\S+\s+
+```
+
+### `license-entitlement-key`
+
+```
+\s*(?:set\s+system\s+)?license\s+keys\s+key\s+
+```
+
+### `snmp-community`
+
+```
+\s*(?:snmp-server|set\s+snmp)\s+community\s+
+```
+
+### `junos-community`
+
+```
+\s*community\s+
+```
+
+### `snmp-host`
+
+```
+^\s*snmp-server\s+host\s+\S+\s+(.*)$
+```
+
+### `snmp-v3-auth`
+
+```
+.*\bauth\s+(?:md5|sha\d*)\s+
+```
+
+### `snmp-v3-priv`
+
+```
+.*\bpriv\s+(?:(?:aes(?:\s+\d+)?|des|3des)\s+)?
+```
+
+### `snmp-engineid`
+
+```
+\s*snmp-server\s+engineID\s+\S+\s+
+```
+
+### `isakmp-key`
+
+```
+\s*crypto\s+isakmp\s+key\s+(?:<ENC>\s+)*
+```
+
+### `pre-shared-key`
+
+```
+.*\bpre-shared-key\s+(?:address\s+\S+\s+)?(?:key\s+)?(?:<ENC>\s+)*
+```
+
+### `auth-key`
+
+```
+\s*(?:set\s+\S.*?\s)?(?:authentication-key|encryption-key)\s+(?!(?:<ENC>\s+)?(?:authentication|hexadecimal|ascii-text|plain-text|start-time|algorithm|sha256|value|sha1|type|\d+|key|md5)(?![-\w]))(?:<ENC>\s+)*
+```
+
+### `message-digest-key`
+
+```
+.*\bmessage-digest-key\s+\d+\s+md5\s+(?:<ENC>\s+)*
+```
+
+### `bgp-neighbor-password`
+
+```
+.*\bneighbor\s+\S+\s+password\s+(?:<ENC>\s+)*
+```
+
+### `hsrp-vrrp-auth`
+
+```
+\s*(?:standby\s+\d+\s+|vrrp\s+\d+\s+)?authentication\s+(?:text|md5\s+key-string|md5\s+key-chain)\s+(?:<ENC>\s+)*
+```
+
+### `isis-password`
+
+```
+\s*(?:(?:lsp|area|domain)-password|isis\s+password)\s+(?:<ENC>\s+)*
+```
+
+### `ntp-auth-key`
+
+```
+\s*ntp\s+authentication-key\s+\d+\s+\S+\s+
+```
+
+### `ppp-credential`
+
+```
+\s*ppp\s+(?:chap|pap|eap)\s+(?:password|secret|sent-username\s+\S+\s+password)\s+(?:<ENC>\s+)*
+```
+
+### `wpa-psk`
+
+```
+.*\bwpa-psk\s+(?:<ENC>\s+)*
+```
+
+### `ftp-password`
+
+```
+\s*ip\s+(?:ftp|tftp|http\s+client)\s+password\s+(?:<ENC>\s+)*
+```
+
+### `junos-password`
+
+```
+.*\b(?:encrypted-password|plain-text-password-value)\s+
+```
+
+### `script-checksum`
+
+```
+.*\bchecksum\s+(?:md5|sha-?1|sha-?256|sha-?512)\s+
+```
+
+### `unsupported-transceiver`
+
+```
+^\s*service\s+unsupported-transceiver\s+(?![{}\s]*$)%VAL%(?:\s+%VAL%)?\s*$
+```
+
+### `hardware-model`
+
+```
+(?:^\s*!?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),)
+```
+
+### `os-version`
+
+```
+(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$)
+```
+
+### `software-image`
+
+```
+^\s*!?\s*(?:(?:software\s+image\s+version|system\s+image\s+file(?:\s+is)?|(?:software|firmware|image|junos|eos|os)\s+version)(?:\s*[:=]\s*|\s+)|(?:junos|eos)\s*[:=]\s*)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `boot-image`
+
+```
+^\s*!?\s*boot\s+system\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `location`
+
+```
+^\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `contact`
+
+```
+^\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `junos-location-body`
+
+```
+(?:^\s*set\s+system\s+location\s+(?:street-address|country-code|postal-code|longitude|altitude|building|latitude|npa-nxx|hcoord|vcoord|floor|lata|rack|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*(?:street-address|country-code|postal-code|longitude|altitude|building|latitude|npa-nxx|hcoord|vcoord|floor|lata|rack|room)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$)
+```
+
+### `description`
+
+```
+^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `acl-remark`
+
+```
+^\s*remark\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `login-message`
+
+```
+^\s*(?:set\s+system\s+login\s+)?(?:message|announcement)\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `interface-description`
+
+```
+^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+```
+
+### `vlan-name`
+
+```
+\s*(?:vlan\s+\d+\s+)?name\s+
+```
+
+### `patch-name`
+
+```
+\s+patch\s+(?!panel(?![-\w]))
+```
+
+### `pseudowire-name`
+
+```
+(?:^\s*connector\s+\d+\s+pseudowire\s+ldp\s+%VAL%(?:\s+alternate\s+%VAL%)?\s*$|^\s+pseudowire\s+(?![{}\s]*$)%VAL%\s*$)
+```
+
+### `banner`
+
+```
+^\s*banner\s+([\w-]+)\s+(.*)$
+```
+
+### `junos-type9`
+
+```
+(\$9\$[^\s";]+)
+```
+
+### `crypt-hash`
+
+```
+(\$(?:1|2[abxy]?|5|6|y)\$[^\s";]+)
+```
+
+### `ssh-public-key`
+
+```
+(?:(?:\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[\w-]+)\s+|\bssh-known-hosts\s+host\s+\S+\s+(?:rsa|dsa|ecdsa|ed25519)-key\s+)("?AAAA[0-9A-Za-z+/=]+"?)|("?AAAA(?:B3Nza|C3Nza|E2Vj)[0-9A-Za-z+/=]*"?))
+```
+
+### `license-udi`
+
+```
+^\s*!?\s*(?>License\s+UDI:?\s*)(.+)$
+```
+
+### `serial-number`
+
+```
+^\s*!?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
+```
+
+### `certificate-block`
+
+```
+^\s*certificate\s+(?:self-signed|ca)?\s*\S*\s*(?:nvram:\S+)?\s*$
+```
+
+Ends at:
+
+```
+^\s*quit\s*$
+```
+
+### `key-string-block`
+
+```
+^\s*key-string\s*$
+```
+
+Ends at:
+
+```
+^\s*quit\s*$
+```
+
+### `pem-key`
+
+```
+-----BEGIN [A-Z0-9 ]*(?:KEY|PARAMETERS)-----
+```
+
+Ends at:
+
+```
+-----END [A-Z0-9 ]*(?:KEY|PARAMETERS)-----
+```
+
+### `pem-cert`
+
+```
+-----BEGIN [A-Z0-9 ]*CERTIFICATE-----
+```
+
+Ends at:
+
+```
+-----END [A-Z0-9 ]*CERTIFICATE-----
+```
 
 ## Verification checks
 

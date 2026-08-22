@@ -29,9 +29,170 @@ Other destinations:
 ```bash
 netredact configs/*.txt -o clean/             # a directory, one file each
 netredact config.txt -o clean.txt             # a single named file
-netredact config.txt --in-place               # overwrite
+netredact config.txt -r                       # replace the input
 cat config.txt | netredact -                  # stdin
 ```
+
+## Walking a directory
+
+An argument may be a directory, which is how a backup tree usually arrives:
+
+```bash
+netredact backups/ -r                         # every config in the tree, replaced
+netredact backups/ -o clean/                  # same tree under clean/
+```
+
+A directory has to say where its output goes. `netredact backups/` on its own
+is a usage error rather than 101 configurations concatenated onto your
+terminal:
+
+```
+netredact: backups/ is a directory -- add -r to replace the files in place,
+or -o DIR to write the sanitised tree elsewhere
+```
+
+The walk is recursive, depth-first and sorted, so a run is reproducible. It is
+also deliberately choosier than an argument you typed, because a tree contains
+things that are not configurations:
+
+- dot-prefixed names are skipped, and a dot-directory is pruned whole rather
+  than descended into, so `.git/`, `.svn/` and `.DS_Store` are left alone;
+- symlinks are skipped, both kinds. A directory link is never descended into,
+  so a link back up the tree cannot send the walk round in circles; a file link
+  is never sanitised, because its target is either another file in the tree —
+  which would then be sanitised twice, and `pseudo` is not idempotent — or a
+  file outside the tree you named;
+- a file with a NUL byte **anywhere** in it is skipped as binary. The whole
+  file is read rather than a window of it, because an archive or a firmware
+  image can open with kilobytes of plausible text and carry its payload much
+  further in. Sanitising one would rewrite it as text — and under `-r` that is
+  not a bad output, it is a destroyed file;
+- a file whose first non-blank line starts with `-----BEGIN` is skipped as a
+  PEM key or certificate. A private key sitting in a backup tree is text, so no
+  NUL test will ever reach it, and the `pem-key` rule replaces exactly that
+  body — over the top of an `id_rsa` that has no other copy;
+- anything that is not a regular file at all is skipped;
+- extensions are **not** filtered. A RANCID repository names its files after
+  the devices, with no extension at all.
+
+What the walk left out is counted on stderr: the verdicts with a count each,
+then a few of the paths behind them, so you can check the decision without
+being buried in one line per file.
+
+```
+netredact: skipped 6 file(s) while walking: 2 PEM file, 2 symlink, 1 binary, 1 dot-file
+        (backups/linkdir, backups/.DS_Store, backups/link.cfg, ...)
+```
+
+That count is not an inventory of the tree, and cannot be: a dot-directory is
+pruned as a unit, so the hundreds of files inside `.git/` are never opened,
+never counted and never named. What the count covers is every decision the walk
+made file by file.
+
+Under `-o`, the tree is mirrored rather than flattened — `backups/nsw/rtr1.cfg`
+becomes `clean/nsw/rtr1.cfg.sanitised` — so two zones' identically named files
+cannot land on top of each other. Missing zone directories are created under
+`-o`, since that is what mirroring means, and so is `-o` itself when it is not
+there yet: a directory argument is answered with a tree, however few files the
+walk finds in it, and a tree does not fit in one file, so `-o` there can only be
+a directory. The same goes for any run with more than one file to write, and for
+`-o clean/` — the trailing separator is a statement that the destination is a
+directory, even where one named file would otherwise make `-o` a file name.
+
+What decides this is the command line, never the walk. Deciding it on the number
+of files found would make it depend on the contents of the directory — the
+command that wrote a file called `clean` today would mirror a tree into it
+tomorrow, once a second config landed. One named file with one `-o` path is the
+only case where `-o` is a file name, and there nothing is invented: `-o
+deep/ly/nested/out.txt` with a typo in it is reported, not built. A run that
+does write a tree is refused, before it writes anything, if `-o` is there
+already as a regular file. And if two directory arguments would collide on one
+destination, that is a usage error too, not a silent overwrite.
+
+One invocation is one salt, so pseudonyms are consistent across the whole tree:
+`core-rtr-01` becomes the same `device-…` in every file. Splitting the tree
+over several runs re-rolls it, unless you set `salt_file` (see the
+[configuration reference](configuration.md)).
+
+The tree's **file and directory names are never touched** — only contents. A
+path like `backups/zone_NSW/backup_device_10.1.2.3.txt` still carries the zone
+and the management address after a clean `-r` run.
+
+`-r` overwrites the input, so the original is gone. netredact marks what it
+writes and refuses to sanitise a marked file twice — see
+[running it twice](#running-it-twice) — but on a tree you cannot re-fetch from
+the devices, prefer `-o DIR`.
+
+## When netredact refuses a file
+
+A file you name on the command line is treated differently from one the walk
+found, because you named it. A dot-file, a symlink or an extensionless file
+passed as an argument is simply processed: only the walk gets to decide that a
+file it chose is not worth opening.
+
+The exception is destruction. Under `-r` a named binary or PEM file is refused,
+because that is the one case where rewriting it as text leaves nothing to go
+back to:
+
+```
+netredact: img.bin: contains a NUL byte, so it is not a configuration -- writing
+it back as text would corrupt it, and with -r the original is gone. Pass --force
+if you meant this file
+```
+
+With `-o` or stdout the harm does not exist — the original is still on disk —
+so the name you typed wins and the file is processed. That asymmetry is what
+separates naming a directory from globbing it: `netredact backups/* -r` arrives
+as a list of typed names, because the shell expanded the glob before netredact
+could see it and nothing downstream can tell the two apart. So the glob gets
+the binary and PEM refusals and none of the walk's other caution — a symlink in
+the expansion is written like any other name. Name the directory and you get
+the whole walk.
+
+Input must be valid UTF-8. Otherwise netredact says so, that file is skipped
+and the run exits `1`:
+
+```
+netredact: latin1.cfg: not valid UTF-8 (invalid continuation byte at byte 10) --
+sanitising it would replace every byte that cannot be decoded. Convert the file,
+or pass --force to accept that
+```
+
+Decoding it anyway turns each undecodable byte into U+FFFD, and under `-r` that
+lands in your only copy — an edit to material netredact was never asked to
+touch, made without saying so. Convert the file, or pass `--force` to accept
+the substitution.
+
+`--force` is the single override for all of this: it means *process an input
+netredact would otherwise refuse* — a file it has already marked (see
+[running it twice](#running-it-twice)), a named binary or PEM file under `-r`,
+or input that is not valid UTF-8. Every one of those refusals is protecting the
+file, so reach for `--force` when you know which one you are overruling.
+
+Line endings survive: a configuration that arrives with CRLF is written back
+with CRLF. The rules and the verifier work a line at a time, so the endings are
+normalised for them and put back on the way out.
+
+Two things that are **not** skips, because treating them as skips would hide
+them behind a clean exit code:
+
+- an input netredact cannot read is an error carrying the real reason, and the
+  run exits `1`. Calling it "not a configuration" would report success on a
+  file whose secrets are still in place;
+
+  ```
+  netredact: [Errno 13] Permission denied: 'secret.cfg'
+  ```
+
+- an output netredact cannot write is reported the same way, and the rest of
+  the run still happens. A tree abandoned half-way is the worst outcome
+  available — some files replaced, some not, and no statement of which — so the
+  failure is named, the exit code is `1`, and every other file is processed.
+
+Each file is written through a temporary in the same directory and then moved
+into place, so a full disk or a signal cannot leave a half-written
+configuration where, under `-r`, that file was the only copy. Nothing is left
+behind either way: a `.netredact-tmp` never survives a failure.
 
 ## Reading the report
 
@@ -52,7 +213,9 @@ This is the whole report for one of the test fixtures, at stock defaults:
   VERIFY: clean (policy applied, no credential-shaped material left)
   NOTE: interface numbering and unsupported vendor grammar are never scrubbed.
   WARNING: netredact reduces exposure; it does not guarantee anonymisation.
-        Review every output before disclosure.
+        Network configurations may retain identifying or confidential
+        material in unsupported syntax or relationships. Review every
+        output; you decide whether it is safe and lawful to share.
 ```
 
 Three things to read:
@@ -97,20 +260,21 @@ netredact running-config.txt -c docs/examples/03-external-review.toml --report
 The same fixture under `03-external-review` — same file, different policy:
 
 ```
-  policy: secrets=redact, text=hash, identity=hash, platform=keep (per
-          rule), interfaces=hash, vlans=pseudo, circuits=pseudo,
-          domains=pseudo, usernames=pseudo, emails=hash, ipv4=keep (per
-          class), ipv6=keep (per class), macs=keep/pseudo, everything else
-          kept
+  policy: secrets=redact, text=hash, locations=hash, identity=hash,
+          platform=keep (per rule), interfaces=hash, vlans=pseudo,
+          circuits=pseudo, domains=pseudo, usernames=pseudo, emails=hash,
+          ipv4=keep (per class), ipv6=keep (per class), macs=keep/pseudo,
+          everything else kept
   changes:
         19  username-secret, enable-secret, encoded-key ...
          5  ipv4 addresses
          5  usernames
-         4  ACL remarks, banners, contacts, locations
+         3  ACL remarks, banners, contacts
          2  interface descriptions
          2  ipv6 addresses
          1  certificates
          1  domain names
+         1  locations
          1  MAC addresses
   VERIFY: clean (policy applied, no credential-shaped material left)
 ```
@@ -154,8 +318,23 @@ The file is created `0600` on first use.
 
 ## Running it twice
 
-Sanitising sanitised output is a no-op for `hash` and `redact`: netredact
-recognises its own markers and constants and leaves them alone.
+Every file netredact writes carries one comment line at the top naming the
+tool — `!` in IOS-style grammar, `#` in JunOS:
+
+```
+! netredact-sanitised 0.1.0 -- sanitised output, not a device configuration; re-run from the original
+```
+
+That line is there so the second run can be **refused**:
+
+```
+netredact: clean.txt: already sanitised by netredact -- a second pass would
+re-map pseudonyms and cannot be undone. Sanitise the original, or pass --force
+```
+
+Exit `1`, and nothing is written. It matters because a second pass is not a
+no-op. Sanitising sanitised output *is* a no-op for `hash` and `redact`:
+netredact recognises its own markers and constants and leaves them alone.
 
 It is **not** a no-op for `pseudo` on addresses and MACs. Those substitutes are
 deliberately indistinguishable from real values — including to netredact — so a
@@ -163,14 +342,26 @@ second pass re-maps them. The reason is `100.64.0.0/10`: it is in the default
 IPv4 pool and real ISPs use it, so treating every pool address as "already done"
 would leave real CGNAT addresses in the output. Run once, from the original.
 
+With `-r` there is no original — which is exactly why the marker exists. If you
+mean it, `--force` sanitises a marked file anyway, and it is
+[the one override](#when-netredact-refuses-a-file) for every refusal netredact
+makes; the marker is not stacked, and the second mapping is not recoverable.
+`marker = false` switches the line off and takes the guard with it.
+
+Line numbers in the report count the marker, so `L3` is line 3 of the file that
+was written.
+
 ## Failing a pipeline on suspicious output
 
 ```bash
 netredact config.txt --strict -o clean.txt || echo "needs a human"
 ```
 
-Exit codes: `0` clean, `1` usage or configuration error, `2` the verification
-pass found something (with `--strict`, or `verify.strict = true`).
+Exit codes: `0` clean, `1` a usage or configuration error, or a file that was
+refused or could not be read or written, `2` the verification pass found
+something (with `--strict`, or `verify.strict = true`). A mistyped flag exits
+`1` like any other usage error, so a pipeline that stops the release on `2`
+cannot read it as a leak report.
 
 The findings themselves are printed either way, so you do not need `--report`
 to see what failed — only to see what the policy was.

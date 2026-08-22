@@ -37,7 +37,15 @@ from .pseudonymise import (
     Pseudonymiser,
     is_mask_like,
 )
-from .rules import BARE_MAC_CONTEXT_RE, EMAIL_RE, ENC, IPV4_RE, IPV6_RE, MAC_RE
+from .rules import (
+    BARE_MAC_CONTEXT_RE,
+    EMAIL_RE,
+    ENC,
+    IPV4_RE,
+    IPV6_RE,
+    MAC_RE,
+    SSH_KEY_SIG,
+)
 
 __all__ = ["verify", "Finding", "check_names", "VERIFY_RULES"]
 
@@ -75,7 +83,7 @@ VERIFY_RULES = [
     ("crypt-hash-left", re.compile(r"\$(?:1|2[abxy]?|5|6|y)\$")),
     ("junos-type9-left", re.compile(r"\$9\$")),
     ("ssh-key-left",
-     re.compile(r"AAAAB3Nza|AAAAC3Nza|ssh-(?:rsa|dss|ed25519)\s+[A-Za-z0-9+/]{20,}")),
+     re.compile(rf"{SSH_KEY_SIG}|ssh-(?:rsa|dss|ed25519)\s+[A-Za-z0-9+/]{{20,}}")),
     # a PEM private key or DH parameter block is a secret; a certificate is
     # identity, and is checked separately under the same name
     ("pem-left", re.compile(r"-----BEGIN(?![A-Z0-9 ]*CERTIFICATE-----)")),

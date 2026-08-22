@@ -194,11 +194,26 @@ def _stable_alt(m: re.Match) -> str:
     return "(?:" + "|".join(words) + r")(?![-\w])"
 
 
-def pattern_cell(pattern: str) -> str:
-    """One regex, collapsed onto one line and readable in a table cell."""
+def pattern_text(pattern: str) -> str:
+    """One regex on one line, with the placeholders folded back in.
+
+    Deliberately *not* escaped for a markdown table. Every pattern in the
+    generated page lives in a fenced block instead, for two reasons. A table
+    cell has to escape `|`, which is the alternation operator -- so what the
+    old table printed could not be pasted into a regex tester without editing
+    it first, in a document whose whole job is to be audited against the
+    code. And a 400-character run with no space in it has nowhere to wrap, so
+    one such cell forced the entire table sideways and pushed the rule names
+    off the screen.
+    """
     out = _KEYWORD_ALT.sub(_stable_alt, pattern)
-    out = md_cell(out.replace(ENC, "<ENC>").replace(VAL, "<VAL>"))
+    out = out.replace(ENC, "<ENC>").replace(VAL, "<VAL>")
     return re.sub(r"\s+", " ", out).strip()
+
+
+def block(text: str) -> str:
+    """One regex as a fenced code block."""
+    return f"```\n{text}\n```"
 
 
 def family_counts() -> str:
@@ -222,14 +237,14 @@ def rules_md() -> str:
            "\"keep\"`, and `netredact --list-rules` prints the same names next",
            "to the section each belongs to.\n",
            "## Placeholders used in the patterns\n",
-           "| Token | Expands to |",
-           "|---|---|",
-           f"| `<ENC>` | `{md_cell(ENC)}` |",
-           f"| `<VAL>` | `{md_cell(VAL)}` |",
-           f"| `{VAL_MACRO}` | `<VAL>` as a *capturing* group |",
-           "\n`<ENC>` is the optional encoding or algorithm hint between a keyword",
-           "and its secret. `<VAL>` is the value matcher: a quoted string, or a run",
-           "of characters that is neither space nor `;`.\n",
+           "Three tokens stand in for material that recurs in every pattern.\n",
+           "`<ENC>` -- the optional encoding or algorithm hint between a keyword",
+           "and its secret:\n",
+           block(ENC), "",
+           "`<VAL>` -- the value matcher: a quoted string, or a run of",
+           "characters that is neither space nor `;`:\n",
+           block(VAL), "",
+           f"`{VAL_MACRO}` -- `<VAL>` as a *capturing* group.\n",
            "## How a pattern says where the value is\n",
            "There is no `mode` field. The shape of the pattern carries it:\n",
            "- **No capture groups** -- the pattern is a *prefix*: everything up to",
@@ -283,8 +298,10 @@ def rules_md() -> str:
            "## Rule catalogue\n",
            "The catalogue owns whether a rule is matched at the start of a line,",
            "searched inline, or consumed as structured multi-line material.\n",
-           "| Rule | Family | Matches | Scope | Pattern | End |",
-           "|---|---|---|---|---|---|"]
+           "Each rule name links to its pattern, which is listed in full under",
+           "[rule patterns](#rule-patterns) below.\n",
+           "| Rule | Family | Matches | Where |",
+           "|---|---|---|---|"]
     notes = RULE_NOTES | BLOB_NOTES | BLOCK_NOTES | {
         "banner": "`banner <type> <delim>` through its closing delimiter"}
     for info in catalogue:
@@ -295,11 +312,22 @@ def rules_md() -> str:
                 f"outside `{name}`" for name in info.excluded_scopes)
         if info.vendor:
             note += f" -- {info.vendor} grammar"
-        end = f"`{md_cell(info.end_pattern)}`" if info.end_pattern else ""
-        out.append(f"| `{info.name}` | `{info.family}` | {note} | {scope} | "
-                   f"`{pattern_cell(info.pattern)}` | {end} |")
+        out.append(f"| [`{info.name}`](#{info.name}) | `{info.family}` | "
+                   f"{note} | {scope} |")
 
     out += [""]
+
+    # -- the patterns themselves, one fenced block each ------------------
+    out += ["## Rule patterns\n",
+            "One block per rule, in catalogue order, exactly as the code holds",
+            "it bar the `<ENC>` / `<VAL>` placeholders above -- so a pattern can",
+            "be copied straight into a regex tester and checked against the",
+            "claim its catalogue row makes. A rule that consumes a multi-line",
+            "block also carries the pattern that ends it.\n"]
+    for info in catalogue:
+        out += [f"### `{info.name}`\n", block(pattern_text(info.pattern)), ""]
+        if info.end_pattern:
+            out += ["Ends at:\n", block(pattern_text(info.end_pattern)), ""]
 
     out += ["## Verification checks\n",
             "Credential checks are unconditional: they fire even when the policy",

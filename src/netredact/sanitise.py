@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from . import provenance
 from . import rules as R
 from .collection import RemovedSection, strip_rancid_diagnostics
 from .config import RULE_FAMILIES, Config
@@ -91,6 +92,10 @@ class Result:
     removed_sections: list[RemovedSection] = field(default_factory=list)
     #: caller-supplied associated labels, sanitised with :attr:`text`
     labels: dict[str, str] = field(default_factory=dict)
+    #: whether the INPUT already carried netredact's marker, i.e. was itself
+    #: sanitised output. The run still happened -- a library caller decides
+    #: what that means -- but pseudonyms in it have now been mapped twice.
+    already_sanitised: bool = False
     #: label key -> family -> rendered replacements; never originals or kept values
     label_replacements: Mapping[str, Mapping[str, tuple[str, ...]]] = field(
         default_factory=lambda: MappingProxyType({})
@@ -503,6 +508,15 @@ def sanitise_text(text: str, config: Config | None = None, *,
         raise TypeError("labels must be a mapping of strings to strings")
     salt = salt or _secrets.token_bytes(32)
     lines = text.splitlines()
+    # A marked input is netredact's own output. The marker comes off before
+    # the rules see it -- its version number is not material to hash, and it
+    # must not be counted as a change -- and this function does not put one
+    # back. Writing the marker belongs to whoever emits the file, because
+    # inserting a line here would break the line-count guarantee the
+    # transformation makes; see :mod:`netredact.provenance`.
+    already_sanitised = provenance.is_marked(text)
+    if already_sanitised:
+        lines = provenance.strip(lines)
     removed_sections: list[RemovedSection] = []
     collection_mode = cfg.collection.rancid_diagnostics
     if collection_mode not in {"remove", "keep"}:
@@ -514,6 +528,8 @@ def sanitise_text(text: str, config: Config | None = None, *,
     if collection_mode == "remove":
         lines, removed_sections = strip_rancid_diagnostics(lines)
     retained_text = "\n".join(lines) + ("\n" if lines else "")
+
+    vendor = cfg.vendor if cfg.vendor != "auto" else detect_vendor(retained_text)
 
     san = Sanitiser(cfg, salt=salt)
     san.collect(lines)
@@ -539,7 +555,8 @@ def sanitise_text(text: str, config: Config | None = None, *,
         label_replacements[key] = MappingProxyType(replacements)
     return Result(
         text=out,
-        vendor=cfg.vendor if cfg.vendor != "auto" else detect_vendor(retained_text),
+        vendor=vendor,
+        already_sanitised=already_sanitised,
         labels=sanitised_labels,
         label_replacements=MappingProxyType(label_replacements),
         counts=body_counts,

@@ -133,6 +133,12 @@ IOS_KEYWORDS = {
     "traps", "trap", "udp-port",
 }
 
+#: the base64 of an SSH public key's own type-string header, which is what
+#: makes a blob recognisable with no algorithm token in front of it: `ssh-rsa`
+#: and `ssh-dss` are 7 bytes, `ssh-ed25519` 11, `ecdsa-sha2-*` 19. Shared with
+#: the ``ssh-key-left`` check, so the rule and the check cannot disagree.
+SSH_KEY_SIG = r"AAAA(?:B3Nza|C3Nza|E2Vj)"
+
 #: keywords on an `snmp-server host` line, so only the community is hit
 SNMP_HOST_KEYWORDS = {
     "vrf", "informs", "inform", "traps", "trap", "version", "1", "2c", "3",
@@ -343,6 +349,13 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     ("username-secret", rf"\s*username\s+\S+\s+(?:\S+\s+)*?(?:password|secret)\s+{ENC_RUN}", "secrets", None),
     ("bare-password", rf"\s*(?:password|passwd)\s+{ENC_RUN}", "secrets", None),
     ("bare-secret", rf"\s*(?:set\s+\S.*?\s)?secret\s+{ENC_RUN}", "secrets", None),
+    # `authentication password <secret>` mid-line: `bare-password` is anchored,
+    # so it only sees the hierarchical form. JunOS subscriber management puts
+    # the same credential at the end of a long `set` path. The `authentication`
+    # qualifier is what keeps the unanchored form off `no password` and
+    # `service password-encryption`.
+    ("authentication-password",
+     rf".*\bauthentication\s+password\s+{ENC_RUN}", "secrets", None),
 
     # ---- AAA / shared keys ----------------------------------------------
     ("encoded-key",
@@ -394,6 +407,14 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
 
     # ---- Juniper specifics -------------------------------------------------
     ("junos-password", r".*\b(?:encrypted-password|plain-text-password-value)\s+", "secrets", None),
+    # The digest a script file is pinned to. NOT a credential, but a 64-char hex
+    # run, so the shape checks reported it. `identity` is where it belongs: a
+    # checksum ties the file to one exact script, and those checks go blind to
+    # it only when the policy keeps identity (verify.SHAPE_BLIND_FAMILIES).
+    # The algorithm token is JunOS's own grammar, and requiring it keeps the
+    # unanchored prefix off another dialect's bare `checksum` knob.
+    ("script-checksum",
+     r".*\bchecksum\s+(?:md5|sha-?1|sha-?256|sha-?512)\s+", "identity", None),
 
     # ---- vendor unlocks ----------------------------------------------------
     # Arista `service unsupported-transceiver <label> <authorization-code>`:
@@ -565,10 +586,14 @@ _BANNER_RULE = ("banner", "text")
 _BLOB: list[tuple[str, str, str, int]] = [
     ("junos-type9", r'(\$9\$[^\s";]+)', "secrets", 0),
     ("crypt-hash", r'(\$(?:1|2[abxy]?|5|6|y)\$[^\s";]+)', "secrets", 0),
+    # two shapes, because the algorithm token is not always glued to the blob:
+    # IOS `key-hash ssh-rsa <fingerprint> <blob>` puts the fingerprint between
+    # them, so the second branch recognises the blob by its own header instead.
     ("ssh-public-key",
-     r'(?:\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[\w-]+)\s+'
-     r'|\bssh-known-hosts\s+host\s+\S+\s+(?:rsa|dsa|ecdsa|ed25519)-key\s+)'
-     r'("?AAAA[0-9A-Za-z+/=]+"?)',
+     _alt(r'(?:\b(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[\w-]+)\s+'
+          r'|\bssh-known-hosts\s+host\s+\S+\s+(?:rsa|dsa|ecdsa|ed25519)-key\s+)'
+          r'("?AAAA[0-9A-Za-z+/=]+"?)',
+          rf'("?{SSH_KEY_SIG}[0-9A-Za-z+/=]*"?)'),
      "identity", 0),
     # atomic header: the optional colon must not be handed back as the value,
     # so a bare `! License UDI:` heading with no data on it never matches

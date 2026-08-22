@@ -42,6 +42,7 @@ TABLE = [
     ("ssh-public-key",    "key-e80962",            "<KEY-e80962>",    "<REMOVED>"),
     ("certificate-block", "cert-810f13",           "<CERT-810f13>",   "<REMOVED>"),
     ("pem-cert",          "cert-bda017",           "<CERT-bda017>",   "<REMOVED>"),
+    ("script-checksum",   "cksum-405e56",          "<CKSUM-405e56>",  "<REMOVED>"),
     ("hostnames",         "device-9d04bf",         "<HOST-a99da0>",   "redacted"),
     ("domains",           "example.com",           "<DOMAIN-71c499>", "example.invalid"),
     ("usernames",         "user-ca31",             "<USER-10c8cc>",   "user"),
@@ -60,6 +61,7 @@ VALUE = {
     "serial-number": "FDO123", "license-udi": "PID:X,SN:Y",
     "snmp-engineid": "800000090300AABB", "ssh-public-key": "AAAAB3Nza...",
     "certificate-block": "3082...", "pem-cert": "MIIB...",
+    "script-checksum": "45c6397f9b5d450a7ad3ac9608787b3f",
     "hostnames": "core-rtr-01", "domains": "northwind.test",
     "usernames": "netops", "emails": "noc@northwind.test",
 }

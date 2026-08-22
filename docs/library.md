@@ -173,6 +173,60 @@ The library writes to no stream. Problems come back on the `Result` (`findings`,
 CLI's job, so `netredact` is safe to call from a web handler, a notebook or
 another command-line tool without hijacking its output.
 
+## Writing a file: the provenance marker
+
+`sanitise_text` does **not** mark its output. The transformation preserves line
+count, and a caller that hands `result.text` to a parser, a diff or a template
+should get exactly the configuration and nothing else.
+
+A marker is a property of the *artefact*, so the code that writes the file adds
+it — which is what the CLI does, and what you should do if you are writing files
+too. Without it, nothing in the file says where it came from and a second pass
+cannot be refused:
+
+```python
+from netredact import Config, provenance, sanitise_text
+import netredact
+
+text = open("running-config.txt").read()
+if provenance.is_marked(text):
+    raise SystemExit("already sanitised -- work from the original")
+
+result = sanitise_text(text, Config())
+open("clean.txt", "w").write(
+    provenance.apply_text(result.text, result.vendor, netredact.__version__))
+```
+
+`apply_text` is idempotent — a text that already carries a marker keeps exactly
+one — and `sanitise_text` strips an incoming marker before the rules see it, so
+its version number is never hashed and it is never counted as a change.
+`Result.already_sanitised` reports what `is_marked` would have said about the
+input.
+
+### What the CLI does that `read_text` does not
+
+`sanitise_text` takes and returns `str`, so everything about bytes on disk is
+the caller's. The CLI does four things there that are worth copying if you are
+writing over an input, because the shortcut in each case edits material nobody
+asked netredact to touch:
+
+- it decodes explicitly and treats a `UnicodeDecodeError` as a refusal.
+  `read_text()` with `errors="replace"` turns an undecodable byte into U+FFFD
+  in the file you are about to overwrite;
+- it remembers whether the input used CRLF and puts the endings back, because
+  universal-newline reading drops every CR;
+- it encodes the payload itself and writes bytes, so no layer underneath gets a
+  second opinion about newlines;
+- it writes through a temporary in the same directory and then `os.replace`,
+  which is atomic. A plain write truncates first, and an interruption then
+  leaves a half-written file where that file was the only copy.
+
+The CLI also refuses a file with a NUL byte anywhere in it or one whose first
+non-blank line opens a PEM block — see
+[when netredact refuses a file](getting-started.md#when-netredact-refuses-a-file).
+Those verdicts are CLI policy, not library policy: `sanitise_text` sanitises
+whatever text you hand it.
+
 ## `Result`
 
 | Attribute | Type | Contents |
@@ -180,6 +234,7 @@ another command-line tool without hijacking its output.
 | `text` | `str` | The sanitised configuration. |
 | `lines` | `list[str]` | Same, split. |
 | `vendor` | `str` | `arista`, `cisco`, `juniper`, or `unknown`. |
+| `already_sanitised` | `bool` | The input carried netredact's provenance marker, i.e. was itself output. The run still happened — you decide what that means — but any `pseudo` value in it has now been mapped twice. |
 | `labels` | `dict[str, str]` | Sanitised associated filename/display-label values, keyed exactly as supplied. Empty when none were passed. |
 | `label_replacements` | `Mapping[str, Mapping[str, tuple[str, ...]]]` | Immutable label key → family → rendered replacements. Contains no originals or kept values. |
 | `counts` | `Counter` | Rule or family name → values substituted. A block or banner counts once, not once per line. |

@@ -29,6 +29,7 @@ PLANTED = [
     "$9$ZqWX-ws4aUjq", "$9$OspfKeyBlob99", "$9$PreSharedBlob123",
     "VrrpPass1", "0x1234abcd", "0x5678ef90",
     "$9$SecretBlob", "$6$abc$def123", "$9$Secret", "publicRO", "privRW",
+    "BngRadiusPass77", "AutoConfPass88",
 ]
 
 
@@ -262,3 +263,54 @@ def test_isis_interface_password_is_a_secret():
     `lsp-/area-/domain-password` spellings."""
     out = sanitise_text(" isis password IsisSecret99\n", Config(), salt=SALT).text
     assert "IsisSecret99" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# `authentication password <secret>` in mid-line position. `bare-password` is
+# anchored, so it only saw the hierarchical form; JunOS subscriber management
+# puts the same credential at the end of a long `set` path, and those lines
+# left the tool in cleartext with `--strict` exiting 0.
+# ---------------------------------------------------------------------------
+
+#: (line, the secret that must not survive) -- the real JunOS spellings
+AUTH_PASSWORD = [
+    ("set groups BNG system services dhcp-local-server dual-stack-group BNG"
+     " authentication password BngRadiusPass77", "BngRadiusPass77"),
+    ("set groups BNG routing-instances <*> system services dhcp-local-server"
+     " dual-stack-group BNG authentication password BngRadiusPass77",
+     "BngRadiusPass77"),
+    ("set groups AUTOCONF interfaces <*> auto-configure stacked-vlan-ranges"
+     " authentication password AutoConfPass88", "AutoConfPass88"),
+    # the hierarchical form, which `bare-password` already had: still works
+    ("            password BngRadiusPass77;", "BngRadiusPass77"),
+]
+
+
+@pytest.mark.parametrize("line,secret", AUTH_PASSWORD, ids=range(len(AUTH_PASSWORD)))
+def test_authentication_password_is_a_secret_wherever_it_sits(line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert "<REMOVED>" in result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_authentication_password_keeps_the_path_that_names_it():
+    """The credential goes; the hierarchy it hangs off is structure."""
+    line = ("set groups BNG system services dhcp-local-server dual-stack-group"
+            " BNG authentication password BngRadiusPass77\n")
+    out = sanitise_text(line, Config(), salt=SALT).text
+    assert out.strip().endswith("authentication password <REMOVED>")
+    assert "dhcp-local-server dual-stack-group BNG" in out
+
+
+@pytest.mark.parametrize("line", [
+    'aaa authentication password-prompt "Password: "',
+    "set system login password minimum-length 8",
+    "no password",
+    "service password-encryption",
+])
+def test_the_wider_password_match_stays_off_the_knobs(line):
+    """`authentication` is the qualifier that keeps the unanchored form honest."""
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.text.splitlines()[-1] == line, result.text
+

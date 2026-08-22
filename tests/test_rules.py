@@ -25,8 +25,8 @@ def test_inventory_is_immutable_and_rule_names_are_unique():
 
 def test_every_rule_has_the_expected_family():
     counts = Counter(info.family for info in inventory())
-    assert counts == {"secrets": 32, "text": 5, "locations": 2,
-                      "identity": 6, "platform": 4,
+    assert counts == {"secrets": 33, "text": 5, "locations": 2,
+                      "identity": 7, "platform": 4,
                       "interfaces": 1, "vlans": 1, "circuits": 2}
     assert set(counts) <= set(FAMILIES)
 

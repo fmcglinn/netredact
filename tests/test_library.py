@@ -5,7 +5,7 @@ from collections import Counter
 import pytest
 
 import netredact
-from netredact import Config, Pseudonymiser, Sanitiser, sanitise_text
+from netredact import Config, Pseudonymiser, Sanitiser, provenance, sanitise_text
 
 from .conftest import SALT, policy
 
@@ -127,3 +127,53 @@ def test_a_bad_config_raises_rather_than_prints(tmp_path, capsys):
         raise AssertionError("expected ConfigError")
     out, err = capsys.readouterr()
     assert out == "" and err == ""
+
+
+# -- the provenance marker ---------------------------------------------------
+
+def test_sanitise_text_does_not_add_the_marker(cisco):
+    """The marker belongs to the file, not the transformation.
+
+    Inserting a line here would break the line-count guarantee, so the caller
+    that writes the artefact applies it -- see ``netredact.provenance``.
+    """
+    result = sanitise_text(cisco, salt=SALT)
+    assert provenance.TOKEN not in result.text
+    assert len(result.text.splitlines()) == len(cisco.splitlines())
+    assert result.already_sanitised is False
+
+
+def test_marked_input_is_recognised_and_the_marker_never_reaches_the_rules(cisco):
+    once = provenance.apply_text(sanitise_text(cisco, salt=SALT).text,
+                                 "cisco", netredact.__version__)
+    again = sanitise_text(once, salt=SALT)
+
+    assert again.already_sanitised is True
+    # stripped, not sanitised: nothing in the marker was counted as a change,
+    # and the version number in it was not hashed by the os-version rule
+    assert provenance.TOKEN not in again.text
+    assert netredact.__version__ in once
+    assert again.text == sanitise_text(cisco, salt=SALT).text
+
+
+def test_applying_the_marker_twice_leaves_one(cisco):
+    once = provenance.apply_text(sanitise_text(cisco, salt=SALT).text,
+                                 "cisco", netredact.__version__)
+    twice = provenance.apply_text(once, "cisco", netredact.__version__)
+    assert twice == once
+    assert twice.count(provenance.TOKEN) == 1
+
+
+def test_the_marker_is_a_comment_in_the_grammar_it_lands_in():
+    assert provenance.marker_for("juniper", "1.0").startswith("# ")
+    for vendor in ("cisco", "arista", "unknown"):
+        assert provenance.marker_for(vendor, "1.0").startswith("! ")
+
+
+def test_the_marker_carries_no_re_identification_material(cisco):
+    """Provenance, not a report: the tool and the version, nothing found."""
+    line = provenance.marker_for("cisco", netredact.__version__)
+    assert netredact.__version__ in line
+    for leak in ("192.168", "10.20.30", "core-rtr", "PlainText"):
+        assert leak not in line
+

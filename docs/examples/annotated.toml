@@ -16,6 +16,9 @@
 # CLI only: the HMAC salt, created 0600 if missing. Library callers pass
 # salt= bytes to sanitise_text instead. It is a re-identification key -- protect it.
 # salt_file = "~/.config/netredact/salt"
+marker = true  # write one comment line at the top of the output naming this tool. It is
+# what lets netredact refuse to sanitise its own output a second time -- turn it
+# off and a re-run maps pseudonyms again, with nothing to warn you.
 vendor = "auto"  # auto | arista | cisco | juniper
 
 # Passwords, keys, community strings and password hashes. This is
@@ -35,6 +38,7 @@ default = "redact"  # the action for every rule not named below
 # username-secret         = "redact"
 # bare-password           = "redact"
 # bare-secret             = "redact"
+# authentication-password = "redact"
 # encoded-key             = "redact"
 # aaa-server-key          = "redact"
 # quoted-key              = "redact"
@@ -110,6 +114,7 @@ default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
 # snmp-engineid     = "keep"
+# script-checksum   = "keep"
 # ssh-public-key    = "keep"
 # license-udi       = "keep"
 # serial-number     = "keep"

@@ -29,7 +29,7 @@ HMAC of the real credential and a lab config that reached production would
 carry something computable:
 
 ```
-netredact: config error: [policy] secrets: pseudo is not available for
+netredact: config error: [secrets] default: pseudo is not available for
 secrets: use hash for an opaque marker, or redact
 ```
 
@@ -53,7 +53,7 @@ than being silently ignored:
 
 ```
 netredact: config error: [policy]: unknown key(s) ipv5. Expected: domains,
-emails, hostnames, identity, secrets, text, usernames
+emails, hostnames, usernames
 netredact: config error: [ipv4] cgnat: unknown action 'scrub'. Expected one
 of keep, pseudo, hash, redact
 ```
@@ -63,6 +63,7 @@ of keep, pseudo, hash, redact
 | Key | Default | Meaning |
 |---|---|---|
 | `salt_file` | unset | CLI-oriented file holding the HMAC salt, created `0600` by the CLI if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Library callers pass `salt=` bytes to `sanitise_text`; the library never reads or writes this path. |
+| `marker` | `true` | Write one comment line at the top of the output naming netredact and its version — `!` for IOS-style grammar, `#` for JunOS. It is the only thing in a sanitised file that says it is one, and so the only evidence a re-run can be refused on: turn it off and a second pass re-maps pseudonyms with nothing to warn you. CLI-oriented — `sanitise_text` never adds it, see [the library docs](library.md). |
 | `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
 
 ## Every rule has exactly one home
@@ -644,18 +645,28 @@ secret still fails `--strict`. See [verification](verification.md).
 
 The CLI covers files and destinations only; behaviour lives in the config.
 
+An argument may be a file, a directory or `-` for stdin. A directory is walked
+recursively, depth-first and in sorted order, which is how backup trees
+arrive; see [walking a directory](getting-started.md#walking-a-directory) for
+what the walk leaves alone. A directory must say where its output goes —
+`-r` or `-o DIR` — because a whole tree concatenated onto stdout is never what
+naming the directory meant.
+
 | Flag | Purpose |
 |---|---|
-| `-o, --out PATH` | Output file, or a directory when several inputs are given. |
+| `-o, --out PATH` | Output file, or a directory — which it is, and is created as, whenever the input is a directory, the run has more than one file to write, or the path ends in a separator. A walked directory is mirrored inside it, zone directories and all, rather than flattened into one heap. Only an existing regular file refuses such a run, and it refuses before writing. One named file with one `-o` path still names a file: a typo in it is reported rather than built. |
 | `-c, --config PATH` | Configuration file. |
-| `--in-place` | Overwrite the inputs. |
+| `-r, --replace` | Replace the inputs: write each file back over itself, in place of mirroring them elsewhere. Cannot be combined with `-o` — both name a destination. It is also the only mode that refuses a named binary or PEM file, because it is the only one where the original does not survive. |
+| `--force` | Process an input netredact would otherwise refuse: one it has already marked, a named binary or PEM file under `-r`, or one that is not valid UTF-8. Without it each of those is refused with exit `1` and nothing is written for that file. See [when netredact refuses a file](getting-started.md#when-netredact-refuses-a-file). |
 | `--suffix SUFFIX` | Suffix when writing into an `-o` directory. Default `.sanitised`. |
 | `--map-out PATH` | Write the mapping as JSON, `0600`. **De-anonymises the output — never ship it alongside.** |
 | `--strict` | Exit `2` on findings, overriding `verify.strict`. |
-| `-r, --report` | Print the per-file report to stderr. Off by default; findings and warnings print regardless. |
+| `-R, --report` | Print the per-file report to stderr. Off by default; findings and warnings print regardless. |
 | `--print-config` | Write a fully commented default config to stdout. |
 | `--list-rules` | List every rule with its family, and every verification check. |
 | `--version` | Version. |
 
-Exit codes: `0` clean, `1` usage or configuration error, `2` findings under
-`--strict`.
+Exit codes: `0` clean, `1` a usage or configuration error, or a file that was
+refused or could not be read or written, `2` findings under `--strict`. A
+mistyped flag exits `1` like any other usage error, so `2` only ever means the
+verification pass.

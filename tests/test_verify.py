@@ -184,3 +184,62 @@ def test_findings_carry_a_line_number_and_the_offending_text():
     assert findings[0].line == 2
     assert findings[0].text == "enable secret 5 PlainTextSecret"
     assert str(findings[0]).startswith("L2 [credential-left]")
+
+
+# ---------------------------------------------------------------------------
+# Script checksums: a 64-character hex run that is not a secret. The shape
+# checks know a shape, not a meaning, so both reported every one and `--strict`
+# failed on a config with no credential left in it. The fix is a rule that
+# SELECTS the digest, filed under `identity`: the shape checks go blind to it
+# when the policy keeps identity, and it is replaced when it does not.
+# ---------------------------------------------------------------------------
+
+#: the JunOS spellings, `set` form and hierarchical form
+CHECKSUM_LINES = [
+    "set system scripts commit file no-nukes.py checksum sha-256 "
+    "45c6397f9b5d450a7ad3ac9608787b3f0d366a1b2c3d4e5f60718293a4b5c6d7e",
+    "set system scripts op file login-validator.py checksum sha-256 "
+    "36a29be1fb64e5906c6eeae780f0c5520e1f2a3b4c5d6e7f8091a2b3c4d5e6f70",
+    "set event-options event-script file snmp-util-smartd.py checksum sha-256 "
+    "be8f897a76ac860af81873ff2d4c9f2e5b1a08cc4e7d6f3b9a0c1d2e3f405162",
+    "                checksum sha-256 "
+    "be8f897a76ac860af81873ff2d4c9f2e5b1a08cc4e7d6f3b9a0c1d2e3f405162;",
+]
+
+
+@pytest.mark.parametrize("line", CHECKSUM_LINES, ids=range(len(CHECKSUM_LINES)))
+def test_a_script_checksum_is_never_a_finding(line):
+    """Kept at defaults, and not reported -- a kept identity is not a miss."""
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.text.splitlines()[-1] == line       # identity = keep
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+@pytest.mark.parametrize("action,expected", [
+    ("hash", "checksum sha-256 <CKSUM-"),
+    ("pseudo", "checksum sha-256 cksum-"),
+    ("redact", "checksum sha-256 <REMOVED>"),
+])
+def test_the_digest_is_reachable_by_the_identity_policy(action, expected):
+    line = CHECKSUM_LINES[0] + "\n"
+    result = sanitise_text(line, policy(identity=action), salt=SALT)
+    assert expected in result.text
+    assert "45c6397f" not in result.text
+    assert "no-nukes.py" in result.text, "the file name is structure"
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_kept_checksum_still_shields_nothing_else_on_the_line():
+    """Blinding is per selected value, not per line."""
+    line = (CHECKSUM_LINES[0]
+            + " comment 0123456789abcdef0123456789abcdef0123456789\n")
+    checks = {f.check for f in verify(line.splitlines(), Config())}
+    assert "long-hex-left" in checks
+
+
+def test_the_checksum_rule_wants_the_algorithm_token():
+    """A bare `checksum` keyword is a knob in other dialects, not a value."""
+    result = sanitise_text("set chassis fpc 0 checksum enable\n", Config(),
+                           salt=SALT)
+    assert result.counts.get("script-checksum") is None
+

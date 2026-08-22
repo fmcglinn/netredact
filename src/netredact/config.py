@@ -621,6 +621,10 @@ class Config:
     #: library entry points never read or write it and take salt bytes directly.
     #: It is a re-identification key -- protect it.
     salt_file: str | None = None
+    #: write the provenance marker at the top of the output. On by default:
+    #: it is the only thing in a sanitised file that says it is one, and so
+    #: the only evidence a second run can be refused on.
+    marker: bool = True
     vendor: str = "auto"
     #: where the configuration came from, for diagnostics
     source: str | None = None
@@ -721,6 +725,8 @@ class Config:
                 "[collection] rancid_diagnostics: unknown mode "
                 f"{self.collection.rancid_diagnostics!r}. Expected one of remove, keep")
 
+        if not isinstance(self.marker, bool):
+            raise ConfigError(f"marker must be true or false, got {self.marker!r}")
         if not isinstance(self.salt_file, (str, type(None))):
             raise ConfigError(
                 f"salt_file must be a string or null, got {self.salt_file!r}")
@@ -1212,6 +1218,10 @@ _TOP_COMMENTS = {
     "salt_file": ("CLI only: the HMAC salt, created 0600 if missing. Library "
                   "callers pass\n# salt= bytes to sanitise_text instead. It is "
                   "a re-identification key -- protect it."),
+    "marker": ("write one comment line at the top of the output naming this "
+               "tool. It is\n# what lets netredact refuse to sanitise its own "
+               "output a second time -- turn it\n# off and a re-run maps "
+               "pseudonyms again, with nothing to warn you."),
     "vendor": " | ".join(VENDORS),
 }
 

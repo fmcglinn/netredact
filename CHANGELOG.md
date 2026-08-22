@@ -8,6 +8,63 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A command-line argument may be a directory, walked recursively, so a backup
+  tree can be sanitised in one run: `netredact backups/ -r`. The walk skips
+  what plainly is not a configuration -- dot-files, dot-directories pruned
+  whole rather than descended into, symlinks of either kind, anything with a NUL
+  byte anywhere in it, and anything whose first non-blank line opens a PEM block
+  -- because netredact would rewrite one of those as text rather than sanitise
+  it, and under `-r` there is no second copy. It does not filter on extension,
+  because a RANCID repository names its files after the devices. Each verdict is
+  counted on stderr with a few of the paths behind it, so a run says how much it
+  left out and what kind of thing it was. A file named on the command line is
+  still attempted whatever it looks like, since naming it is the instruction;
+  the exception is `-r`, where a named binary or PEM file is refused by name,
+  because that is the only mode in which the original does not survive. Under
+  `-o` the tree is mirrored rather than flattened, so two zones' identically
+  named files cannot land on top of each other. `-o` is a directory whenever
+  the command line says it can only be one -- an input is a directory, several
+  inputs were named, or the path ends in a separator -- and it is created on the
+  first write, along with the zone directories under it; only an existing regular
+  file refuses such a run, and it refuses before anything is written. One named
+  file with one `-o` path still names a file, so a typo in it is reported rather
+  than built into a directory chain.
+  Two inputs that would write to one destination are a usage error instead of a
+  silent overwrite. A directory with no destination at all is a usage error
+  too: a whole tree concatenated onto stdout is never what naming the directory
+  meant. `-r` / `--replace` writes each file back over itself and cannot be
+  combined with `-o`.
+
+- A file comes back the way it arrived. Input is decoded as UTF-8, and a file
+  that is not valid UTF-8 is refused rather than decoded lossily, because
+  `errors="replace"` would put U+FFFD in the only copy under `-r`; `--force`
+  accepts the substitution. CRLF endings are preserved: the rules and the
+  verifier work a line at a time, so the endings are normalised for them and put
+  back on the way out. Every output is written through a temporary in the same
+  directory and then moved into place, which is atomic, so a full disk or a
+  signal cannot leave a half-written configuration where that file was the only
+  copy -- and no temporary survives a failure. A file that cannot be read or
+  written is reported with the reason the operating system gave and the run
+  exits 1, rather than being counted as a skipped non-configuration and reported
+  as success with the secrets still in place. The rest of the run still happens,
+  because a tree abandoned part-way -- some files replaced, some not, and no
+  statement of which -- is the worst outcome available.
+
+- Sanitised output says so. Every file the CLI writes carries one comment line
+  at the top -- `! netredact-sanitised <version> ...`, or `#` in JunOS grammar --
+  and netredact refuses to sanitise a file that already has one, because a
+  second pass re-maps `pseudo` substitutes and with `-r` the original is
+  already gone. `--force` overrides that refusal and every other one netredact
+  makes -- a named binary or PEM file under `-r`, and input that is not valid
+  UTF-8 -- so there is one flag to reach for and one thing it means: process an
+  input netredact would otherwise refuse. `marker = false` switches the
+  line off and takes the guard with it. The marker carries the tool and the
+  version and nothing else: no timestamp, no counts, nothing that could hint
+  at what was found. `sanitise_text` does not add it -- the transformation
+  preserves line count, so writing the marker belongs to whoever writes the
+  file (`netredact.provenance`), while `Result.already_sanitised` reports
+  whether the input had one.
+
 - `[operational-names] label-switched-path` acts on JunOS MPLS LSP names --
   the `label-switched-path` and `static-label-switched-path` declarations and
   the `lsp-next-hop` references to them -- in both the `set` and curly-brace
@@ -32,6 +89,35 @@ All notable changes to this project are documented here. The format follows
   commands fail closed; `[collection] rancid_diagnostics = "keep"` restores
   the unstripped wrapper. Reports expose normalized command names and removed
   line counts without retaining diagnostic contents.
+
+- `authentication password <secret>` is a credential wherever it sits on the
+  line, not only where `password` opens it. `bare-password` is anchored, so it
+  only ever saw the hierarchical form; JunOS subscriber management writes the
+  same credential at the end of a long `set` path -- under `dhcp-local-server
+  dual-stack-group <name> authentication` and under `interfaces <ifd>
+  auto-configure stacked-vlan-ranges authentication` -- and those lines left the
+  tool in cleartext with `--strict` exiting 0. The `authentication` qualifier is
+  what keeps the unanchored form off the knobs: `no password`, `service
+  password-encryption` and `aaa authentication password-prompt` are untouched.
+
+- New `identity` rule `script-checksum` selects the digest a script file is
+  pinned to: `set system scripts {commit,op,event} file <name> checksum sha-256
+  <hex>`, the same tail under `event-options event-script file`, and the
+  hierarchical spelling of both. It is not a credential, but a 64-character hex
+  run tripped `long-hex-left` and `long-base64-left`, so `--strict` failed on
+  configurations with no secret left in them. Filed under `identity` because a
+  checksum ties the file to one exact script on one device: kept at defaults and
+  no longer reported, and reachable by `[identity] script-checksum` when the
+  policy wants it gone. It renders as `<CKSUM-…>` / `cksum-…`.
+
+- `ssh-public-key` finds a key blob whose algorithm token is not glued to it.
+  IOS renders an authorised key as `key-hash <alg> <fingerprint> <blob>`, and
+  the rule required the algorithm immediately before the blob, so the key
+  survived and only `long-base64-left` spoke -- a reported miss rather than a
+  decision. A second branch recognises the blob by its own base64 type-string
+  header, which `ssh-key-left` already used; both now read that signature from
+  one constant, so the rule and the check cannot disagree, and it covers
+  `ecdsa-sha2-*` as well as `ssh-rsa` / `ssh-dss` / `ssh-ed25519`.
 
 ## [0.1.0] - 2026-08-20
 
@@ -287,7 +373,7 @@ First release.
   default IPv4 pools include `100.64.0.0/10` and a pseudonym there can be
   indistinguishable from a real subscriber address.
 
-- **An opt-in report** (`-r` / `--report`, off by default so a pipeline gets
+- **An opt-in report** (`-R` / `--report`, off by default so a pipeline gets
   the output and the exit code and nothing else). Verification findings and
   pool-collision warnings print to stderr regardless, so a clean run is silent
   and an exit code never arrives unexplained. The report leads with the

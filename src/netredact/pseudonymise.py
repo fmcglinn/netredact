@@ -99,6 +99,10 @@ PREFIX: dict[str, tuple[str, str | None]] = {
     "ssh-public-key": ("KEY", "key"),
     "certificate-block": ("CERT", "cert"),
     "pem-cert": ("CERT", "cert"),
+    # its own prefix, like every other identity rule, so the marker says what
+    # was taken out. The token is not `checksum`: `checksum sha-256
+    # checksum-1a2b3c` reads as a parser error.
+    "script-checksum": ("CKSUM", "cksum"),
     # platform. The pseudo token is never the rule's own keyword: `version
     # version-1a2b3c` reads as a parser error, `version ver-1a2b3c` does not.
     "hardware-model": ("MODEL", "model"),

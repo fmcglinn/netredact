@@ -11,6 +11,7 @@ pip install netredact
 
 netredact running-config.txt                 # -> stdout
 netredact configs/*.txt -o clean/
+netredact backups/ -r                        # walk a tree, replace in place
 cat config | netredact -
 netredact running-config.txt --report        # + a summary on stderr
 ```
@@ -271,7 +272,7 @@ There is no `mode` field: the shape of the pattern says where the value is.
 own `action` key — and how the replacement is rendered.
 
 See [docs/rules.md](https://github.com/fmcglinn/netredact/blob/main/docs/rules.md) for the full inventory and
-[docs/configuration.md](https://github.com/fmcglinn/netredact/blob/main/docs/configuration.md#custom) for the details.
+[docs/configuration.md](https://github.com/fmcglinn/netredact/blob/main/docs/configuration.md#custom--rules-of-your-own) for the details.
 
 ## Verification
 
@@ -288,7 +289,17 @@ of `--report` is what states it. A clean report means "nothing known was left
 behind", not "this file is safe to publish" — see
 [docs/verification.md](https://github.com/fmcglinn/netredact/blob/main/docs/verification.md).
 
-## Two behaviours worth knowing
+## Three behaviours worth knowing
+
+**It refuses rather than damages.** `-r` leaves no original, so an input
+netredact would rewrite instead of sanitise is refused by name and the run exits
+`1`: a file it has already marked, a named binary or PEM key, input that is not
+valid UTF-8. A walked directory is choosier still — dot-directories, symlinks,
+binaries and PEM blocks are never opened. Writes go through a temporary and an
+atomic rename, CRLF endings survive, and one file that cannot be read or written
+is reported rather than abandoning the rest of the tree half-replaced. `--force`
+is the single override —
+[when netredact refuses a file](https://github.com/fmcglinn/netredact/blob/main/docs/getting-started.md#when-netredact-refuses-a-file).
 
 **Blocks and banners count once.** A certificate block or a multi-line banner is
 one value, however many lines it spans: one replacement, one entry in the
