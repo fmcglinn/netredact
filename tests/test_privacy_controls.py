@@ -437,3 +437,61 @@ def test_verification_covers_brace_terms_and_structured_location_bodies():
     ]
     checks = {finding.check for finding in verify(lines, cfg)}
     assert checks == {"operational-name-left", "location-left"}
+
+
+# ---------------------------------------------------------------------------
+# RouterOS spells an ASN as a `key=value` pair, and RouterOS 7 abbreviates a
+# nested property to a leading dot -- `.as=65500` is `remote.as=`. The
+# space-form patterns reached none of them, not even the `remote-as=` whose
+# keyword they already knew, so an explicit `as-numbers` policy was silently
+# doing nothing on a RouterOS file.
+# ---------------------------------------------------------------------------
+
+ROS_BGP = (
+    "/routing bgp connection\n"
+    "add as=65501 disabled=no local.address=128.66.20.1 .role=ebgp "
+    "remote.address=128.66.20.2 .as=65500 routing-table=main\n"
+    "add remote-as=65502 local.as=65501\n"
+)
+
+
+def test_routeros_asn_spellings_are_all_reached():
+    cfg = Config.from_dict({"as-numbers": {"default": "pseudo"}})
+    result = sanitise_text(ROS_BGP, cfg, salt=SALT)
+    for original in ("65501", "65500", "65502"):
+        assert original not in result.text, result.text
+    assert result.counts["as-numbers"] == 4
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_routeros_asn_keeps_the_equality_relation_across_spellings():
+    """`as=65501` and `local.as=65501` are one ASN written two ways."""
+    cfg = Config.from_dict({"as-numbers": {"default": "pseudo"}})
+    out = sanitise_text(ROS_BGP, cfg, salt=SALT).text
+    first = out.splitlines()[1].split("as=")[1].split()[0]
+    last = out.splitlines()[2].split("local.as=")[1].strip()
+    assert first == last, out
+
+
+@pytest.mark.parametrize("key", ["alias", "class", "bias"])
+def test_a_key_that_merely_ends_in_as_is_not_an_asn(key):
+    """The boundary in front of the bare `as` key is the whole safety margin."""
+    cfg = Config.from_dict({"as-numbers": {"default": "pseudo"}})
+    line = f"add {key}=64512 comment=nothing\n"
+    result = sanitise_text(line, cfg, salt=SALT)
+    assert result.text == line
+    assert not result.counts["as-numbers"]
+
+
+def test_the_verifier_knows_the_same_asn_grammars_as_the_rule():
+    """A check with its own list of grammars stays silent about exactly what
+    the rule never reached, which is the failure mode worth preventing."""
+    from netredact.operational import asn_candidates
+
+    assert asn_candidates("add as=65501 .as=65500") == ["65501", "65500"]
+    assert asn_candidates("add alias=64512") == []
+    cfg = Config.from_dict({"as-numbers": {"default": "pseudo"}})
+    cfg.verify.disable = []
+    # a surviving RouterOS ASN is now reported rather than passed over
+    assert "as-number-left" in {
+        f.check for f in verify(["add as=65501"], cfg)}

@@ -151,6 +151,22 @@ All notable changes to this project are documented here. The format follows
   what lets a peer's `comment=` still be an interface comment while its `name=`
   is a rule of its own.
 
+- `[as-numbers]` reaches RouterOS's spellings. RouterOS writes an ASN as a
+  `key=value` pair and RouterOS 7 abbreviates a nested property to a leading
+  dot, so one `/routing bgp connection` line carries `as=65501` and `.as=65500`
+  -- the latter being `remote.as=`. The existing patterns require whitespace
+  after the keyword, so they reached none of them, not even the `remote-as=`
+  RouterOS 6 wrote and whose keyword they already knew: an explicit
+  `as-numbers` policy was silently doing nothing on a RouterOS file. The
+  boundary in front of the bare two-letter `as` key is the safety margin, so a
+  key that merely ends in those letters -- `alias=`, `class=`, `bias=` -- keeps
+  its value.
+
+  The verifier no longer keeps its own list of ASN grammars: `as-number-left`
+  now asks `operational.asn_candidates`, i.e. the transformation itself. Two
+  lists that had drifted would go quiet about precisely what the rule failed to
+  reach, which is the direction that matters, and this one had.
+
 - `routeros-auth-key` takes RouterOS's `auth-key=` and `authentication-key=`,
   e.g. on `/routing ospf interface-template`. It is spelled out rather than
   reached by a generic `key=`, which would also claim `public-key=` and put two

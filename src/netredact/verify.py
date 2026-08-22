@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from . import rules as R
 from .addresses import classify_v4, classify_v6
 from .config import Config
-from .operational import OperationalNames
+from .operational import OperationalNames, asn_candidates
 from .pseudonymise import (
     DESC_REMOVED,
     PREFIX,
@@ -409,13 +409,9 @@ def verify(lines, config: Config | None = None, *,
         if check_operational and operational_probe_lines[i - 1] != line:
             findings.append(Finding(i, "operational-name-left", line.strip()))
         if check_asn:
-            candidates = []
-            for pat in (
-                r"\b(?:router\s+bgp|remote-as|local-as|autonomous-system)\s+(\d+(?:\.\d+)?)",
-                r"\bas-path\s+prepend\s+([\d. ]+)",
-            ):
-                for match in re.finditer(pat, line, re.I):
-                    candidates.extend(re.findall(r"\d+(?:\.\d+)?", match.group(1)))
+            # the grammars come from the transformation itself, not from a
+            # second list here: see `operational.asn_candidates`
+            candidates = asn_candidates(line)
             if any(value.lower() not in handled_asns
                    and value not in {"0", "23456", "65535", "4294967295"}
                    for value in candidates):

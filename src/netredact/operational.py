@@ -227,6 +227,21 @@ class AsNumbers:
     _ONE = re.compile(
         r"(?P<prefix>\b(?:router\s+bgp|remote-as|local-as|autonomous-system)\s+)"
         r"(?P<value>\d+(?:\.\d+)?)\b", re.I)
+    #: RouterOS writes an ASN as a ``key=value`` pair, and RouterOS 7 abbreviates
+    #: a nested property to a leading dot: ``/routing bgp connection add
+    #: as=65501 ... remote.address=... .as=65500``, where that ``.as=`` is
+    #: ``remote.as=``. :attr:`_ONE` requires whitespace after the keyword, so it
+    #: reaches none of these -- not even the ``remote-as=`` that RouterOS 6
+    #: wrote, whose keyword it does know.
+    #:
+    #: The ``as`` key is a bare two-letter word, so the boundary in front of it
+    #: is the whole safety margin: a character that is neither a word character
+    #: nor a hyphen nor a dot, or the start of the line. Without it every key
+    #: that merely ENDS in those letters -- ``alias=``, ``class=``, ``bias=`` --
+    #: would have its value read as an autonomous system number.
+    _ROS = re.compile(
+        r"(?P<prefix>(?:^|[\s.])(?:(?:local|remote)[-.])?as=)"
+        r"(?P<value>\d+(?:\.\d+)?)(?![\w.])", re.I)
     _PATH = re.compile(r"(?P<prefix>\bas-path\s+prepend\s+)(?P<values>[\d. ]+)", re.I)
 
     def __init__(self, policy, pseudonymiser):
@@ -246,8 +261,10 @@ class AsNumbers:
         return new
 
     def line(self, line: str) -> str:
-        line = self._ONE.sub(
-            lambda m: m.group("prefix") + self._replace(m.group("value")), line)
+        for pat in (self._ONE, self._ROS):
+            line = pat.sub(
+                lambda m: m.group("prefix") + self._replace(m.group("value")),
+                line)
 
         def path(m):
             values = re.sub(r"\d+(?:\.\d+)?", lambda n: self._replace(n.group(0)),
@@ -255,3 +272,20 @@ class AsNumbers:
             return m.group("prefix") + values
 
         return self._PATH.sub(path, line)
+
+
+def asn_candidates(line: str) -> list[str]:
+    """Every ASN :class:`AsNumbers` would act on in ``line``.
+
+    Exported so the verifier asks the question the transformation answers,
+    rather than keeping a second list of grammars: one that had drifted would
+    either report an ASN the rule had already handled, or -- the direction that
+    matters -- stay silent about one the rule never reached. ``as-number-left``
+    knew none of the RouterOS spellings until this was shared.
+    """
+    out: list[str] = []
+    for pat in (AsNumbers._ONE, AsNumbers._ROS):
+        out.extend(match.group("value") for match in pat.finditer(line))
+    for match in AsNumbers._PATH.finditer(line):
+        out.extend(re.findall(r"\d+(?:\.\d+)?", match.group("values")))
+    return out
