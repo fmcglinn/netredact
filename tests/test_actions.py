@@ -10,7 +10,7 @@ from netredact import Config, Pseudonymiser, Result, sanitise_text
 from netredact.config import RULE_FAMILIES
 from netredact.pseudonymise import PREFIX, REDACT_CONST
 
-from .conftest import SALT, policy, section
+from .conftest import FIXTURE_NAMES, SALT, policy, section
 
 #: (key, pseudo, hash, redact) -- ``None`` means the cell is illegal.
 #: Tags are the HMAC of the value under conftest.SALT, so they are fixed.
@@ -315,8 +315,7 @@ def _every_family(action: str) -> Config:
 
 
 @pytest.mark.parametrize("action", ["hash", "redact"])
-@pytest.mark.parametrize("name", ["cisco.cfg", "arista.cfg", "juniper.cfg",
-                                  "edge.cfg", "edge-junos.cfg", "qk.cfg"])
+@pytest.mark.parametrize("name", FIXTURE_NAMES)
 def test_sanitising_sanitised_output_is_a_no_op(fixtures, name, action):
     cfg = _every_family(action)
     once = sanitise_text((fixtures / name).read_text(), cfg, salt=SALT).text

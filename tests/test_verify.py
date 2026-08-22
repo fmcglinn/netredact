@@ -243,3 +243,57 @@ def test_the_checksum_rule_wants_the_algorithm_token():
                            salt=SALT)
     assert result.counts.get("script-checksum") is None
 
+
+# ---------------------------------------------------------------------------
+# FortiOS credentials, and the blind spot the check had over them. `psksecret`
+# and `ppk-secret` end in a word the keyword list already carried, but the
+# check reads whole words -- so an IPsec pre-shared key and an SNMPv3 secret
+# left the tool in the device's encrypted form with NO finding at all, and
+# `--strict` exited 0 over them. A bare `set key` was the same case with a word
+# too ordinary to name unqualified.
+#
+# The first half is asserted with `secrets = "keep"`, because that is the only
+# way to ask the question the check exists for: if the rule that handles the
+# line ever regresses, does the tool still speak?
+# ---------------------------------------------------------------------------
+
+FORTIOS_CREDENTIALS = [
+    "    set psksecret ENC AK1PskEXAMPLEsEcReTkEyMaTeRiAl==",
+    "    set ppk-secret ENC AK1PpkEXAMPLEsEcReT6gQ==",
+    "    set auth-pwd ENC AK1SnmpAuthPassEXAMPLE0aQ==",
+    "    set priv-pwd ENC AK1SnmpPrivPassEXAMPLE1bQ==",
+    "    set passphrase ENC AK1WifiPassphraseEXAMPLE7hQ==",
+    "    set api-key ENC AK1FgtApiKeyEXAMPLEz0982kQ==",
+    '    set key "NtpSharedSecret123"',
+    "    set secret ENC AK1RadiusSecretEXAMPLE4eQ==",
+    "    set password ENC AK1BgpNeighborPassEXAMPLE8iQ==",
+    "    set passwd ENC AK1LocalUserPassEXAMPLE2cQ==",
+]
+
+
+@pytest.mark.parametrize("line", FORTIOS_CREDENTIALS)
+def test_a_kept_fortios_credential_is_never_silent(line):
+    checks = {f.check for f in verify([line], policy(secrets="keep"))}
+    assert "credential-left" in checks, f"silent: {line!r}"
+
+
+@pytest.mark.parametrize("line", FORTIOS_CREDENTIALS)
+def test_the_check_accepts_the_placeholder_the_rule_leaves(line):
+    """The other half: the check must not report a line it just dealt with.
+
+    `ENC` stands between the keyword and the placeholder, so it has to be a
+    known encoding hint (``rules.ENC``) -- otherwise every FortiOS credential
+    fails ``--strict`` after being correctly destroyed.
+    """
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert "<REMOVED>" in result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+@pytest.mark.parametrize("line", [
+    "    set key-id 7",                     # a key id, not a key
+    "    set type password",                # the kind of account, not one
+    "    set security wpa2-only-personal",
+])
+def test_the_fortios_shape_does_not_report_a_knob(line):
+    assert verify([line], Config()) == []

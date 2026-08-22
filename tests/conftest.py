@@ -8,7 +8,7 @@ from netredact.config import RULE_FAMILIES, RULE_SECTIONS
 FIXTURES = Path(__file__).parent / "fixtures"
 
 #: every shipped fixture, by file name
-FIXTURE_NAMES = ("cisco.cfg", "arista.cfg", "juniper.cfg",
+FIXTURE_NAMES = ("cisco.cfg", "arista.cfg", "juniper.cfg", "fortinet.cfg",
                  "edge.cfg", "edge-junos.cfg", "qk.cfg")
 
 
@@ -34,6 +34,11 @@ def arista():
 @pytest.fixture
 def juniper():
     return read("juniper.cfg")
+
+
+@pytest.fixture
+def fortinet():
+    return read("fortinet.cfg")
 
 
 @pytest.fixture
