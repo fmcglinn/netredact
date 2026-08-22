@@ -7,9 +7,11 @@ from netredact.config import RULE_FAMILIES, RULE_SECTIONS
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-#: every shipped fixture, by file name
+#: every shipped fixture, by file name. Named once: the sweeps that run over
+#: all of them read this, so a fixture added here is inside "every fixture" the
+#: day it exists rather than the day someone remembers all four lists.
 FIXTURE_NAMES = ("cisco.cfg", "arista.cfg", "juniper.cfg",
-                 "edge.cfg", "edge-junos.cfg", "qk.cfg")
+                 "edge.cfg", "edge-junos.cfg", "qk.cfg", "mikrotik.cfg")
 
 
 @pytest.fixture
@@ -49,6 +51,11 @@ def edge_junos():
 @pytest.fixture
 def qk():
     return read("qk.cfg")
+
+
+@pytest.fixture
+def mikrotik():
+    return read("mikrotik.cfg")
 
 
 SALT = b"deterministic-test-salt-do-not-use-in-anger"

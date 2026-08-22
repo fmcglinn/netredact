@@ -65,6 +65,85 @@ All notable changes to this project are documented here. The format follows
   file (`netredact.provenance`), while `Result.already_sanitised` reports
   whether the input had one.
 
+- MikroTik RouterOS `/export` configurations. RouterOS spells every argument as
+  a `key=value` pair on an `add` / `set` command, so four new `secrets` rules
+  match unanchored: `routeros-password` (`password=`, `passphrase=`, and the
+  hyphenated `authentication-password=` / `encryption-password=`),
+  `routeros-secret`, `routeros-pre-shared-key` (`pre-shared-key=`,
+  `wpa-pre-shared-key=`, `wpa2-pre-shared-key=`) and `routeros-snmp-community`.
+  The `=` is what keeps each of them off the space-form rule of the same name
+  and that rule off them, so every value still has exactly one owner. A bare
+  `name=` is deliberately NOT a secret outside `/snmp community`: everywhere
+  else in an export it names an interface, a bridge or a firewall rule. All of
+  these are *searched* rather than matched, because one command line can carry
+  two pairs belonging to a single rule -- a wireless security profile routinely
+  sets `wpa-pre-shared-key=` and `wpa2-pre-shared-key=` on one line, and a rule
+  that fires once per line took the second and left the first passphrase
+  standing next to a marker saying the line had been dealt with.
+
+  WireGuard is covered by three of them: `routeros-private-key` takes the
+  interface's own key, `routeros-pre-shared-key` now admits RouterOS's second
+  spelling of the same field -- `preshared-key=`, with no inner hyphen, beside
+  the wireless `wpa2-pre-shared-key=` -- and `routeros-public-key` is
+  `identity`, not `secrets`, because a public key is published on purpose. It
+  still needs a rule: 44 characters of base64 is exactly what
+  `long-base64-left` looks for, and the check cannot tell an authorised key
+  from a leaked one, so a config that kept its peers failed `--strict` until a
+  named `identity` rule claimed the span for the check to be blinded to.
+
+  A qualified key name is still that key: RouterOS writes `ipsec-secret=`,
+  `authentication-password=` and `wpa2-pre-shared-key=` and means the same field
+  each time, so the credential rules admit any hyphenated prefix. `name=` and
+  `comment=` deliberately do not, because there the guard is the point --
+  `default-name=ether1` names a factory default, not something an operator
+  chose. Getting that asymmetry wrong was silent in the worst direction: a bare
+  `secret=` did not merely fail to help with `ipsec-secret=`, it refused it.
+
+  `comment=` is RouterOS's `description`, and it is split by scope in exactly
+  the same way: `interface-comment` in `[interfaces]` inside a `/interface …`
+  section, `comment` in `[text]` everywhere else, the two made disjoint so no
+  comment is matched by both. The `/export` header is read by the rules that
+  already own each kind of value -- `hardware-model` and `serial-number` now
+  admit a `#` comment leader alongside `!`, and `os-version` reads the release
+  out of `by RouterOS 7.15.3` -- plus one new `identity` rule, `software-id`,
+  because a licence id is tied to the one device and not to a production line.
+  `location=` and `contact=` reach the rules of those names.
+
+- A third kind of block for the scope names the rules already use: a RouterOS
+  `/export` section, which a `/`-prefixed line opens and the next one ends.
+  Where more than one dialect has the block the name stays JunOS's own, so one
+  rule reaches all of them -- a `/interface ethernet` section is `interfaces`
+  exactly as an `interface Gi0/0` block and an `interfaces { … }` stanza are.
+  A section only RouterOS has keeps its own name: `snmp-community`,
+  `system-identity`, `user`, `ppp-secret`. `/export terse` repeats the whole
+  path on every command line and is scoped from the line itself, the way a
+  JunOS `set` line is. Those own-name sections are what make a RouterOS
+  `name=` decidable at all: it is the device's own name under `/system
+  identity`, a login under `/user`, a subscriber's account under `/ppp secret`,
+  a community string under `/snmp community`, and an object name everywhere
+  else -- so the collect pass now tracks the section too. None of this is a
+  vendor gate: a file with no such section in it cannot reach the rules that
+  need one.
+
+- A wrapped RouterOS command is joined into one logical line before any rule
+  runs, and written back out unwrapped. `/export` breaks a long command with a
+  trailing `\` and continues it indented on the next line, and a rule sees one
+  line at a time -- so a wrapped `wpa2-pre-shared-key="…` had the tail of its
+  value carried past every rule that could recognise it: the value matcher
+  could not close the quote, a marker landed on the opening fragment, and the
+  rest of the passphrase left the tool with `--strict` reporting success. Only
+  an `add` / `set` / `remove` at the start of a line is read this way, because a
+  trailing backslash means nothing in IOS or JunOS but is perfectly ordinary in
+  an ASCII-art banner. The line count of the output changes, as it already can
+  where a block body or a banner collapses.
+
+- `mikrotik` is a value `vendor` accepts and a value the detector answers,
+  from `by RouterOS` and `# software id =` as decisive markers plus the section
+  paths and `set [ find … ]`. Both decisive markers keep their keyword when the
+  release and the id are removed, so detection still works on redacted output.
+  The provenance marker comments with `#` on a RouterOS file, as it does on
+  JunOS.
+
 - `[operational-names] label-switched-path` acts on JunOS MPLS LSP names --
   the `label-switched-path` and `static-label-switched-path` declarations and
   the `lsp-next-hop` references to them -- in both the `set` and curly-brace

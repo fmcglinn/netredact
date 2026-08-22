@@ -16,8 +16,8 @@ this tool exists to remove, so none of them appears in the test suite.
 
 import pytest
 
+from netredact import Config, sanitise_text
 from netredact import rules as R
-from netredact import sanitise_text
 
 from .conftest import SALT, maximal, policy, section
 
@@ -277,3 +277,122 @@ def test_the_pseudowires_block_header_is_not_a_pseudowire_name():
                         section("circuits", "redact"), salt=SALT)
     assert out.text == "mpls ldp\n   pseudowires\n"
     assert not out.counts
+
+
+# -- RouterOS: the third kind of block --------------------------------------
+#
+# A `/`-prefixed line opens a section that lasts until the next one, and
+# `/export terse` puts the same path on every command line instead. Both are
+# scope, so both go through one mechanism -- and scope is all there is: a
+# RouterOS `name=` names the device, a login, a community string or an
+# interface depending only on the section above it.
+
+ROUTEROS = """/system identity
+set name=hq-rtr-01
+/user
+add name=netops group=full password=R0uterPass77
+/ppp secret
+add name=bobs-bakery service=pppoe password=BakeryPPP123
+/interface ethernet
+set [ find default-name=ether1 ] comment="a port note" name=ether1-transit
+/ip firewall filter
+add action=accept chain=input comment="a firewall note"
+/snmp community
+add name=pubR0nly addresses=128.66.16.0/24
+/snmp
+set contact="noc@northwind.test" location="DC1, 100 Example St"
+"""
+
+
+def test_a_comment_is_owned_by_the_section_it_sits_in():
+    """The same split as `description`, and for the same reason: a port label a
+    reviewer needs, and free text on a firewall rule that they do not."""
+    out = sanitise_text(ROUTEROS, section("interfaces", "redact"), salt=SALT).text
+    assert "a port note" not in out
+    assert 'comment="a firewall note"' in out
+
+    out = sanitise_text(ROUTEROS, section("text", "redact"), salt=SALT).text
+    assert 'comment="a port note"' in out
+    assert "a firewall note" not in out
+
+
+def test_the_comments_partition_the_file():
+    """Between them the two rules claim every comment, each exactly once."""
+    result = sanitise_text(ROUTEROS, policy(text="hash", interfaces="hash"),
+                           salt=SALT)
+    assert result.counts["comment"] + result.counts["interface-comment"] == 2
+    assert "note" not in result.text, result.text
+
+
+def test_a_section_lasts_until_the_next_one_and_no_further():
+    """`/ip firewall filter` has to END the `/interface ethernet` section, or
+    the comment on it would still be read as a port label."""
+    result = sanitise_text(ROUTEROS, section("interfaces", "redact"), salt=SALT)
+    assert result.counts["interface-comment"] == 1
+
+
+def test_the_device_name_is_learnt_only_from_system_identity():
+    """`name=hq-rtr-01` is a hostname there and an object name everywhere else,
+    so an unscoped collector would substitute every interface in the file."""
+    result = sanitise_text(ROUTEROS, policy(hostnames="pseudo"), salt=SALT)
+    assert "hq-rtr-01" not in result.text
+    assert result.mapping["hostname"] == {"hq-rtr-01": "device-23c856"}
+    # the section is the whole of the evidence, so nothing else moved
+    assert "name=ether1-transit" in result.text
+    assert "name=pubR0nly" in result.text or "name=<REMOVED>" in result.text
+
+
+def test_a_customer_account_is_a_username():
+    """`/user` is a login and `/ppp secret` is a subscriber's account. Both are
+    usernames -- neither is the device's own name."""
+    result = sanitise_text(ROUTEROS, policy(usernames="pseudo"), salt=SALT)
+    for value in ("netops", "bobs-bakery"):
+        assert value not in result.text
+        assert value in result.mapping["username"]
+    assert "hq-rtr-01" in result.text, "the device name is not a login"
+
+
+def test_a_terse_export_scopes_from_the_path_on_the_line():
+    """`/export terse` writes one logical line per item with the whole section
+    path in front of the command -- the RouterOS analogue of a JunOS `set`
+    line, and it has to reach the same scopes."""
+    terse = ("/system identity set name=hq-rtr-01\n"
+             "/interface ethernet set [ find default-name=ether1 ] "
+             'comment="a port note"\n'
+             '/ip firewall filter add chain=input comment="a firewall note"\n'
+             "/snmp community add name=pubR0nly addresses=128.66.16.0/24\n")
+    result = sanitise_text(terse, policy(hostnames="pseudo",
+                                         interfaces="redact"), salt=SALT)
+    assert "hq-rtr-01" not in result.text
+    assert "a port note" not in result.text
+    assert 'comment="a firewall note"' in result.text
+    assert "pubR0nly" not in result.text          # a community string, redacted
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_routeros_scope_cannot_be_reached_by_another_dialect():
+    """The scope is what confines these rules, and nothing else is.
+
+    No grammar but RouterOS's opens a `/snmp community` section, so a JunOS
+    file cannot reach `routeros-snmp-community` however it spells `name`.
+    """
+    junos = ("snmp {\n"
+             "    community pubR0nly {\n"
+             "        name notacommunity;\n"
+             "    }\n"
+             "}\n")
+    result = sanitise_text(junos, Config(), salt=SALT)
+    assert "notacommunity" in result.text
+    assert not result.counts["routeros-snmp-community"]
+
+
+def test_a_wrapped_command_keeps_the_scope_of_its_section():
+    """The join happens before the rules run, so the logical line is still
+    inside the section its first physical line was in."""
+    text = ("/interface l2tp-client\n"
+            "add connect-to=203.0.113.10 name=l2tp-dr \\\n"
+            '    comment="a port note"\n')
+    out = sanitise_text(text, section("interfaces", "redact"), salt=SALT).text
+    assert "a port note" not in out
+    out = sanitise_text(text, section("text", "redact"), salt=SALT).text
+    assert 'comment="a port note"' in out

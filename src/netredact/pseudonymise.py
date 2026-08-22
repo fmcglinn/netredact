@@ -97,12 +97,20 @@ PREFIX: dict[str, tuple[str, str | None]] = {
     "license-udi": ("UDI", "udi"),
     "snmp-engineid": ("EID", "eid"),
     "ssh-public-key": ("KEY", "key"),
+    # a WireGuard public key is the same kind of thing as an SSH one, so it
+    # renders the same way: a reader of the output learns a key was taken out,
+    # not which grammar carried it
+    "routeros-public-key": ("KEY", "key"),
     "certificate-block": ("CERT", "cert"),
     "pem-cert": ("CERT", "cert"),
     # its own prefix, like every other identity rule, so the marker says what
     # was taken out. The token is not `checksum`: `checksum sha-256
     # checksum-1a2b3c` reads as a parser error.
     "script-checksum": ("CKSUM", "cksum"),
+    # RouterOS's licence id. Its own prefix for the same reason: the marker has
+    # to say what was taken out, and the token is not `software` -- `software id
+    # = swid-1a2b3c` is what a reader of the output should see.
+    "software-id": ("SWID", "swid"),
     # platform. The pseudo token is never the rule's own keyword: `version
     # version-1a2b3c` reads as a parser error, `version ver-1a2b3c` does not.
     "hardware-model": ("MODEL", "model"),

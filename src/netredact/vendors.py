@@ -60,6 +60,23 @@ VENDOR_HINTS = (
         (r"secret\s+sha512", WEAK),
         (r"^\s*no\s+aaa\s+root", WEAK),
     )),
+    ("mikrotik", (
+        # the `/export` provenance comment, and the licence line under it. The
+        # release number in the first is removed by `platform` and the id in
+        # the second by `identity`, but both keywords stay -- which is the
+        # whole reason detection is allowed to depend on them.
+        (r"\bby\s+RouterOS\b", DECISIVE),
+        (r"^#\s*software\s+id\s*=", DECISIVE),
+        # a section header, or the path `/export terse` repeats on every line.
+        # Nothing else puts a `/` in column zero: JunOS and IOS spell an
+        # interface `xe-0/0/0` and `Gi0/0`, never at the start of a line.
+        (r"^/(?:interface|ip|system|snmp|user|routing)\b", STRONG),
+        # RouterOS's own way of naming an object it did not create: no other
+        # configuration grammar has a selector expression at all
+        (r"set\s+\[\s*find\b", STRONG),
+        (r"^add\s+\S+=", WEAK),
+        (r"^#\s*model\s*=", WEAK),
+    )),
     ("cisco", (
         (r"^\s*boot-start-marker", DECISIVE),
         # the `show running-config` preamble, which Arista does not emit

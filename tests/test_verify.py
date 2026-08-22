@@ -243,3 +243,23 @@ def test_the_checksum_rule_wants_the_algorithm_token():
                            salt=SALT)
     assert result.counts.get("script-checksum") is None
 
+
+def test_a_routeros_authentication_method_is_not_a_credential():
+    """`wpa-psk` names a method there and a key on a Cisco autonomous AP, and
+    the check knows one keyword for both. The `=` is what tells them apart."""
+    assert verify(["add authentication-types=wpa-psk,wpa2-psk name=corp"],
+                  Config()) == []
+    # ...and the Cisco form, where the keyword introduces the key, still fires
+    assert "credential-left" in {
+        f.check for f in verify([" wpa-psk ascii 0 Tr0ub4dor&3"], Config())}
+
+
+def test_a_routeros_section_path_is_not_a_surviving_credential():
+    """`/ppp secret` names a section, and `/export terse` repeats the whole
+    path on every line -- but only up to the command word, so a `secret=` on
+    the rest of the line is still judged."""
+    assert verify(["/ppp secret add name=cust password=<REMOVED>"],
+                  Config()) == []
+    assert "credential-left" in {
+        f.check for f in verify(["/ip ipsec identity add secret=hunter2"],
+                                Config())}

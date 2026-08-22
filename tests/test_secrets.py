@@ -9,7 +9,7 @@ import pytest
 from netredact import Config, sanitise_text
 from netredact.cli import EXIT_OK, main
 
-from .conftest import SALT, policy, section
+from .conftest import FIXTURE_NAMES, SALT, policy, section
 
 # literal secrets planted in the fixtures -- none may survive
 PLANTED = [
@@ -30,11 +30,26 @@ PLANTED = [
     "VrrpPass1", "0x1234abcd", "0x5678ef90",
     "$9$SecretBlob", "$6$abc$def123", "$9$Secret", "publicRO", "privRW",
     "BngRadiusPass77", "AutoConfPass88",
+    "R0uterPass77", "BackupPass88", "BakeryPPP123", "FabricPPP456",
+    "Aut0mnBridge41", "L2tpPass99", "RadiusSecret55", "L2tpIpsecPsk88",
+    # both PSK generations on ONE command line, which is why these rules are
+    # searched and not matched: a rule that matched once left the first of the
+    # two standing next to a marker saying the line had been dealt with
+    "OldStonePier19", "NewStonePier23",
+    # WireGuard: the interface's own key, and a peer's PSK. The peer's PUBLIC
+    # key is deliberately absent from this list -- it is `identity`, kept by
+    # default, and destroying it is not what the default promises.
+    "bm9ydGh3aW5kLXdnLXByaXZrZXktdGVzdG9ubHktMDE=",
+    "bm9ydGh3aW5kLXdnLXBzay10ZXN0b25seS0wMDAwMDM=",
+    # the tail of a passphrase RouterOS wrapped onto a second line. It is only
+    # reachable at all because the wrap is undone before the rules run: on the
+    # first physical line the value matcher cannot close the quote, so without
+    # the join a marker lands on the opening fragment and this survives.
+    "Lantern 77",
 ]
 
 
-@pytest.mark.parametrize("name", ["cisco.cfg", "arista.cfg", "juniper.cfg",
-                                  "edge.cfg", "edge-junos.cfg", "qk.cfg"])
+@pytest.mark.parametrize("name", FIXTURE_NAMES)
 def test_no_planted_secret_survives(fixtures, name):
     text = (fixtures / name).read_text()
     out = sanitise_text(text, Config(), salt=SALT).text
@@ -44,15 +59,12 @@ def test_no_planted_secret_survives(fixtures, name):
 
 def test_the_planted_list_is_not_silently_stale(fixtures):
     """A typo in the list above would make every assertion vacuous."""
-    all_text = "".join((fixtures / n).read_text()
-                       for n in ("cisco.cfg", "arista.cfg", "juniper.cfg",
-                                 "edge.cfg", "edge-junos.cfg", "qk.cfg"))
+    all_text = "".join((fixtures / n).read_text() for n in FIXTURE_NAMES)
     missing = [s for s in PLANTED if s not in all_text]
     assert missing == [], f"not present in any fixture: {missing}"
 
 
-@pytest.mark.parametrize("name", ["cisco.cfg", "arista.cfg", "juniper.cfg",
-                                  "edge.cfg", "edge-junos.cfg", "qk.cfg"])
+@pytest.mark.parametrize("name", FIXTURE_NAMES)
 def test_verification_is_clean_at_defaults(fixtures, name):
     text = (fixtures / name).read_text()
     result = sanitise_text(text, Config(), salt=SALT)
@@ -314,3 +326,219 @@ def test_the_wider_password_match_stays_off_the_knobs(line):
     result = sanitise_text(line + "\n", Config(), salt=SALT)
     assert result.text.splitlines()[-1] == line, result.text
 
+
+# ---------------------------------------------------------------------------
+# RouterOS. Every argument is a `key=value` pair on an `add` / `set` command,
+# so the credential rules are unanchored and the `=` is what tells them apart
+# from the space-form rules: `password hunter2` and `password=hunter2` are two
+# grammars, and each must be claimed by exactly one owner.
+# ---------------------------------------------------------------------------
+
+#: (line, the secret that must not survive)
+ROUTEROS_SECRETS = [
+    ("/user\nadd name=netops group=full password=R0uterPass77", "R0uterPass77"),
+    ("/ppp secret\nadd name=cust service=pppoe password=BakeryPPP123",
+     "BakeryPPP123"),
+    ("/radius\nadd address=128.66.16.20 secret=RadiusSecret55", "RadiusSecret55"),
+    # a qualified spelling of the same field. The guard that keeps `name=` off
+    # `default-name=` REFUSED this one, so an L2TP/IPsec secret left the tool.
+    ("/interface l2tp-client\nadd connect-to=203.0.113.10 use-ipsec=yes "
+     "ipsec-secret=L2tpIpsecPsk88", "L2tpIpsecPsk88"),
+    ("/interface wireless security-profiles\n"
+     "add name=corp wpa2-pre-shared-key=Aut0mnBridge41", "Aut0mnBridge41"),
+    ("/interface wireless security-profiles\n"
+     "add name=legacy wpa-pre-shared-key=Aut0mnBridge41", "Aut0mnBridge41"),
+    ("/ip ipsec peer\nadd address=203.0.113.10 pre-shared-key=IpsecPsk42",
+     "IpsecPsk42"),
+    ("/ppp profile\nadd name=pppoe authentication-password=RadiusPass31",
+     "RadiusPass31"),
+    ("/interface ovpn-client\nadd name=ovpn1 encryption-password=OvpnPass19",
+     "OvpnPass19"),
+    ("/interface wireless\nset [ find ] passphrase=Passphrase73", "Passphrase73"),
+    # WireGuard spells its PSK without the inner hyphen, which the wireless
+    # spelling of the rule did not reach
+    ("/interface wireguard peers\nadd interface=wg-4g "
+     'preshared-key="bm9ydGh3aW5kLXdnLXBzay10ZXN0b25seS0wMDAwMDM="',
+     "bm9ydGh3aW5kLXdnLXBzay10ZXN0b25seS0wMDAwMDM="),
+    ("/interface wireguard\nadd listen-port=13231 mtu=1420 name=wg-4g "
+     'private-key="bm9ydGh3aW5kLXdnLXByaXZrZXktdGVzdG9ubHktMDE="',
+     "bm9ydGh3aW5kLXdnLXByaXZrZXktdGVzdG9ubHktMDE="),
+]
+
+
+@pytest.mark.parametrize("text,secret", ROUTEROS_SECRETS,
+                         ids=range(len(ROUTEROS_SECRETS)))
+def test_a_routeros_key_value_credential_is_destroyed(text, secret):
+    result = sanitise_text(text + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert "<REMOVED>" in result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_both_psk_generations_on_one_line_are_destroyed():
+    """One command, two pairs, one rule -- and the reason these rules are
+    searched rather than matched.
+
+    A RouterOS command carries many `key=value` pairs, and a wireless security
+    profile routinely sets both PSK generations. A rule that is matched fires
+    once per line, so the greedy prefix took the second pair and left the first
+    passphrase standing next to a marker that said the line was finished.
+    """
+    text = ("/interface wireless security-profiles\n"
+            "add name=legacy-wifi wpa-pre-shared-key=OldStonePier19 "
+            "wpa2-pre-shared-key=NewStonePier23\n")
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert "OldStonePier19" not in result.text, result.text
+    assert "NewStonePier23" not in result.text, result.text
+    assert result.counts["routeros-pre-shared-key"] == 2
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+WIREGUARD = (
+    "/interface wireguard\n"
+    "add listen-port=13231 mtu=1420 name=wg-4g "
+    'private-key="bm9ydGh3aW5kLXdnLXByaXZrZXktdGVzdG9ubHktMDE="\n'
+    "/interface wireguard peers\n"
+    "add allowed-address=10.66.0.2/32 interface=wg-4g "
+    'public-key="bm9ydGh3aW5kLXdnLXB1YmtleS10ZXN0b25seS0wMDI="\n'
+)
+
+
+def test_a_wireguard_private_key_is_a_secret_and_the_public_one_is_identity():
+    """The two halves of one pair, in two families, and that is the point.
+
+    A private key is a credential and goes by default. A public key is
+    published on purpose: it identifies a device or a peer, so it is `identity`
+    -- kept by default, and reachable when the policy acts on identity.
+    """
+    result = sanitise_text(WIREGUARD, Config(), salt=SALT)
+    assert 'private-key="<REMOVED>"' in result.text
+    assert "bm9ydGh3aW5kLXdnLXByaXZrZXk" not in result.text
+    assert "bm9ydGh3aW5kLXdnLXB1YmtleS10ZXN0b25seS0wMDI=" in result.text
+    assert result.counts["routeros-private-key"] == 1
+    assert result.kept_counts["routeros-public-key"] == 1
+    out = sanitise_text(WIREGUARD, policy(identity="redact"), salt=SALT).text
+    assert 'public-key="<REMOVED>"' in out
+
+
+def test_a_kept_wireguard_public_key_is_not_an_unexplained_base64_run():
+    """The reason it needs a rule at all rather than nothing.
+
+    44 characters of base64 is exactly what `long-base64-left` looks for, and
+    the check cannot tell an authorised key from a leaked one -- so a config
+    that kept its peers failed `--strict` until a named `identity` rule claimed
+    the span for the check to be blinded to.
+    """
+    assert sanitise_text(WIREGUARD, Config(), salt=SALT).findings == []
+    checks = {f.check for f in
+              sanitise_text(WIREGUARD, policy(identity="keep", secrets="keep"),
+                            salt=SALT).findings}
+    # ...and a KEPT secret is never blinded: the private key still reports
+    assert "credential-left" in checks
+
+
+def test_the_space_form_and_the_equals_form_have_one_owner_each():
+    """Two grammars, two rules, and neither may count the other's line."""
+    space = sanitise_text(" password 0 SpaceForm1\n", Config(), salt=SALT)
+    equals = sanitise_text("add password=EqualsForm1\n", Config(), salt=SALT)
+    assert space.counts["bare-password"] == 1
+    assert not space.counts["routeros-password"]
+    assert equals.counts["routeros-password"] == 1
+    assert not equals.counts["bare-password"]
+
+
+def test_a_routeros_community_string_is_a_secret_only_in_its_own_section():
+    """`name=` is the community string under `/snmp community` and an object
+    name everywhere else, and the line cannot tell you which."""
+    text = ("/snmp community\n"
+            "add name=pubR0nly addresses=128.66.16.0/24\n"
+            "/interface bridge\n"
+            "add name=bridge-lan protocol-mode=rstp\n"
+            "/ip firewall address-list\n"
+            "add list=noc address=203.0.113.44\n")
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert "name=<REMOVED>" in result.text
+    assert "pubR0nly" not in result.text
+    assert "add name=bridge-lan protocol-mode=rstp" in result.text
+    assert result.counts["routeros-snmp-community"] == 1
+
+
+#: (line, what must go, what must stay) -- RouterOS qualifies a key name freely
+#: and means the same field by it, so a credential rule has to admit the
+#: qualifier while `name=` has to refuse it. That asymmetry is the bug this
+#: pins: the guard that keeps `name=` off `default-name=` was also refusing
+#: `ipsec-secret=`, so an L2TP/IPsec secret left the tool with `--strict`
+#: reporting nothing wrong.
+QUALIFIED_KEYS = [
+    ("add use-ipsec=yes ipsec-secret=Psk1", "Psk1", "use-ipsec=yes"),
+    ("add authentication-password=Pass1", "Pass1", "authentication-password="),
+    ("add encryption-password=Pass2", "Pass2", "encryption-password="),
+    ("add wpa-pre-shared-key=Psk2", "Psk2", "wpa-pre-shared-key="),
+]
+
+
+@pytest.mark.parametrize("line,gone,kept", QUALIFIED_KEYS,
+                         ids=range(len(QUALIFIED_KEYS)))
+def test_a_qualified_credential_key_is_still_that_credential(line, gone, kept):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert gone not in result.text, result.text
+    assert kept in result.text, "the key itself is grammar and stays"
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_default_name_is_not_read_as_a_name():
+    """A hyphen is a word boundary, so the guard in front of `name=` is what
+    keeps `[ find default-name=ether1 ]` out of every `name=` rule."""
+    text = ("/snmp community\n"
+            "set [ find default-name=public ] addresses=128.66.16.0/24\n")
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert "default-name=public" in result.text
+    assert not result.counts
+
+
+# ---------------------------------------------------------------------------
+# Wrapped lines. `/export` breaks a long command with a trailing `\`, and a
+# rule sees one line at a time -- so a value split across the wrap would have
+# its tail carried past every rule that could recognise it. The marker on the
+# opening fragment is what makes that dangerous: the line reads as handled,
+# and `--strict` exits 0 over the rest of the passphrase.
+# ---------------------------------------------------------------------------
+
+WRAPPED_PSK = ('/interface wireless security-profiles\n'
+               'add authentication-types=wpa2-psk name=guest-wifi \\\n'
+               '    wpa2-pre-shared-key="Winter Harbour \\\n'
+               '    Lantern 77"\n')
+
+
+def test_a_wrapped_secret_does_not_leak_its_tail():
+    result = sanitise_text(WRAPPED_PSK, Config(), salt=SALT)
+    assert "Winter Harbour" not in result.text
+    assert "Lantern 77" not in result.text
+    assert 'wpa2-pre-shared-key="<REMOVED>"' in result.text
+    assert result.counts["routeros-pre-shared-key"] == 1
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_wrapped_command_is_emitted_unwrapped_and_still_loads():
+    """The `\\`, the newline and the continuation's indent become one space,
+    which is what RouterOS itself does with them."""
+    out = sanitise_text(WRAPPED_PSK, Config(), salt=SALT).text
+    assert out.splitlines() == [
+        "/interface wireless security-profiles",
+        'add authentication-types=wpa2-psk name=guest-wifi '
+        'wpa2-pre-shared-key="<REMOVED>"',
+    ]
+    assert "\\" not in out
+
+
+def test_a_trailing_backslash_in_another_dialect_is_left_alone():
+    """An ASCII-art banner is the case this could have broken: a backslash at
+    the end of a line is ordinary there and means nothing in IOS or JunOS, so a
+    RouterOS command word has to be present before the wrap is undone."""
+    text = ("banner motd ^C\n"
+            "  /\\  \\\n"
+            " /  \\  \\\n"
+            "^C\n"
+            "description a plain description \\\n")
+    out = sanitise_text(text, Config(), salt=SALT).text
+    assert out == text

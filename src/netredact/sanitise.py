@@ -225,11 +225,27 @@ class Sanitiser:
 
     # -- pass 1: learn the identities this device uses ---------------------
     def collect(self, lines) -> None:
+        # The one piece of state this pass has, and it earns its place: a
+        # RouterOS `name=` is the device's own name, a login or an interface
+        # depending only on the section above it, so the flat pattern tables
+        # cannot decide it. The scoped tables are consulted exactly like the
+        # flat ones; the section tracker is the same one the rules use, so the
+        # two can never disagree about where a line is.
+        section: str | None = None
         for line in lines:
+            section = R.routeros_scope(line, section)
             for pat in R.HOSTNAME_PATS:
                 m = pat.search(line)
                 if m:
                     self._add(self.hostnames, m.group(1).strip('";'))
+            for scopes, pat in R.SCOPED_HOSTNAME_PATS:
+                m = pat.search(line) if section in scopes else None
+                if m:
+                    self._add(self.hostnames, m.group(1).strip('";'))
+            for scopes, pat in R.SCOPED_USERNAME_PATS:
+                m = pat.search(line) if section in scopes else None
+                if m:
+                    self._add(self.usernames, m.group(1).strip('";'))
             for pat in R.DOMAIN_PATS:
                 m = pat.search(line)
                 if m:
@@ -527,6 +543,13 @@ def sanitise_text(text: str, config: Config | None = None, *,
         )
     if collection_mode == "remove":
         lines, removed_sections = strip_rancid_diagnostics(lines)
+    # A wrapped RouterOS command is one logical line, and it is unwrapped once,
+    # here, so the collect pass, the transformation and the verifier all read
+    # the same lines. `transform` joins too and joining is idempotent, so this
+    # is not a second policy -- it is the same one, applied early enough for the
+    # collect pass, which has no line-joining of its own to reach a `name=` the
+    # wrap carried onto the next line.
+    lines = R.join_continuations(lines)
     retained_text = "\n".join(lines) + ("\n" if lines else "")
 
     vendor = cfg.vendor if cfg.vendor != "auto" else detect_vendor(retained_text)

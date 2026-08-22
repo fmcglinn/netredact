@@ -19,7 +19,7 @@
 marker = true  # write one comment line at the top of the output naming this tool. It is
 # what lets netredact refuse to sanitise its own output a second time -- turn it
 # off and a re-run maps pseudonyms again, with nothing to warn you.
-vendor = "auto"  # auto | arista | cisco | juniper
+vendor = "auto"  # auto | arista | cisco | juniper | mikrotik
 
 # Passwords, keys, community strings and password hashes. This is
 # the one family that acts by default, and the whole of netredact's
@@ -63,6 +63,11 @@ default = "redact"  # the action for every rule not named below
 # ftp-password            = "redact"
 # junos-password          = "redact"
 # unsupported-transceiver = "redact"
+# routeros-password       = "redact"
+# routeros-secret         = "redact"
+# routeros-pre-shared-key = "redact"
+# routeros-private-key    = "redact"
+# routeros-snmp-community = "redact"
 # junos-type9             = "redact"
 # crypt-hash              = "redact"
 # key-string-block        = "redact"
@@ -86,6 +91,7 @@ default = "keep"  # the action for every rule not named below
 # acl-remark    = "keep"
 # login-message = "keep"
 # banner        = "keep"
+# comment       = "keep"
 
 # Explicit physical locations: SNMP location values and structured
 # JunOS building, floor, rack, room and street-address fields.
@@ -113,13 +119,15 @@ default = "keep"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
-# snmp-engineid     = "keep"
-# script-checksum   = "keep"
-# ssh-public-key    = "keep"
-# license-udi       = "keep"
-# serial-number     = "keep"
-# certificate-block = "keep"
-# pem-cert          = "keep"
+# snmp-engineid       = "keep"
+# software-id         = "keep"
+# script-checksum     = "keep"
+# routeros-public-key = "keep"
+# ssh-public-key      = "keep"
+# license-udi         = "keep"
+# serial-number       = "keep"
+# certificate-block   = "keep"
+# pem-cert            = "keep"
 
 # The hardware model, the software release and the boot image.
 # Neither a credential nor an instance identity -- every device off
@@ -156,6 +164,7 @@ default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
 # interface-description = "keep"
+# interface-comment     = "keep"
 
 # What a VLAN is called: the `name` under a `vlan <id>` block. NOT an
 # SVI -- an `interface Vlan905` block is an interface, and its
@@ -323,5 +332,7 @@ ignore_patterns = []     # regexes to treat as expected, not as findings
 # pattern = '\s*acme\s+shared-key\s+'
 # family = "secrets"    # secrets | text | locations | identity | platform | interfaces | vlans | circuits | hostnames | domains | usernames | emails | ipv4 | ipv6 | macs
 # action = "redact"     # optional; without it the family decides
-# stanza = "snmp"       # optional: a JunOS stanza, or an IOS-style block
-#                       # scope: interfaces / vlans / patch-panel
+# stanza = "snmp"       # optional: a JunOS stanza, an IOS-style block or a
+#                       # RouterOS section. Scopes: interfaces / vlans /
+#                       # snmp / patch-panel / snmp-community /
+#                       # system-identity / user / ppp-secret

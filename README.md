@@ -322,7 +322,7 @@ cfg = Config.load()                    # or Config.load("netredact.toml")
 result = sanitise_text(text, cfg)
 
 result.text              # the sanitised configuration
-result.vendor            # "cisco" | "arista" | "juniper" | "unknown"
+result.vendor            # "cisco" | "arista" | "juniper" | "mikrotik" | "unknown"
 result.counts            # Counter of rule / family name -> values substituted
 result.kept_counts       # Counter of what the policy deliberately left in place
 result.policy_summary    # the one-line policy, as the report prints it

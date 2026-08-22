@@ -1489,8 +1489,10 @@ _CUSTOM_EXAMPLE = [
     "# pattern = '\\s*acme\\s+shared-key\\s+'",
     '# family = "secrets"    # ' + " | ".join(FAMILIES),
     '# action = "redact"     # optional; without it the family decides',
-    '# stanza = "snmp"       # optional: a JunOS stanza, or an IOS-style block',
-    "#                       # scope: interfaces / vlans / patch-panel",
+    '# stanza = "snmp"       # optional: a JunOS stanza, an IOS-style block or a',
+    "#                       # RouterOS section. Scopes: interfaces / vlans /",
+    "#                       # snmp / patch-panel / snmp-community /",
+    "#                       # system-identity / user / ppp-secret",
     "",
 ]
 

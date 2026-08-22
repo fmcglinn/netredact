@@ -8,6 +8,8 @@ import pytest
 
 from netredact.cli import EXIT_FINDINGS, EXIT_OK, EXIT_USAGE, main
 
+from .conftest import FIXTURE_NAMES
+
 
 def test_print_config_is_valid_toml_and_shows_the_defaults(capsys):
     assert main(["--print-config"]) == EXIT_OK
@@ -333,8 +335,10 @@ def test_the_output_says_netredact_wrote_it(fixtures, capsys):
     assert "re-run from the original" in first
 
 
-def test_the_marker_is_a_comment_in_the_files_own_grammar(fixtures, capsys):
-    assert main([str(fixtures / "juniper.cfg")]) == EXIT_OK
+@pytest.mark.parametrize("name", ["juniper.cfg", "mikrotik.cfg"])
+def test_the_marker_is_a_comment_in_the_files_own_grammar(fixtures, name, capsys):
+    """JunOS and RouterOS both comment with `#`, so the marker has to."""
+    assert main([str(fixtures / name)]) == EXIT_OK
     assert capsys.readouterr().out.splitlines()[0].startswith("# netredact-sanitised")
 
 
@@ -486,8 +490,9 @@ def test_verify_strict_in_the_config_has_the_same_effect(tmp_path):
     assert main([str(leaky), "-c", str(cfg)]) == EXIT_FINDINGS
 
 
-def test_a_clean_file_exits_zero_under_strict(fixtures):
-    assert main([str(fixtures / "cisco.cfg"), "--strict"]) == EXIT_OK
+@pytest.mark.parametrize("name", FIXTURE_NAMES)
+def test_a_clean_file_exits_zero_under_strict(fixtures, name):
+    assert main([str(fixtures / name), "--strict"]) == EXIT_OK
 
 
 # -- the report --------------------------------------------------------------

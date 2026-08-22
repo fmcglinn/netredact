@@ -25,9 +25,9 @@ def test_inventory_is_immutable_and_rule_names_are_unique():
 
 def test_every_rule_has_the_expected_family():
     counts = Counter(info.family for info in inventory())
-    assert counts == {"secrets": 33, "text": 5, "locations": 2,
-                      "identity": 7, "platform": 4,
-                      "interfaces": 1, "vlans": 1, "circuits": 2}
+    assert counts == {"secrets": 38, "text": 6, "locations": 2,
+                      "identity": 9, "platform": 4,
+                      "interfaces": 2, "vlans": 1, "circuits": 2}
     assert set(counts) <= set(FAMILIES)
 
 
@@ -52,7 +52,11 @@ def test_inventory_carries_descriptive_metadata():
     rules = {info.name: info for info in inventory()}
     assert rules["interface-description"].required_scope == "interfaces"
     assert rules["description"].excluded_scopes == ("interfaces",)
+    assert rules["interface-comment"].required_scope == "interfaces"
+    assert rules["comment"].excluded_scopes == ("interfaces",)
     assert rules["patch-name"].vendor == "arista"
+    assert rules["routeros-snmp-community"].vendor == "mikrotik"
+    assert rules["routeros-snmp-community"].required_scope == "snmp-community"
     assert rules["enable-secret"].vendor is None
     assert rules["pem-key"].end_pattern
     assert rules["enable-secret"].pattern
@@ -144,6 +148,43 @@ def test_verification_view_preserves_alignment_and_masks_multiline_bodies():
     view = catalogue.verification_view(
         banner, blind=lambda info: info.name == "banner")
     assert view == [banner[0], " " * len(banner[1]), banner[2]]
+
+
+#: one wrapped RouterOS command, spread over three physical lines
+WRAPPED = ["/interface wireless security-profiles",
+           "add name=guest-wifi \\",
+           '    wpa2-pre-shared-key="Winter Harbour \\',
+           '    Lantern 77"']
+
+
+def test_transform_joins_a_wrapped_command_before_any_rule_sees_it():
+    hits = []
+
+    def replace(hit):
+        hits.append((hit.name, hit.value))
+        return RuleReplacement.with_text("MASKED")
+
+    out = RuleCatalogue.builtins().transform(WRAPPED, replace=replace)
+    assert out == ["/interface wireless security-profiles",
+                   'add name=guest-wifi wpa2-pre-shared-key="MASKED"']
+    # the whole quoted value, not the fragment the first physical line carried
+    assert ("routeros-pre-shared-key", "Winter Harbour Lantern 77") in hits
+
+
+def test_joining_is_idempotent_so_verification_stays_line_aligned():
+    """`verify` normalises its own input this way and then zips the view
+    against it, so joining twice has to be joining once."""
+    once = R.join_continuations(WRAPPED)
+    assert R.join_continuations(once) == once
+    view = RuleCatalogue.builtins().verification_view(
+        once, blind=lambda info: True)
+    assert len(view) == len(once)
+
+
+def test_a_wrapped_line_at_the_end_of_a_file_continues_nothing():
+    """There is no next line, so the backslash is a character of the value."""
+    lines = ["add name=x comment=y \\"]
+    assert R.join_continuations(lines) == lines
 
 
 def test_masks_are_never_a_rule_target():

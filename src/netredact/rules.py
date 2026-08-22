@@ -34,25 +34,48 @@ There is no ``mode`` field any more:
   token region of an ``snmp-server host`` line, which the handler walks so the
   known keywords survive and only the community / v3 user is acted on.
 
+Matched once, or searched
+-------------------------
+A keyword rule is normally *matched*: once per line, from the start. That is
+enough where a keyword can only introduce one value on a line, which is true of
+every hierarchical grammar. It is not true of RouterOS, where one command
+carries many ``key=value`` pairs and two of them can belong to the same rule --
+so :data:`_PAIRS` is *searched*, like the shape rules in :data:`_BLOB`, and
+every pair is found. Searched rules honour scope exactly as matched ones do; the
+difference is the traversal and nothing else.
+
 Scope: the block a line is inside
 ---------------------------------
 Some material is only recognisable from the block that encloses it. A bare
 ``name CUST000000000123`` is a VLAN name under ``vlan 905`` and a route-map
 name under ``route-map``, and the line itself cannot tell you which. So a rule
 can name the block it needs (``stanza``) or the blocks it must stay out of
-(:data:`_OUTSIDE`), and the sanitiser tracks two kinds of block under one set of
-names:
+(:data:`_OUTSIDE`), and the sanitiser tracks three kinds of block under one set
+of names:
 
 * a JunOS brace stanza -- ``interfaces { … }`` -- from the stanza stack;
 * an IOS-style block -- ``interface Gi0/0`` and the indented lines under it --
-  from :data:`_BLOCK_SCOPES`.
+  from :data:`_BLOCK_SCOPES`;
+* a RouterOS ``/export`` section -- ``/snmp community`` and every ``add`` /
+  ``set`` line after it -- from :data:`_ROUTEROS_SCOPES`.
 
 The names are JunOS's own wherever both dialects have the block, so one rule
 covers both: an IOS ``interface`` block is scope ``interfaces``, a ``vlan 905``
-block is scope ``vlans``. A JunOS ``set`` line carries its scope on the line
-itself (:data:`_SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is
-inside ``interfaces`` too. A block only one vendor has keeps its own name --
-``patch-panel``.
+block is scope ``vlans``, a RouterOS ``/interface ethernet`` section is scope
+``interfaces``. A JunOS ``set`` line carries its scope on the line itself
+(:data:`_SET_SCOPE`), so ``set interfaces xe-0/0/0 description …`` is inside
+``interfaces`` too, and ``/export terse`` does the same thing with its
+``/``-prefixed path. A block only one vendor has keeps its own name --
+``patch-panel``, ``snmp-community``, ``system-identity``.
+
+Wrapped lines
+-------------
+``/export`` wraps a long RouterOS command with a trailing ``\\`` and continues
+it on the next line, so a single logical command can arrive as three physical
+ones. :func:`join_continuations` undoes that before any rule runs; the reason
+it has to is spelled out there, and it is the same reason a block body or a
+banner may collapse: the line count of the output is not promised, the safety
+of it is.
 
 Scope is also how a vendor-specific rule is confined, and there is no other
 mechanism for it. :data:`_RULE_VENDORS` labels the dialect a rule was written
@@ -77,6 +100,8 @@ __all__ = [
     "REMOVED", "DESC_REMOVED", "RuleInfo", "RuleHit",
     "RuleReplacement", "RuleCatalogue",
     "HOSTNAME_PATS", "DOMAIN_PATS", "USERNAME_PATS",
+    "SCOPED_HOSTNAME_PATS", "SCOPED_USERNAME_PATS",
+    "join_continuations", "routeros_scope",
     "IPV4_RE", "IPV6_RE", "MAC_RE", "BARE_MAC_CONTEXT_RE", "EMAIL_RE",
 ]
 
@@ -299,6 +324,14 @@ _IMAGE_COLON_KEYS = r"junos|eos"
 #: description falls between them.
 _DESCRIPTION = r"\s*(?:set\s+\S.*?\s)?description\s+"
 
+#: RouterOS's ``description``, and the same principle: which rule owns a
+#: ``comment=`` is decided by its scope. Inside a RouterOS ``/interface …``
+#: section it is ``interface-comment`` in ``interfaces``; everywhere else -- a
+#: firewall rule, a DHCP lease, an address list -- it is ``comment`` in
+#: ``text``. Split in two by :data:`_OUTSIDE`, so the two can never both act on
+#: the same pair and no comment falls between them. Both live in :data:`_PAIRS`.
+_COMMENT = r'(?<![-\w])comment=%VAL%'
+
 #: everything up to the opening bracket of Arista's ``show running-config``
 #: header, ``! device: agg-sw-02 (DCS-7280SR-48C6-M, EOS-4.32.1F)``. The two
 #: values inside the brackets are introduced by no keyword at all -- position
@@ -405,6 +438,15 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     ("wpa-psk", rf".*\bwpa-psk\s+{ENC_RUN}", "secrets", None),
     ("ftp-password", rf"\s*ip\s+(?:ftp|tftp|http\s+client)\s+password\s+{ENC_RUN}", "secrets", None),
 
+    # ---- RouterOS ---------------------------------------------------------
+    # The `key=value` credentials are not here: one command line can carry two
+    # pairs belonging to one rule, so they are searched rather than matched --
+    # see :data:`_PAIRS`. This one is a header comment and can only occur once.
+    #
+    # Licence-tied to one device, not to a production line: two routers of the
+    # same model never share a software id. So `identity`, not `platform`.
+    ("software-id", r"\s*#?\s*software[-\s]id\s*[:=]\s*", "identity", None),
+
     # ---- Juniper specifics -------------------------------------------------
     ("junos-password", r".*\b(?:encrypted-password|plain-text-password-value)\s+", "secrets", None),
     # The digest a script file is pinned to. NOT a credential, but a 64-char hex
@@ -445,14 +487,26 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # `[platform] os-version` and `[platform] hardware-model`. Each of those
     # two rules reads the header itself instead, and the hostname stays with
     # `hostnames`.
+    # `[!#]?` rather than `!?`: the comment leader is `!` in IOS-style grammars
+    # and `#` in JunOS and RouterOS, and the RouterOS `/export` header writes
+    # `# model = RB4011iGS+`. Admitting both here rather than adding a second
+    # rule keeps one model rule with one action, which is what `[platform]
+    # hardware-model = "keep"` has to mean on every dialect.
     ("hardware-model",
-     _alt(_rest(rf"\s*!?\s*(?:{_MODEL_KEYS})\s*[:=]\s*"),
+     _alt(_rest(rf"\s*[!#]?\s*(?:{_MODEL_KEYS})\s*[:=]\s*"),
           # the Arista header, up to the last comma inside the brackets
           rf"{_EOS_HEADER}([^)]+),"), "platform", None),
     ("os-version",
      _alt(_rest(r"\s*(?:set\s+)?version\s+(?=\d)"),
           # the Arista header, the token after the last comma
-          rf"{_EOS_HEADER}[^)]+,\s*([^\s,)]+)\s*\)\s*$"), "platform", None),
+          rf"{_EOS_HEADER}[^)]+,\s*([^\s,)]+)\s*\)\s*$",
+          # RouterOS writes the release in the `/export` provenance comment and
+          # nowhere else: `# 2026-08-19 10:22:33 by RouterOS 7.15.3`. A third
+          # branch rather than a rule of its own, for the reason the Arista
+          # header has branches: the release is the release, and one rule means
+          # one action for it. `by RouterOS` itself survives, which is what
+          # keeps the detector working on redacted output -- see `vendors.py`.
+          r"^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$"), "platform", None),
     ("software-image",
      _rest(rf"\s*!?\s*(?:(?:{_IMAGE_KEYS})(?:\s*[:=]\s*|\s+)"
            rf"|(?:{_IMAGE_COLON_KEYS})\s*[:=]\s*)"), "platform", None),
@@ -461,8 +515,17 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # ---- free text ---------------------------------------------------------
     # location / contact are text, not secrets: they leak an org and a site,
     # not a credential. NOT_BRACE keeps `location {` a stanza opener.
-    ("location", _rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+"), "locations", None),
-    ("contact", _rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+"), "text", None),
+    # The second branch of each is RouterOS's `key=value` spelling of the same
+    # field -- `/snmp` `set location="…" contact="…"`. It is a branch and not a
+    # rule of its own so that one action governs the field whatever grammar
+    # wrote it, and it is unanchored because `/export terse` puts the section
+    # path in front of the command.
+    ("location",
+     _alt(_rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+"),
+          r".*(?<![-\w])location=%VAL%"), "locations", None),
+    ("contact",
+     _alt(_rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+"),
+          r".*(?<![-\w])contact=%VAL%"), "text", None),
     # the body of a JunOS `location { ... }` stanza: the keys carry the street
     # address the `location` rule itself must not eat (it is a stanza opener,
     # not a value). Stanza-scoped, so a `building` line elsewhere is untouched.
@@ -527,12 +590,89 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
      "circuits", None),
 ]
 
+#: the start of a RouterOS key name: a word boundary that a hyphen does not
+#: satisfy, then any hyphenated qualifiers in front of the keyword itself.
+#:
+#: RouterOS puts a qualifier there freely and means the same field by it --
+#: ``ipsec-secret=``, ``authentication-password=``, ``wpa2-pre-shared-key=`` --
+#: and the key still carries the credential whatever the prefix says. Written
+#: once because getting it wrong is silent in the worst direction: the
+#: ``(?<![-\w])`` guard on a bare ``secret=`` did not merely fail to help,
+#: it actively REFUSED ``ipsec-secret=`` and left an L2TP/IPsec secret in the
+#: output.
+#:
+#: It is deliberately NOT used in front of ``name=`` or ``comment=``, where the
+#: guard exists precisely to reject the qualified form: ``default-name=ether1``
+#: is a selector naming a factory default, not a name anyone chose, and
+#: ``ipsec-secret`` is a secret while ``default-name`` is not a name. That
+#: asymmetry is the whole reason this is a named constant rather than something
+#: repeated per rule.
+_ROS_KEY = r"(?<![-\w])(?:[a-z\d]+-)*"
+
+#: RouterOS ``key=value`` rules: ``(name, pattern, family, scope)``, the same
+#: shape as :data:`_BUILTIN`.
+#:
+#: These are SEARCHED rather than matched, and that is the difference that
+#: matters. RouterOS spells every argument as a ``key=value`` pair on an ``add``
+#: / ``set`` command, so one command carries many pairs -- and more than one of
+#: them can belong to the same rule: a wireless security profile routinely sets
+#: ``wpa-pre-shared-key=`` and ``wpa2-pre-shared-key=`` on one line. An ordinary
+#: rule is matched once per line, so a greedy ``.*`` prefix took the LAST pair,
+#: redacted it, and left the first passphrase standing next to a marker that
+#: said the line had been dealt with. Searching finds every pair, which is what
+#: the shape rules in :data:`_BLOB` have always done and for the same reason.
+#:
+#: The ``=`` is what keeps these off the space-form rules in :data:`_BUILTIN`
+#: and those off these: ``bare-password`` wants ``password\s+``, so it never
+#: sees ``password=``, and ``pre-shared-key`` wants ``pre-shared-key\s+``, so
+#: the space form and the ``=`` form are claimed by exactly one owner each. The
+#: ``(?<![-\w])`` guard in :data:`_ROS_KEY` is the other half of it: without it
+#: ``default-name=`` would be read as a ``name=``, because a hyphen is a word
+#: boundary.
+_PAIRS: list[tuple[str, str, str, str | None]] = [
+    ("routeros-password",
+     rf'{_ROS_KEY}(?:password|passphrase)=%VAL%', "secrets", None),
+    ("routeros-secret", rf'{_ROS_KEY}secret=%VAL%', "secrets", None),
+    # `pre-?shared` because RouterOS uses both spellings of one field: wireless
+    # writes `wpa2-pre-shared-key=` and WireGuard writes `preshared-key=`, with
+    # no hyphen inside the word. Missing the second left a WireGuard peer's PSK
+    # in the output.
+    ("routeros-pre-shared-key",
+     rf'{_ROS_KEY}pre-?shared-key=%VAL%', "secrets", None),
+    # A WireGuard interface's own key. It is 44 characters of base64, so
+    # `long-base64-left` reported it -- loudly, but a reported credential is
+    # still a credential in the file, and only a rule can destroy it.
+    ("routeros-private-key", rf'{_ROS_KEY}private-key=%VAL%', "secrets", None),
+    # The other half of a WireGuard pair, and NOT a credential: a public key is
+    # published on purpose. It is `identity` for exactly the reason
+    # `ssh-public-key` is -- it ties the file to one real device or peer, and the
+    # shape checks cannot tell an authorised key from a leaked one, so a kept one
+    # has to be a rule they can be blinded to rather than an unexplained base64
+    # run that fails `--strict`.
+    ("routeros-public-key", rf'{_ROS_KEY}public-key=%VAL%', "identity", None),
+    # A community string, and ONLY inside `/snmp community`. Everywhere else in
+    # a RouterOS export `name=` is an interface, a firewall rule, a bridge or a
+    # DHCP pool, and the line itself cannot tell you which -- the section is the
+    # whole of the evidence. This is also the rule that made the searched path
+    # learn about scope at all; see ``RuleCatalogue._line``.
+    ("routeros-snmp-community", r'(?<![-\w])name=%VAL%', "secrets",
+     "snmp-community"),
+    # RouterOS's `description`, split by scope in exactly the same way and for
+    # exactly the same reason: on an interface it is a port label a reviewer
+    # needs, on a firewall rule or a DHCP lease it is ordinary free text. One
+    # selector, two rules, made disjoint by :data:`_OUTSIDE`.
+    ("comment", _COMMENT, "text", None),
+    ("interface-comment", _COMMENT, "interfaces", "interfaces"),
+]
+
 #: rule -> the blocks it must not fire inside, because a scoped rule of its own
-#: owns that material there. The pair is exhaustive and disjoint by
+#: owns that material there. Each pair is exhaustive and disjoint by
 #: construction: every description is matched by exactly one of
-#: ``interface-description`` and ``description``.
+#: ``interface-description`` and ``description``, every RouterOS ``comment=`` by
+#: exactly one of ``interface-comment`` and ``comment``.
 _OUTSIDE: dict[str, tuple[str, ...]] = {
     "description": ("interfaces",),
+    "comment": ("interfaces",),
 }
 
 #: rule -> the dialect its grammar comes from. **ADVISORY ONLY.** Nothing in
@@ -563,6 +703,19 @@ _RULE_VENDORS: dict[str, str] = {
     "patch-name": "arista",
     "pseudowire-name": "arista",
     "unsupported-transceiver": "arista",
+    # RouterOS grammar: a `key=value` pair, or the `/export` header comment.
+    # `comment` and `interface-comment` are here for the `=` in the pattern,
+    # the same way `junos-community` is here for the JunOS `community X { … }`
+    # shape -- not because either is skipped on another vendor's file.
+    "comment": "mikrotik",
+    "interface-comment": "mikrotik",
+    "routeros-password": "mikrotik",
+    "routeros-pre-shared-key": "mikrotik",
+    "routeros-private-key": "mikrotik",
+    "routeros-public-key": "mikrotik",
+    "routeros-secret": "mikrotik",
+    "routeros-snmp-community": "mikrotik",
+    "software-id": "mikrotik",
 }
 
 #: rules whose value needs a code path rather than a plain span replacement
@@ -598,8 +751,11 @@ _BLOB: list[tuple[str, str, str, int]] = [
     # atomic header: the optional colon must not be handed back as the value,
     # so a bare `! License UDI:` heading with no data on it never matches
     ("license-udi", r"^\s*!?\s*(?>License\s+UDI:?\s*)(.+)$", "identity", re.I),
+    # `[!#]?` for the same reason as `hardware-model`: RouterOS's `/export`
+    # header writes `# serial number = HEA08XXXXXX`, and one serial rule with
+    # one action has to reach it too.
     ("serial-number",
-     r"^\s*!?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$",
+     r"^\s*[!#]?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$",
      "identity", 0),
 ]
 
@@ -612,7 +768,26 @@ def _blob_rules() -> list[_Rule]:
     return out
 
 
-_BLOB_RULES: list[_Rule] = _blob_rules()
+def _pair_rules() -> list[_Rule]:
+    """Compile :data:`_PAIRS`, which unlike :data:`_BLOB` carry scope.
+
+    A ``key=value`` rule is a keyword rule that happens to need searching, so it
+    keeps everything a keyword rule has -- the block it must be inside, the
+    blocks it must stay out of -- and only the traversal differs.
+    """
+    out = []
+    for name, pattern, family, stanza in _PAIRS:
+        regex, targets = _compile(pattern)
+        out.append(_Rule(name=name, regex=regex, family=family, targets=targets,
+                         stanza=stanza, outside=_OUTSIDE.get(name, ()),
+                         vendor=_RULE_VENDORS.get(name)))
+    return out
+
+
+#: everything the catalogue *searches* rather than matches. The pair rules come
+#: FIRST: a `password=$9$…` is a credential before it is a JunOS blob, and that
+#: is the order the two had when one of them was an ordinary rule.
+_SEARCHED_RULES: list[_Rule] = _pair_rules() + _blob_rules()
 
 #: opaque multi-line blocks: (start, end, name, family). The body is the target.
 _BLOCK_STARTS = (
@@ -671,7 +846,8 @@ class RuleCatalogue:
 
     @classmethod
     def builtins(cls) -> RuleCatalogue:
-        return cls(tuple(_build_rules()), tuple(_BLOB_RULES), tuple(_BLOCK_STARTS))
+        return cls(tuple(_build_rules()), tuple(_SEARCHED_RULES),
+                   tuple(_BLOCK_STARTS))
 
     def configured(self, custom=()) -> RuleCatalogue:
         """Return a catalogue with custom rules appended to ordinary rules."""
@@ -691,8 +867,10 @@ class RuleCatalogue:
 
     def inventory(self) -> tuple[RuleInfo, ...]:
         """Every rule in report order, without executable representations."""
+        # `_PAIRS` is included so the generated docs print the pattern as it is
+        # written, `%VAL%` and all, rather than the expanded capturing group
         source_patterns = {name: pattern for name, pattern, _family, _scope
-                           in _BUILTIN}
+                           in _BUILTIN + _PAIRS}
         ordinary = tuple(
             RuleInfo(r.name, r.family, r.vendor, r.custom, r.stanza, r.outside,
                      source_patterns.get(r.name, r.regex.pattern))
@@ -707,7 +885,7 @@ class RuleCatalogue:
                            (), _BANNER_RE.pattern),)
         searched = tuple(
             RuleInfo(r.name, r.family, r.vendor, r.custom, r.stanza, r.outside,
-                     r.regex.pattern)
+                     source_patterns.get(r.name, r.regex.pattern))
             for r in self._searched
         )
         blocks = tuple(
@@ -781,7 +959,14 @@ class RuleCatalogue:
             match = rule.regex.match(text)
             if match:
                 text = self._splice(rule, match, text, replace)
+        # Scope reached this path with `routeros-snmp-community`: a RouterOS
+        # `name=` is a community string under `/snmp community` and an object
+        # name everywhere else, so a searched rule needs the block it is inside
+        # exactly as a matched one does. The shape rules in `_BLOB` name no
+        # scope, so this was inert until then.
         for rule in self._searched:
+            if not self._scope(rule, inside):
+                continue
             for match in reversed(list(rule.regex.finditer(text))):
                 text = self._splice(rule, match, text, replace)
         return text
@@ -791,22 +976,28 @@ class RuleCatalogue:
                   finish_line: Callable[[str], str] = lambda line: line,
                   ) -> list[str]:
         """Transform rules in their canonical order, including scoped state."""
-        source = [line.rstrip("\n") for line in lines]
+        source = join_continuations(line.rstrip("\n") for line in lines)
         out: list[str] = []
         stanza: list[str] = []
         ios_block: str | None = None
+        ros_section: str | None = None
         index = 0
         while index < len(source):
             raw = source[index]
             if raw.strip() and not raw[:1].isspace():
                 ios_block = next((name for name, pat in _BLOCK_SCOPES
                                   if pat.match(raw)), None)
+            # the section line is inside the section it opens, exactly as an
+            # IOS-style block header is inside its own block -- and it has to
+            # be, or a `/export terse` line would never be inside anything
+            ros_section = routeros_scope(raw, ros_section)
             set_match = _SET_SCOPE.match(raw)
             if re.match(r"\s*set\s+system\s+location\b", raw, re.I):
                 line_scope = ("location",)
             else:
                 line_scope = (set_match.group(1).lower(),) if set_match else ()
-            inside = tuple(stanza) + ((ios_block,) if ios_block else ()) + line_scope
+            inside = (tuple(stanza) + ((ios_block,) if ios_block else ())
+                      + ((ros_section,) if ros_section else ()) + line_scope)
 
             block = next(((start, end, name, family)
                           for start, end, name, family in self._blocks
@@ -880,7 +1071,16 @@ class RuleCatalogue:
 
     def verification_view(self, lines: Iterable[str], *,
                           blind: Callable[[RuleInfo], bool]) -> list[str]:
-        """Return line-aligned text with selected rule values blanked out."""
+        """Return line-aligned text with selected rule values blanked out.
+
+        ``transform`` may emit fewer lines than it was given -- a collapsed
+        block body, a banner, a joined RouterOS wrap -- and this view has to
+        stay line-for-line with its own input, because ``verify`` zips the two
+        together. So each of those is neutralised before ``transform`` sees it:
+        a multi-line body is masked line by line below, and a wrap is already
+        undone, since the caller normalises with :func:`join_continuations`
+        first and joining twice is joining once.
+        """
         selected = {info.name for info in self.inventory() if blind(info)}
 
         def mask(hit: RuleHit) -> RuleReplacement:
@@ -949,6 +1149,25 @@ USERNAME_PATS = (
     re.compile(r"^\s*##\s*Last changed:.*?\bby\s+(\S+)", re.I),
 )
 
+#: A name only the enclosing section identifies, and the sections that identify
+#: it: ``(scopes, pattern)``, read by the collect pass the same way the flat
+#: tables above are. RouterOS spells all four of these ``name=`` -- the device's
+#: own name, a login, a PPPoE subscriber's account and an interface -- so the
+#: line carries no evidence at all and the section carries all of it. That is
+#: the collect-pass half of what :data:`_ROUTEROS_SCOPES` does for the rules,
+#: and it is a table rather than an extra pattern for the same reason a scoped
+#: rule is a scoped rule: an unscoped ``name=`` would substitute every interface
+#: name in the file as if it were the hostname.
+SCOPED_HOSTNAME_PATS = (
+    (("system-identity",), re.compile(r'(?<![-\w])name=("[^"]*"|\S+)', re.I)),
+)
+#: a PPPoE / L2TP account name is a customer's login, so ``/ppp secret`` names
+#: are usernames and not hostnames
+SCOPED_USERNAME_PATS = (
+    (("user", "ppp-secret"),
+     re.compile(r'(?<![-\w])name=("[^"]*"|\S+)', re.I)),
+)
+
 IPV4_RE = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
 IPV6_RE = re.compile(
     r"(?<![\w:.])("
@@ -1009,3 +1228,121 @@ _BLOCK_SCOPES = (
 #: that line only -- ``set interfaces xe-0/0/0 description …`` is inside
 #: ``interfaces`` without any enclosing block to be inside of.
 _SET_SCOPE = re.compile(r"\s*set\s+([\w-]+)\b", re.I)
+
+#: a RouterOS ``/export`` section path: a ``/``-prefixed word path at column
+#: zero. ``/export`` writes the path on a line of its own and the ``add`` /
+#: ``set`` commands under it; ``/export terse`` repeats the whole path on every
+#: command line instead. Both forms answer the same question, so both go through
+#: this one recogniser -- the terse form being the RouterOS analogue of
+#: :data:`_SET_SCOPE`, a scope carried on the line rather than by a block.
+#:
+#: Column zero and the word-path shape are the guard. A base64 body line can
+#: begin with ``/``, and it must not be able to open a section: it has no space
+#: in it, so its whole run has to spell a section path exactly before any scope
+#: below will match it.
+_ROUTEROS_SECTION = re.compile(r"^/([a-z][\w-]*(?:\s+[a-z][\w-]*)*)")
+
+#: a RouterOS section path -> the scope it opens, longest path first, because
+#: ``/snmp community`` is not ``/snmp``.
+#:
+#: The naming follows the rule set out above :data:`_BLOCK_SCOPES`: where both
+#: dialects have the block the name is JunOS's own, so ONE rule reaches every
+#: dialect -- a ``/interface ethernet`` section is scope ``interfaces`` exactly
+#: as an ``interface Gi0/0`` block and an ``interfaces { … }`` stanza are. A
+#: section only RouterOS has keeps its own name.
+#:
+#: Those own-name sections are not decoration. ``name=`` is a community string
+#: under ``/snmp community``, a login under ``/user`` and ``/ppp secret``, the
+#: device's own name under ``/system identity``, and an interface, bridge,
+#: firewall rule or address list everywhere else. The line is identical in all
+#: five cases, so the section is the only evidence there is -- which is exactly
+#: the argument for scope in the first place, and exactly why none of this is a
+#: vendor gate: a file with no ``/user`` section in it cannot reach the rules
+#: and the collectors that need one.
+_ROUTEROS_SCOPES = (
+    ("snmp-community", re.compile(r"snmp\s+community(?![\w-])", re.I)),
+    ("system-identity", re.compile(r"system\s+identity(?![\w-])", re.I)),
+    ("ppp-secret", re.compile(r"ppp\s+secret(?![\w-])", re.I)),
+    ("interfaces", re.compile(r"interface(?![\w-])", re.I)),
+    ("snmp", re.compile(r"snmp(?![\w-])", re.I)),
+    ("user", re.compile(r"user(?![\w-])", re.I)),
+)
+
+
+def routeros_scope(line: str, current: str | None) -> str | None:
+    """The RouterOS section scope in force after ``line``.
+
+    A ``/``-prefixed line always REPLACES the section, even when its path is one
+    no scope names: an ``/ip address`` header has to end the ``/user`` section,
+    or the next ``name=`` would still be read as a login. Any other line leaves
+    the section as it found it.
+    """
+    match = _ROUTEROS_SECTION.match(line)
+    if not match:
+        return current
+    path = match.group(1)
+    return next((scope for scope, pat in _ROUTEROS_SCOPES if pat.match(path)),
+                None)
+
+
+#: the opening line of a wrapped RouterOS command: an ``add`` / ``set`` /
+#: ``remove`` at column zero -- optionally behind a ``/export terse`` path --
+#: whose last character is a backslash.
+#:
+#: That command word is the whole of the evidence, and it is needed. A trailing
+#: backslash is not line-continuation syntax in IOS or JunOS, but it is
+#: perfectly ordinary in an ASCII-art banner body, and joining those would
+#: mangle a banner. So a line has to be spelled like a RouterOS command before
+#: its backslash is read as one, which is evidence in the file rather than a
+#: guess about the file -- the same standard scope is held to.
+_ROUTEROS_WRAPPED = re.compile(
+    r"^(?:/[a-z][\w-]*(?:\s+[a-z][\w-]*)*\s+)?(?:add|set|remove)\s+\S.*\\$",
+    re.I)
+
+
+def join_continuations(lines: Iterable[str]) -> list[str]:
+    r"""Join every wrapped RouterOS command into one logical line.
+
+    ``/export`` wraps a long command with a trailing ``\`` and continues it,
+    indented, on the next line. Rules see one line at a time, so a wrap would
+    carry the tail of a value past every rule that could recognise it: given
+    ``wpa2-pre-shared-key="Winter Harbour \``, the value matcher cannot close
+    the quote, so it takes the opening fragment, a marker is written over that
+    much, and the rest of the passphrase leaves the tool on the next line with
+    ``--strict`` reporting success. A half-redacted line reads as a finished
+    one, which is worse than a plain miss -- so the wrap is undone BEFORE any
+    rule runs.
+
+    The ``\``, the newline and the continuation's indent become one space, which
+    is what RouterOS itself does with them: it wraps at a token boundary
+    precisely because the continuation's leading whitespace is only a separator,
+    so the joined line is still valid RouterOS and still re-imports.
+
+    The line count therefore changes, as it already can where a block body or a
+    banner collapses. Idempotent, because nothing in the result ends in ``\``:
+    that is what lets ``verify`` normalise its own input the same way and stay
+    line-for-line with what :meth:`RuleCatalogue.transform` produced.
+    """
+    source = list(lines)
+    out: list[str] = []
+    index = 0
+    while index < len(source):
+        line = source[index]
+        # a trailing backslash on the last line of a file continues nothing, so
+        # it is a character of the value and stays exactly where it is
+        if not (_ROUTEROS_WRAPPED.match(line) and index + 1 < len(source)):
+            out.append(line)
+            index += 1
+            continue
+        parts = [line[:-1].rstrip()]
+        index += 1
+        while index < len(source):
+            nxt = source[index]
+            index += 1
+            if nxt.endswith("\\") and index < len(source):
+                parts.append(nxt[:-1].strip())
+                continue
+            parts.append(nxt.strip())
+            break
+        out.append(" ".join(parts))
+    return out

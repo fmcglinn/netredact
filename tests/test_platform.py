@@ -42,6 +42,17 @@ EOS_HEADER = (
     "switchname agg-sw-02\n"
 )
 
+#: the four comment lines a RouterOS `/export` opens with. Four values of four
+#: kinds, all of them introduced by `#` rather than `!` -- which is why
+#: `hardware-model` and `serial-number` admit both leaders rather than the
+#: RouterOS forms getting rules of their own.
+ROS_HEADER = (
+    "# 2026-08-19 10:22:33 by RouterOS 7.15.3\n"
+    "# software id = ABCD-EFGH\n"
+    "# model = RB4011iGS+\n"
+    "# serial number = HEA08XXXXXX\n"
+)
+
 
 def redacted(text: str) -> str:
     cfg = policy(platform="redact")
@@ -98,6 +109,40 @@ def test_the_three_families_on_the_header_line_move_independently():
     assert re.fullmatch(
         r"! device: device-[0-9a-f]+ \(<MODEL-[0-9a-f]+>, <VERSION-[0-9a-f]+>\)",
         line), line
+
+
+def test_the_routeros_header_loses_its_model_and_release_but_keeps_its_shape():
+    """`#` is the comment leader here, and that is the whole of the change.
+
+    A separate `routeros-model` rule would be a second action for the same
+    disclosure, so `[platform] hardware-model = "keep"` would mean one thing on
+    an IOS file and another on a RouterOS one.
+    """
+    out = redacted(ROS_HEADER)
+    assert "by RouterOS <REMOVED>" in out
+    assert "# model = <REMOVED>" in out
+    assert "RB4011iGS+" not in out and "7.15.3" not in out
+    # the serial and the software id are `identity`, not `platform`
+    assert "HEA08XXXXXX" in out and "ABCD-EFGH" in out
+
+
+def test_the_routeros_header_fields_belong_to_four_different_rules():
+    cfg = policy(platform="redact", identity="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    result = sanitise_text(ROS_HEADER, cfg, salt=SALT)
+    assert result.counts["os-version"] == 1         # 7.15.3
+    assert result.counts["hardware-model"] == 1     # RB4011iGS+
+    assert result.counts["serial-number"] == 1      # HEA08XXXXXX
+    assert result.counts["software-id"] == 1        # ABCD-EFGH
+
+
+def test_a_software_id_is_identity_and_not_platform():
+    """It is licence-tied: two routers of one model never share it, so
+    `platform = "redact"` on a fleet must leave it standing and `identity` must
+    take it."""
+    assert "ABCD-EFGH" in redacted(ROS_HEADER)
+    out = sanitise_text(ROS_HEADER, policy(identity="redact"), salt=SALT).text
+    assert "software id = <REMOVED>" in out
 
 
 def test_a_boot_image_goes_whether_or_not_it_is_commented_out():
@@ -196,9 +241,33 @@ def test_the_section_defaults_to_keep_and_names_every_platform_rule():
     ("Building configuration...\nCurrent configuration : 4523 bytes\n", "cisco"),
     ("version 9.3(5)\nfeature bgp\n", "cisco"),
     ("version 21.4R3-S4.9;\nsystem {\n", "juniper"),
+    ("# 2026-08-19 10:22:33 by RouterOS 7.15.3\n", "mikrotik"),
+    ("# software id = ABCD-EFGH\n", "mikrotik"),
+    # no header at all: the section paths and the selector expression carry it
+    ("/interface ethernet\nset [ find default-name=ether1 ] name=ether1\n",
+     "mikrotik"),
 ])
 def test_a_platform_line_names_the_vendor_on_its_own(text, vendor):
     assert detect_vendor(text) == vendor
+
+
+def test_routeros_detection_survives_platform_and_identity_destroying_it():
+    """Both decisive RouterOS markers live in material the policy removes.
+
+    `by RouterOS` and `software id =` are the keywords; the release after the
+    first is `platform` and the id after the second is `identity`. The keywords
+    stay, which is what the detector reads -- exactly the arrangement the
+    Arista header already relies on.
+    """
+    cfg = policy(platform="redact", identity="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    out = sanitise_text(ROS_HEADER, cfg, salt=SALT).text
+    assert "7.15.3" not in out and "ABCD-EFGH" not in out
+    assert detect_vendor(out) == "mikrotik"
+
+
+def test_a_routeros_export_is_not_read_as_another_vendor(mikrotik):
+    assert detect_vendor(mikrotik) == "mikrotik"
 
 
 def test_detection_survives_the_platform_family_destroying_its_evidence():

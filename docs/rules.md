@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**55 rules**: 33 `secrets`, 5 `text`, 2 `locations`, 7 `identity`, 4 `platform`, 1 `interfaces`, 1 `vlans`, 2 `circuits`.
+**64 rules**: 38 `secrets`, 6 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 2 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 15 verification checks
 
@@ -61,24 +61,45 @@ Some material is only recognisable from what encloses it. A bare
 `name CUST000000000123` is a VLAN name under `vlan 905` and a
 route-map name under `route-map`, and the line itself cannot tell you
 which. So a rule may name the block it needs, or the blocks it must
-stay out of, and two kinds of block share one set of names:
+stay out of, and three kinds of block share one set of names:
 
-JunOS stanzas, IOS-style blocks and one-line JunOS `set` commands
-share the scope names shown in the rule catalogue below.
+JunOS stanzas, IOS-style blocks, RouterOS `/export` sections, and
+the one-line forms of the last two — a JunOS `set` command and a
+`/export terse` line — share the scope names shown in the rule
+catalogue below.
 
-Where both dialects have the block the name is JunOS's own —
-`interfaces`, `vlans` — so one rule covers every dialect: an IOS
-`interface Gi0/0` block, a JunOS `interfaces { … }` stanza and a
-`set interfaces … description …` line are all inside `interfaces`.
-A block only one vendor has keeps its own name: `patch-panel`. Any
-other unindented line ends an IOS-style block, including the bare
-`!`.
+Where more than one dialect has the block the name is JunOS's own —
+`interfaces`, `vlans`, `snmp` — so one rule covers every dialect: an
+IOS `interface Gi0/0` block, a JunOS `interfaces { … }` stanza, a
+`set interfaces … description …` line and a RouterOS `/interface
+ethernet` section are all inside `interfaces`. A block only one
+vendor has keeps its own name: `patch-panel`, `snmp-community`,
+`system-identity`, `user`, `ppp-secret`. Any other unindented line
+ends an IOS-style block, including the bare `!`; a RouterOS section
+lasts until the next `/`-prefixed line.
 
 `interface Vlan905` is scope `interfaces`, not `vlans`: an SVI is a
 port, and only a `vlan <id>` block defines a VLAN.
 
 This is also what `[[custom]] stanza` sets, so a custom rule can be
 restricted to a block on any vendor, not only a JunOS stanza.
+
+## Wrapped lines
+
+RouterOS `/export` wraps a long command with a trailing `\` and
+continues it, indented, on the next line, so one logical command can
+arrive as three physical ones. Rules see one line at a time, so the
+wrap is undone before any rule runs and the command is written back
+out unwrapped — otherwise a wrapped
+`wpa2-pre-shared-key="…` would have the tail of its value carried
+past every rule that could recognise it, a marker written over the
+opening fragment, and the rest of the passphrase left in the output
+with `--strict` reporting success.
+
+Only an `add` / `set` / `remove` at the start of a line is read this
+way. A trailing backslash means nothing in IOS or JunOS but is
+perfectly ordinary in an ASCII-art banner, so the RouterOS command
+word is the evidence that has to be present first.
 
 ## Dialects are labelled, not gated
 
@@ -140,15 +161,16 @@ Each rule name links to its pattern, which is listed in full under
 | [`ppp-credential`](#ppp-credential) | `secrets` | `ppp chap\|pap\|eap password\|secret\|sent-username U password X` |  |
 | [`wpa-psk`](#wpa-psk) | `secrets` | `wpa-psk X` |  |
 | [`ftp-password`](#ftp-password) | `secrets` | `ip ftp\|tftp\|http client password X` |  |
+| [`software-id`](#software-id) | `identity` | `# software id = X`: RouterOS's licence id, tied to the one device, so `identity` and not `platform` -- mikrotik grammar |  |
 | [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
 | [`script-checksum`](#script-checksum) | `identity` |  |  |
 | [`unsupported-transceiver`](#unsupported-transceiver) | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar |  |
-| [`hardware-model`](#hardware-model) | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; and the model in Arista's `! device: <name> (<model>, <release>)` header |  |
-| [`os-version`](#os-version) | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; and the release in Arista's `! device:` header |  |
+| [`hardware-model`](#hardware-model) | `platform` | a `Model:` / `Hardware:` / `Chassis type:` / `PID:` line, where the `:` or `=` is required so the `platform` and `model` config keywords are not touched; the model in Arista's `! device: <name> (<model>, <release>)` header; and RouterOS's `# model = X` |  |
+| [`os-version`](#os-version) | `platform` | a `version <digits...>` line: IOS `version 15.7`, NX-OS `version 9.3(5)`, JunOS `version 21.4R3-S4.9;` or `set version 23.4R2-S5.6`; the release in Arista's `! device:` header; and the one in RouterOS's `# ... by RouterOS X` export header, where `by RouterOS` itself survives so the detector still works on redacted output |  |
 | [`software-image`](#software-image) | `platform` | `Software image version:`, `System image file is ...`, `Software version:`; and the bare `Junos:` / `EOS:` forms, where a colon is required |  |
 | [`boot-image`](#boot-image) | `platform` | `boot system <image>`, commented out or not |  |
-| [`location`](#location) | `locations` | the whole value of a `location` line; never a JunOS `location {` stanza opener |  |
-| [`contact`](#contact) | `text` | the whole value of a `contact` line |  |
+| [`location`](#location) | `locations` | the whole value of a `location` line, and RouterOS's `location=`; never a JunOS `location {` stanza opener |  |
+| [`contact`](#contact) | `text` | the whole value of a `contact` line, and RouterOS's `contact=` |  |
 | [`junos-location-body`](#junos-location-body) | `locations` | the street address inside a JunOS `location { ... }` stanza -- juniper grammar | inside `location` |
 | [`description`](#description) | `text` | a `description` anywhere EXCEPT on an interface -- a VRF, a policy, a peer group. The interface case is its own rule in its own family, one row down |  outside `interfaces` |
 | [`acl-remark`](#acl-remark) | `text` | an ACL `remark` |  |
@@ -158,11 +180,19 @@ Each rule name links to its pattern, which is listed in full under
 | [`patch-name`](#patch-name) | `circuits` | the name of a `patch` inside a `patch panel` block. The `patch panel` header itself is never the value -- arista grammar | inside `patch-panel` |
 | [`pseudowire-name`](#pseudowire-name) | `circuits` | a pseudowire name, both where it is defined under `mpls ldp` -> `pseudowires` and where a `connector` line refers to it (`pseudowire ldp X alternate Y`). One rule, so a definition and its references can never be given two different actions -- arista grammar |  |
 | [`banner`](#banner) | `text` | `banner <type> <delim>` through its closing delimiter |  |
+| [`routeros-password`](#routeros-password) | `secrets` | RouterOS `password=` / `passphrase=`, with or without a hyphenated qualifier in front -- `authentication-password=`, `encryption-password=`. The `=` is what keeps this off the space-form `bare-password` and vice versa -- mikrotik grammar |  |
+| [`routeros-secret`](#routeros-secret) | `secrets` | RouterOS `secret=`, qualified or not -- a RADIUS shared secret, an L2TP `ipsec-secret=` -- mikrotik grammar |  |
+| [`routeros-pre-shared-key`](#routeros-pre-shared-key) | `secrets` | RouterOS `pre-shared-key=`, `wpa-pre-shared-key=`, `wpa2-pre-shared-key=`, and WireGuard's `preshared-key=` -- RouterOS spells it both ways -- mikrotik grammar |  |
+| [`routeros-private-key`](#routeros-private-key) | `secrets` | RouterOS `private-key=`, e.g. a WireGuard interface's own key -- mikrotik grammar |  |
+| [`routeros-public-key`](#routeros-public-key) | `identity` | RouterOS `public-key=`: the other half of a WireGuard pair, and NOT a credential. It is `identity` for the reason `ssh-public-key` is -- it ties the file to one device or peer, and a kept one has to be a rule the shape checks can be blinded to -- mikrotik grammar |  |
+| [`routeros-snmp-community`](#routeros-snmp-community) | `secrets` | `name=` under `/snmp community`, which is what RouterOS calls a community string. `name=` is NOT a secret anywhere else -- there it is an interface, a bridge or a firewall rule -- mikrotik grammar | inside `snmp-community` |
+| [`comment`](#comment) | `text` | RouterOS's `comment=`, anywhere EXCEPT inside a `/interface …` section -- a firewall rule, a DHCP lease, an address list. The interface case is its own rule in its own family, exactly as `description` is split -- mikrotik grammar |  outside `interfaces` |
+| [`interface-comment`](#interface-comment) | `interfaces` | the same RouterOS `comment=`, when it is inside a `/interface …` section -- mikrotik grammar | inside `interfaces` |
 | [`junos-type9`](#junos-type9) | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  |
 | [`crypt-hash`](#crypt-hash) | `secrets` | any `$1$ $2a/b/x/y$ $5$ $6$ $y$` hash, wherever it appears |  |
 | [`ssh-public-key`](#ssh-public-key) | `identity` | `ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` plus `AAAA...`, and JunOS `ssh-known-hosts` key forms |  |
 | [`license-udi`](#license-udi) | `identity` | `License UDI: ...` |  |
-| [`serial-number`](#serial-number) | `identity` | `Serial Number: ...`, `System serial number ...` |  |
+| [`serial-number`](#serial-number) | `identity` | `Serial Number: ...`, `System serial number ...`, RouterOS's `# serial number = ...` |  |
 | [`certificate-block`](#certificate-block) | `identity` | a Cisco `certificate self-signed ... quit` body |  |
 | [`key-string-block`](#key-string-block) | `secrets` | a multi-line `key-string ... quit` body |  |
 | [`pem-key`](#pem-key) | `secrets` | a PEM private key or DH parameter block |  |
@@ -344,6 +374,12 @@ block also carries the pattern that ends it.
 \s*ip\s+(?:ftp|tftp|http\s+client)\s+password\s+(?:<ENC>\s+)*
 ```
 
+### `software-id`
+
+```
+\s*#?\s*software[-\s]id\s*[:=]\s*
+```
+
 ### `junos-password`
 
 ```
@@ -365,13 +401,13 @@ block also carries the pattern that ends it.
 ### `hardware-model`
 
 ```
-(?:^\s*!?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),)
+(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),)
 ```
 
 ### `os-version`
 
 ```
-(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$)
+(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$)
 ```
 
 ### `software-image`
@@ -389,13 +425,13 @@ block also carries the pattern that ends it.
 ### `location`
 
 ```
-^\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+(?:^\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
 ```
 
 ### `contact`
 
 ```
-^\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+(?:^\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
 ```
 
 ### `junos-location-body`
@@ -452,6 +488,54 @@ block also carries the pattern that ends it.
 ^\s*banner\s+([\w-]+)\s+(.*)$
 ```
 
+### `routeros-password`
+
+```
+(?<![-\w])(?:[a-z\d]+-)*(?:password|passphrase)=%VAL%
+```
+
+### `routeros-secret`
+
+```
+(?<![-\w])(?:[a-z\d]+-)*secret=%VAL%
+```
+
+### `routeros-pre-shared-key`
+
+```
+(?<![-\w])(?:[a-z\d]+-)*pre-?shared-key=%VAL%
+```
+
+### `routeros-private-key`
+
+```
+(?<![-\w])(?:[a-z\d]+-)*private-key=%VAL%
+```
+
+### `routeros-public-key`
+
+```
+(?<![-\w])(?:[a-z\d]+-)*public-key=%VAL%
+```
+
+### `routeros-snmp-community`
+
+```
+(?<![-\w])name=%VAL%
+```
+
+### `comment`
+
+```
+(?<![-\w])comment=%VAL%
+```
+
+### `interface-comment`
+
+```
+(?<![-\w])comment=%VAL%
+```
+
 ### `junos-type9`
 
 ```
@@ -479,7 +563,7 @@ block also carries the pattern that ends it.
 ### `serial-number`
 
 ```
-^\s*!?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
+^\s*[!#]?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
 ```
 
 ### `certificate-block`

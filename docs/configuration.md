@@ -63,8 +63,8 @@ of keep, pseudo, hash, redact
 | Key | Default | Meaning |
 |---|---|---|
 | `salt_file` | unset | CLI-oriented file holding the HMAC salt, created `0600` by the CLI if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Library callers pass `salt=` bytes to `sanitise_text`; the library never reads or writes this path. |
-| `marker` | `true` | Write one comment line at the top of the output naming netredact and its version — `!` for IOS-style grammar, `#` for JunOS. It is the only thing in a sanitised file that says it is one, and so the only evidence a re-run can be refused on: turn it off and a second pass re-maps pseudonyms with nothing to warn you. CLI-oriented — `sanitise_text` never adds it, see [the library docs](library.md). |
-| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
+| `marker` | `true` | Write one comment line at the top of the output naming netredact and its version — `!` for IOS-style grammar, `#` for JunOS and RouterOS. It is the only thing in a sanitised file that says it is one, and so the only evidence a re-run can be refused on: turn it off and a second pass re-maps pseudonyms with nothing to warn you. CLI-oriented — `sanitise_text` never adds it, see [the library docs](library.md). |
+| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper`, `mikrotik` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
 
 ## Every rule has exactly one home
 
@@ -569,7 +569,7 @@ family  = "secrets"          # default; decides the action and the rendering
 | `pattern` | yes | A regex. See below for what its shape means. |
 | `family` | no, defaults to `"secrets"` | One of `secrets`, `text`, `identity`, `platform`, `interfaces`, `vlans`, `circuits`, `hostnames`, `domains`, `usernames`, `emails`, `ipv4`, `ipv6`, `macs`. |
 | `action` | no | This rule's own action, the way a named key gives one to a built-in rule. Without it the rule takes its family's action. |
-| `stanza` | no | The block the rule is restricted to. A JunOS top-level stanza, exactly like the built-in `junos-community` — or `interfaces` / `vlans` / `patch-panel`, which match the IOS-style block of that name. See [scope](rules.md#scope-the-block-a-line-is-inside). |
+| `stanza` | no | The block the rule is restricted to. A JunOS top-level stanza, exactly like the built-in `junos-community`; `interfaces` / `vlans` / `patch-panel`, which match the IOS-style block of that name; or a RouterOS `/export` section — `interfaces`, `snmp`, `snmp-community`, `system-identity`, `user`, `ppp-secret`. See [scope](rules.md#scope-the-block-a-line-is-inside). |
 
 Use **single-quoted** TOML strings so backslashes reach the regex engine intact.
 

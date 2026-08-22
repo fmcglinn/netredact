@@ -68,8 +68,13 @@ VTOK = ENC[:-1] + r"|type|value|key|level\s+\d+)"
 #: once redacted the encoding type instead of the key, and because no
 #: check named the keyword, a cleartext passphrase left the tool with
 #: ``--strict`` reporting success.
-_CRED_KEYWORDS = (r"password|passwd|secret|pre-shared-key|key-string|"
-                  r"authentication-key|encrypted-password|wpa-psk")
+#: ``private-key`` is named for the same reason ``wpa-psk`` is: a WireGuard key
+#: is 44 characters of base64, so ``long-base64-left`` happens to catch one
+#: today, but a check that only knows a shape must not be the only thing
+#: standing between a regressed rule and a credential in the output.
+_CRED_KEYWORDS = (r"password|passwd|passphrase|secret|pre-?shared-key|"
+                  r"private-key|key-string|authentication-key|"
+                  r"encrypted-password|wpa-psk")
 
 #: ``community`` only where it is an SNMP community: after ``snmp-server`` /
 #: ``snmp`` / ``set snmp``, or first on the line (the JunOS ``snmp { community
@@ -90,9 +95,12 @@ VERIFY_RULES = [
     ("type7-left", re.compile(r"\b(?:password|key)\s+7\s+[0-9A-Fa-f]{6,}", re.I)),
     ("long-hex-left", re.compile(r"(?<![\w.])[0-9A-Fa-f]{24,}(?![\w.])")),
     ("long-base64-left", re.compile(r"(?<![\w+/=])[A-Za-z0-9+/]{40,}={0,2}(?![\w+/=])")),
+    # the optional `=` is RouterOS's separator: `password=<REMOVED>` is a
+    # credential this tool has already dealt with, and without it every
+    # `key=value` pair netredact had destroyed was reported as a survivor
     ("credential-left", re.compile(
         rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b)"
-        rf"(?!\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<))", re.I)),
+        rf"(?!\s*=?\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<))", re.I)),
 ]
 
 #: the ``identity`` half of ``pem-left``: a certificate is public material that
@@ -164,6 +172,20 @@ DEFAULT_IGNORE = (
     r"\bcommunity\s+[\w:.-]+\s+members\b",
     r"\bcommunity\s+\d+:\d+",
     r"\bcommunity\s+(?:additive|no-export|no-advertise|internet|local-as)\b",
+    # RouterOS names an authentication METHOD with the same word Cisco uses for
+    # the key: `authentication-types=wpa-psk,wpa2-psk` is an enum of methods and
+    # carries no credential. Only the value of that one key is ignored, so
+    # Cisco's `wpa-psk ascii 0 <key>` -- where the keyword is followed by the key
+    # rather than by an `=` -- is judged exactly as before.
+    r"\bauthentication-types=[\w,-]+",
+    # A RouterOS section path is grammar, not a value: `/ppp secret` and `/snmp
+    # community` name sections, and `/export terse` repeats the whole path on
+    # every command line, so without this the words `secret` and `community` in
+    # the path read as surviving credentials on every one of them. The path
+    # stops at the command word, so `secret=` on the rest of the line is still
+    # judged -- ignoring that too would be exactly the fail-open this check
+    # exists to prevent.
+    r"^/[a-z][\w-]*(?:\s+(?!(?:add|set|remove|print|get|find)\b)[a-z][\w-]*)*",
     MARKER_IGNORE,
 )
 
@@ -245,7 +267,13 @@ def verify(lines, config: Config | None = None, *,
            handled_asns: set[str] | None = None) -> list[Finding]:
     cfg = config or Config()
     cfg.validate()
-    lines = list(lines)             # a PEM block is judged by its body
+    # A PEM block is judged by its body, so the lines are materialised. They are
+    # also normalised the way `transform` normalises its own input: a wrapped
+    # RouterOS command is one logical line, `verification_view` returns one
+    # masked line per logical line, and the two are zipped together below. The
+    # join is idempotent, so sanitised output -- already unwrapped -- passes
+    # through untouched and its line numbers are unchanged.
+    lines = R.join_continuations(lines)
     disabled = set(cfg.verify.disable)
     unknown = disabled - set(check_names())
     if unknown:
