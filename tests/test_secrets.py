@@ -551,3 +551,211 @@ def test_a_trailing_backslash_in_another_dialect_is_left_alone():
             "description a plain description \\\n")
     out = sanitise_text(text, Config(), salt=SALT).text
     assert out == text
+
+
+# ---------------------------------------------------------------------------
+# FortiOS. Every leaf is `set <key> <value>` inside a `config` / `edit` block,
+# and a stored credential carries the `ENC` marker in front of its base64. Two
+# things had to be true before that line was handled, and neither was: the
+# anchored `bare-password` looked for `password` and found `set`, so it
+# declined the line outright -- and had it matched, `ENC` was not an encoding
+# hint, so the marker would have been taken as the value and the blob left
+# beside a `<REMOVED>` that said the line was finished.
+# ---------------------------------------------------------------------------
+
+#: (line, the secret that must not survive) -- the real FortiOS spellings
+FORTIOS_SECRETS = [
+    ("        set password ENC DRZ0ZvtQakquhVqqDhqGWd6WKAGTpJyQQD+mhDAOnP41"
+     "OHpXq8WT1Ktp/FJyCKOdLqBgCLHW57VXx",
+     "DRZ0ZvtQakquhVqqDhqGWd6WKAGTpJyQQD+mhDAOnP41OHpXq8WT1Ktp/FJyCKOdLqBgC"
+     "LHW57VXx"),
+    ('        set passwd ENC "MWlJokDb+fAtYJhw/fISq9OwNfsPCVN2HjDKT/IObUH9"',
+     "MWlJokDb+fAtYJhw/fISq9OwNfsPCVN2HjDKT/IObUH9"),
+    # no marker at all: an unencrypted `set password` is the same rule
+    ("        set password FortiPlain42", "FortiPlain42"),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_SECRETS,
+                         ids=range(len(FORTIOS_SECRETS)))
+def test_a_fortios_set_password_is_a_secret(line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert "<REMOVED>" in result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_fortios_password_keeps_the_marker_that_names_it():
+    """`ENC` is grammar, not a credential: it says how to read the value that
+    is gone. Eating it would have been the failure this rule exists to stop --
+    a marker over the hint with the blob still on the line."""
+    text = ("config system admin\n"
+            '    edit "admin"\n'
+            "        set password ENC Zm9ydGluZXRzZWNyZXRibG9iMDEyMzQ1Njc4OQ==\n"
+            "    next\n"
+            "end\n")
+    out = sanitise_text(text, Config(), salt=SALT).text
+    assert "        set password ENC <REMOVED>" in out, out
+    assert "Zm9ydGluZXQ" not in out
+
+
+@pytest.mark.parametrize("line", [
+    # `set` immediately in front is the whole licence: nothing else may ride in
+    "set system login password minimum-length 8",
+    "set password-policy status enable",
+])
+def test_the_set_prefix_stays_off_the_knobs(line):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.text.splitlines()[-1] == line, result.text
+
+
+#: (line, the secret that must not survive) -- the same `set <key> ENC <blob>`
+#: shape, on the two other FortiOS keys that carry a credential
+FORTIOS_SHARED_SECRETS = [
+    # a RADIUS shared secret. `bare-secret` had the JunOS path form, where a
+    # token always sits between `set` and the keyword, and nothing else.
+    ('        set secret ENC c2VjcmV0YmxvYmZvcnJhZGl1czAxMjM0NTY3ODlhYmNkZWY=',
+     "c2VjcmV0YmxvYmZvcnJhZGl1czAxMjM0NTY3ODlhYmNkZWY="),
+    # an IPsec pre-shared key. `pre-shared-key` matches the words spelled out,
+    # which is not how FortiOS spells it.
+    ('        set psksecret ENC cHNrc2VjcmV0YmxvYjAxMjM0NTY3ODlhYmNkZWZnaGlqaw==',
+     "cHNrc2VjcmV0YmxvYjAxMjM0NTY3ODlhYmNkZWZnaGlqaw=="),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_SHARED_SECRETS,
+                         ids=range(len(FORTIOS_SHARED_SECRETS)))
+def test_a_fortios_shared_secret_is_a_secret(line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert "<REMOVED>" in result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+#: (line, the secret that must not survive) -- keys `bare-password` and
+#: `bare-secret` do not name, reached by the `ENC` marker alone
+FORTIOS_ENC = [
+    # SNMPv3, the pair that made the case for naming the marker in the verifier
+    ("        set auth-pwd ENC MWlJokDb+fAtYJhw/fISq9OwNfsPCVN2HjDKT/IObUH9",
+     "MWlJokDb+fAtYJhw/fISq9OwNfsPCVN2HjDKT/IObUH9"),
+    ("        set priv-pwd ENC Zm9ydGluZXQtcHJpdmFjeS1rZXktdGVzdG9ubHkwMQ",
+     "Zm9ydGluZXQtcHJpdmFjeS1rZXktdGVzdG9ubHkwMQ"),
+    ("        set privatekey ENC cHJpdmF0ZWtleWJsb2IwMTIzNDU2Nzg5YWJjZGVm",
+     "cHJpdmF0ZWtleWJsb2IwMTIzNDU2Nzg5YWJjZGVm"),
+    ("        set ppk-secret ENC cHBrc2VjcmV0YmxvYjAxMjM0NTY3ODlhYmNkZWY",
+     "cHBrc2VjcmV0YmxvYjAxMjM0NTY3ODlhYmNkZWY"),
+    ("        set secondary-secret ENC c2Vjb25kYXJ5c2VjcmV0YmxvYjAxMjM0NQ",
+     "c2Vjb25kYXJ5c2VjcmV0YmxvYjAxMjM0NQ"),
+    # a key this tool has never heard of: the marker is the evidence, so it is
+    # covered the day FortiOS invents it
+    ("        set some-future-credential ENC c29tZWZ1dHVyZWNyZWRlbnRpYWww",
+     "c29tZWZ1dHVyZWNyZWRlbnRpYWww"),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_ENC, ids=range(len(FORTIOS_ENC)))
+def test_the_enc_marker_is_enough_to_make_a_value_a_credential(line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert "ENC <REMOVED>" in result.text, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+@pytest.mark.parametrize("line,_secret", FORTIOS_ENC, ids=range(len(FORTIOS_ENC)))
+def test_every_enc_line_is_claimed_by_exactly_one_rule(line, _secret):
+    """Two rules matching one span would splice twice, and the second would
+    rewrite the first's marker -- a hash OVER a hash, counted twice and
+    traceable to nothing. `fortios-encrypted` and the two keyword rules are
+    disjoint by a lookahead, and this is what says so."""
+    result = sanitise_text(line + "\n", policy(secrets="hash"), salt=SALT)
+    assert sum(result.counts.values()) == 1, dict(result.counts)
+    assert result.text.count("<SECRET-") == 1, result.text
+
+
+@pytest.mark.parametrize("line", [
+    # `password` and `secret` keep their own rules, because they also occur
+    # WITHOUT the marker -- which is what `fortios-encrypted` cannot see
+    "        set password ENC Rm9ydGlwYXNzd29yZGJsb2IwMTIzNDU2Nzg5YWJjZA",
+    "        set secret ENC c2VjcmV0YmxvYmZvcnJhZGl1czAxMjM0NTY3ODlhYmM",
+    "        set psksecret ENC cHNrc2VjcmV0YmxvYjAxMjM0NTY3ODlhYmNkZWZn",
+])
+def test_a_keyword_rule_and_the_marker_rule_never_both_fire(line):
+    result = sanitise_text(line + "\n", policy(secrets="hash"), salt=SALT)
+    assert sum(result.counts.values()) == 1, dict(result.counts)
+    assert not result.counts["fortios-encrypted"], dict(result.counts)
+
+
+def test_an_enc_line_that_is_already_handled_is_left_alone():
+    """A second pass must not hash the marker the first pass wrote."""
+    cfg = policy(secrets="hash")
+    once = sanitise_text("        set auth-pwd ENC QUFBQUFBQUFBQQ\n",
+                         cfg, salt=SALT).text
+    assert sanitise_text(once, cfg, salt=SALT).text == once
+
+
+def test_enc_is_a_hint_and_not_the_value():
+    """The failure this pairing exists to prevent: with `ENC` unknown to the
+    hint table, the marker landed on `ENC` and the credential stayed on the
+    line -- a half-redacted line that reads as a finished one."""
+    out = sanitise_text("        set password ENC SGFsZldheVJlZGFjdGVk\n",
+                        Config(), salt=SALT).text
+    assert out.strip() == "set password ENC <REMOVED>"
+
+
+def test_the_junos_path_form_of_a_secret_still_works():
+    """Making the token between `set` and `secret` optional must not cost the
+    dialect the rule was written for."""
+    line = "set system tacplus-server 10.0.0.1 secret TacacsPass99\n"
+    out = sanitise_text(line, Config(), salt=SALT).text
+    assert "TacacsPass99" not in out, out
+    assert "set system tacplus-server" in out
+
+
+# ---------------------------------------------------------------------------
+# The same FortiOS keys WITHOUT the marker. `ENC` is what a backup carries; a
+# configuration typed at the CLI or produced by a template carries the
+# cleartext, and that is the copy this tool is most often handed.
+# ---------------------------------------------------------------------------
+
+#: (line, the secret that must not survive)
+FORTIOS_PLAINTEXT = [
+    ("        set auth-pwd Sn3akyAuthPass", "Sn3akyAuthPass"),
+    ("        set priv-pwd Sn3akyPrivPass", "Sn3akyPrivPass"),
+    ("        set ppk-secret PlainPpkSecret9", "PlainPpkSecret9"),
+    ("        set group-password GroupPass77", "GroupPass77"),
+    ("        set key-passphrase PassPhrase42", "PassPhrase42"),
+    # a numbered second credential, which is a real FortiOS key
+    ("        set password2 Sec0ndPass99", "Sec0ndPass99"),
+]
+
+
+@pytest.mark.parametrize("line,secret", FORTIOS_PLAINTEXT,
+                         ids=range(len(FORTIOS_PLAINTEXT)))
+def test_a_fortios_credential_without_the_marker_is_still_a_credential(line, secret):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert secret not in result.text, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+@pytest.mark.parametrize("line", [
+    # a hyphen after the credential word means a KNOB, and redacting the token
+    # after it would break the setting
+    "        set password-policy status enable",
+    "        set password-expire 5",
+    "        set password-expire-warning 15",
+    "config system password-policy",
+])
+def test_a_hyphenated_fortios_knob_is_not_a_credential(line):
+    result = sanitise_text(line + "\n", Config(), salt=SALT)
+    assert result.text.splitlines()[-1] == line, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_a_junos_credential_path_is_not_claimed_by_the_fortios_rule():
+    """The key has to sit IMMEDIATELY after `set`, which is what holds this
+    rule off JunOS -- there a credential is always at the end of a path."""
+    line = ("set groups BNG system services dhcp-local-server dual-stack-group"
+            " BNG authentication password BngRadiusPass77\n")
+    result = sanitise_text(line, policy(secrets="hash"), salt=SALT)
+    assert not result.counts["fortios-credential-key"], dict(result.counts)
+    assert result.counts["authentication-password"] == 1

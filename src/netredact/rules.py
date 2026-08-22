@@ -101,7 +101,7 @@ __all__ = [
     "RuleReplacement", "RuleCatalogue",
     "HOSTNAME_PATS", "DOMAIN_PATS", "USERNAME_PATS",
     "SCOPED_HOSTNAME_PATS", "SCOPED_USERNAME_PATS",
-    "join_continuations", "routeros_scope",
+    "join_continuations", "routeros_scope", "fortios_scope", "fortios_scopes",
     "IPV4_RE", "IPV6_RE", "MAC_RE", "BARE_MAC_CONTEXT_RE", "EMAIL_RE",
 ]
 
@@ -123,9 +123,13 @@ VAL = rf'(?!(?:{RANCID_SENTINEL}))(?:(?:"[^"]*")|(?:\'[^\']*\')|[^\s;]+)'
 VAL_MACRO = "%VAL%"
 #: the capturing spelling of :data:`VAL`, substituted for :data:`VAL_MACRO`
 VAL_GROUP = rf"""((?!(?:{RANCID_SENTINEL}))(?:"[^"]*"|'[^']*'|[^\s;]+))"""
-#: encoding / algorithm hints that sit between the keyword and the secret
-ENC = (r"(?:\d+|sha512|sha256|sha1|md5|encrypted|clear|ascii|ascii-text|hex|"
-       r"hexadecimal|plain-text)")
+#: encoding / algorithm hints that sit between the keyword and the secret.
+#: ``enc`` is FortiOS's marker on a stored credential -- ``set password ENC
+#: <blob>``. Without it here the blob was not the value, ``ENC`` was: the line
+#: came out as ``set password <SECRET-...> <blob>``, reading as handled with the
+#: credential still on it.
+ENC = (r"(?:\d+|sha512|sha256|sha1|md5|encrypted|enc|clear|ascii|ascii-text|"
+       r"hex|hexadecimal|plain-text)")
 
 #: a RUN of those hints, because several commands stack two of them. Cisco's
 #: autonomous-AP ``wpa-psk {ascii|hex} [0|7] <key>`` is the plain case: an
@@ -322,7 +326,20 @@ _IMAGE_COLON_KEYS = r"junos|eos"
 #: it is ``description`` in ``text``. One selector, split in two by
 #: :data:`_OUTSIDE`, so the two can never both act on the same line and no
 #: description falls between them.
-_DESCRIPTION = r"\s*(?:set\s+\S.*?\s)?description\s+"
+#: FortiOS writes all three spellings of this field and puts NOTHING between
+#: ``set`` and the key, which is why the JunOS prefix has its middle made
+#: optional: ``set system interfaces xe-0/0/0 description …`` always has a path
+#: in between, ``set description "…"`` never does. ``comments`` is what a
+#: firewall policy calls the field and ``alias`` is what an interface calls its
+#: label -- in practice the FortiOS field an operator writes a circuit id and a
+#: customer name into. Both are admitted only behind ``set``, because a bare
+#: ``comment`` or ``alias`` at the start of a line is far too little evidence.
+#:
+#: Adding them here rather than as rules of their own is what gets them the
+#: scope split for free: inside an interface each is ``interface-description``
+#: in ``interfaces``, everywhere else ``description`` in ``text``.
+_DESCRIPTION = (r"\s*(?:(?:set\s+(?:\S.*?\s)?)?description"
+                r"|set\s+(?:comments?|alias))\s+")
 
 #: RouterOS's ``description``, and the same principle: which rule owns a
 #: ``comment=`` is decided by its scope. Inside a RouterOS ``/interface …``
@@ -340,6 +357,38 @@ _COMMENT = r'(?<![-\w])comment=%VAL%'
 #: hostname in front is left alone here: it belongs to ``hostnames``, which
 #: learns it from :data:`HOSTNAME_PATS` and substitutes it everywhere.
 _EOS_HEADER = r"^\s*!\s*device:\s*\S+\s*\("
+
+#: everything up to the value of the FortiOS header, ``#config-version=FGT60F-
+#: 7.2.5-FW-build1517-230606:opmode=0:vdom=0:user=netops``. The same situation
+#: as :data:`_EOS_HEADER`: several values of several kinds introduced by no
+#: keyword of their own, so each is reached by a branch on the rule that owns
+#: that kind. The trailing ``user=`` is a login and belongs to ``usernames``,
+#: which learns it from :data:`USERNAME_PATS`.
+#:
+#: The key survives every one of those branches, which is deliberate: it is what
+#: the detector reads to still answer ``fortinet`` on a file whose model and
+#: release have been removed -- see ``vendors.py``.
+_FOS_HEADER = r"^\s*#\s*config-version\s*=\s*"
+
+#: anything netredact writes in place of a value: ``<MODEL-a1b2c3>``,
+#: ``<REMOVED>``, ``<DESCRIPTION-REMOVED>``. Angle brackets with no space or
+#: colon inside them, which is what every one of them has in common and what no
+#: real value in this position has.
+#:
+#: Only the FortiOS header needs this, and it needs it because that one line
+#: carries two values of two families side by side with a hyphen between them:
+#: once ``hardware-model`` has acted, ``os-version`` is looking at
+#: ``<MODEL-a1b2c3>-7.2.5-…`` and still has to find the release. Matching the
+#: SHAPE rather than the marker table is the point -- an earlier version spelled
+#: out ``<[A-Z]+-[0-9a-f]{6}>``, which is what ``hash`` writes, and under
+#: ``redact`` the model became ``<REMOVED>``, the branch stopped matching and the
+#: release stayed in the file on a policy that had asked for it gone.
+#:
+#: Every other rule gets this for free by capturing a whole value, which
+#: ``Pseudonymiser.already_done`` then recognises; a rule that captures part of a
+#: line cannot. Spelled out rather than imported: this module imports nothing,
+#: which is worth keeping.
+_PLACEHOLDER = r"<[^\s:<>]*>"
 
 
 def _rest(prefix: str) -> str:
@@ -380,8 +429,23 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # ---- enable / user credentials -------------------------------------
     ("enable-secret", rf"\s*enable\s+(?:secret|password)\s+(?:level\s+\d+\s+)?{ENC_RUN}", "secrets", None),
     ("username-secret", rf"\s*username\s+\S+\s+(?:\S+\s+)*?(?:password|secret)\s+{ENC_RUN}", "secrets", None),
-    ("bare-password", rf"\s*(?:password|passwd)\s+{ENC_RUN}", "secrets", None),
-    ("bare-secret", rf"\s*(?:set\s+\S.*?\s)?secret\s+{ENC_RUN}", "secrets", None),
+    # The optional `set` is FortiOS, which writes every leaf as `set <key>
+    # <value>`: `set password ENC <blob>`. Anchored on the keyword alone, this
+    # rule looked for `password` where the line had `set` and declined it, and
+    # the admin password went through untouched. Immediately adjacent, unlike
+    # `bare-secret`'s `set\s+\S.*?\s`: FortiOS puts nothing between the two
+    # words, and the forms that do are `username-secret` and
+    # `authentication-password`.
+    ("bare-password", rf"\s*(?:set\s+)?(?:password|passwd)\s+{ENC_RUN}", "secrets", None),
+    # Two dialects in one rule. JunOS hangs the secret off a path, so there is
+    # always a token between `set` and the keyword -- `set system tacplus-server
+    # 10.0.0.1 secret X`. FortiOS puts nothing between them, so the middle is
+    # optional: `set secret ENC <blob>` is a RADIUS shared secret, and it left
+    # the tool in full. `psksecret` is FortiOS's name for an IPsec pre-shared
+    # key; `pre-shared-key` never saw it, because that rule matches the words
+    # spelled out.
+    ("bare-secret",
+     rf"\s*(?:set\s+(?:\S.*?\s)?)?(?:psk)?secret\s+{ENC_RUN}", "secrets", None),
     # `authentication password <secret>` mid-line: `bare-password` is anchored,
     # so it only sees the hierarchical form. JunOS subscriber management puts
     # the same credential at the end of a long `set` path. The `authentication`
@@ -458,6 +522,58 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     ("routeros-license-id",
      r"\s*#?\s*(?:software|system)[-\s]id\s*[:=]\s*", "identity", None),
 
+    # ---- FortiOS -----------------------------------------------------------
+    # `set <key> ENC <blob>`: FortiOS's own marker saying the value that follows
+    # is a stored credential. The MARKER is the evidence, not the key name, and
+    # that is what makes this one rule instead of a list -- `auth-pwd`,
+    # `priv-pwd`, `privatekey`, `ppk-secret`, `secondary-secret` and every key a
+    # later release invents are all covered the day they appear, because FortiOS
+    # writes `ENC` in front of a secret and in front of nothing else.
+    #
+    # The lookahead is what keeps this rule and `bare-password` / `bare-secret`
+    # disjoint, and it is load-bearing rather than tidy: two rules that both
+    # matched one span would splice twice, and the second would rewrite the
+    # first's marker -- `set password <SECRET-a1b2c3>` hashed AGAIN into
+    # `set password <SECRET-9f8e7d>`, counted twice and traceable to nothing.
+    # Those two keys keep their own rules because they also occur WITHOUT the
+    # marker, which this rule by construction cannot see.
+    ("fortios-encrypted",
+     r"\s*set\s+(?!(?:password|passwd|(?:psk)?secret)\s)[\w-]+\s+ENC\s+",
+     "secrets", None),
+    # The same credential keys WITHOUT the marker. FortiOS writes `ENC` in a
+    # backup, but a configuration typed at the CLI or generated by a template
+    # carries the cleartext -- and that is the copy this tool is most often
+    # handed. A qualified key name is still that key, exactly as it is on
+    # RouterOS (`ipsec-secret=`, `authentication-password=`), so the qualifier
+    # is admitted rather than a list of keys being written out.
+    #
+    # Three guards, each load-bearing. The `\d*\s+` after the credential word is
+    # what keeps this off the knobs: `set password2 <secret>` is a real second
+    # credential, while `set password-policy status enable` and `set
+    # password-expire 5` have a HYPHEN there, and admitting a hyphenated
+    # suffix would have redacted `status` and `5` and broken both knobs. The `(?!ENC\s)`
+    # keeps it off `fortios-encrypted`'s lines, and the leading lookahead off
+    # `bare-password` / `bare-secret`'s: three rules, one owner per span, for
+    # the reason spelled out at `fortios-encrypted`. And the key has to sit
+    # IMMEDIATELY after `set`, which is what holds it off JunOS -- there a
+    # credential is always at the end of a path, never adjacent.
+    ("fortios-credential-key",
+     r"\s*set\s+(?!(?:password|passwd|(?:psk)?secret)\s)"
+     r"[\w-]*(?:password|passwd|pwd|secret|passphrase)\d*\s+(?!ENC\s)",
+     "secrets", None),
+    # An SNMP community, and ONLY inside `config system snmp community`.
+    # Everywhere else in a FortiOS configuration `set name` is a policy label,
+    # an address-group name or a schedule, and the line itself cannot tell you
+    # which -- the section is the whole of the evidence, exactly as it is for
+    # `routeros-snmp-community`.
+    ("fortios-snmp-community", r"\s*set\s+name\s+", "secrets", "snmp-community"),
+    # A LABEL `set name`: operator free text, and on a provider config a
+    # customer and an order reference. Scoped to `object-labels` and not to
+    # whole sections, for the reason set out at :data:`_FORTIOS_SCOPES` -- a
+    # name the configuration REFERENCES cannot be acted on by a rule that only
+    # sees the declaration.
+    ("fortios-object-name", r"\s*set\s+name\s+", "text", "object-labels"),
+
     # ---- Juniper specifics -------------------------------------------------
     ("junos-password", r".*\b(?:encrypted-password|plain-text-password-value)\s+", "secrets", None),
     # The digest a script file is pinned to. NOT a credential, but a 64-char hex
@@ -506,7 +622,20 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     ("hardware-model",
      _alt(_rest(rf"\s*[!#]?\s*(?:{_MODEL_KEYS})\s*[:=]\s*"),
           # the Arista header, up to the last comma inside the brackets
-          rf"{_EOS_HEADER}([^)]+),"), "platform", None),
+          rf"{_EOS_HEADER}([^)]+),",
+          # the FortiOS header, `#config-version=FGT60F-7.2.5-FW-build1517-…`.
+          # Three values of three kinds on one line, so it is split the way the
+          # Arista header is: a branch on the rule that owns each kind, never
+          # one rule for the whole line. The model is everything before the
+          # hyphen that starts the release, and the `-\d` lookahead is how that
+          # hyphen is told from the ones inside the release -- a FortiOS model
+          # code carries none. The lookahead also leaves the hyphen in the line
+          # rather than in the value, which is what lets `os-version` still find
+          # the release after this branch has acted.
+          # Neither `<` nor `-` can be in a model code, and excluding them is
+          # what makes a second pass a no-op: on `<MODEL-a1b2c3>-…` this branch
+          # cannot start at all, so the marker is never hashed again.
+          rf"{_FOS_HEADER}([^\s:<>-]+)(?=-\d)"), "platform", None),
     ("os-version",
      _alt(_rest(r"\s*(?:set\s+)?version\s+(?=\d)"),
           # the Arista header, the token after the last comma
@@ -517,7 +646,15 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
           # header has branches: the release is the release, and one rule means
           # one action for it. `by RouterOS` itself survives, which is what
           # keeps the detector working on redacted output -- see `vendors.py`.
-          r"^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$"), "platform", None),
+          r"^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$",
+          # the FortiOS header's release half, and the build line under it.
+          # What sits in front is either the model or the marker that has just
+          # replaced it, so the branch spells out both -- and spelling them out
+          # rather than skipping over anything is what keeps it idempotent: the
+          # release must begin with a DIGIT, which no placeholder does, so a
+          # second pass finds nothing to redo.
+          rf"{_FOS_HEADER}(?:{_PLACEHOLDER}|[^\s:<>-]+)-(\d[^\s:<>]*)",
+          r"^\s*#\s*buildno\s*=\s*(\S+)\s*$"), "platform", None),
     ("software-image",
      _rest(rf"\s*!?\s*(?:(?:{_IMAGE_KEYS})(?:\s*[:=]\s*|\s+)"
            rf"|(?:{_IMAGE_COLON_KEYS})\s*[:=]\s*)"), "platform", None),
@@ -531,11 +668,17 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # rule of its own so that one action governs the field whatever grammar
     # wrote it, and it is unanchored because `/export terse` puts the section
     # path in front of the command.
+    # `set snmp location` is JunOS, `set location` FortiOS (under `config
+    # system snmp sysinfo`) and `contact-info` is what FortiOS calls the other
+    # half. Branches rather than rules of their own, so one action governs the
+    # field whatever grammar wrote it. `set system location building …` is NOT
+    # reached by this: `junos-location-body` owns the stanza keys, and the
+    # intervening `system` is what keeps the two apart.
     ("location",
-     _alt(_rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+"),
+     _alt(_rest(r"\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?location\s+"),
           r".*(?<![-\w])location=%VAL%"), "locations", None),
     ("contact",
-     _alt(_rest(r"\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+"),
+     _alt(_rest(r"\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?contact(?:-info)?\s+"),
           r".*(?<![-\w])contact=%VAL%"), "text", None),
     # the body of a JunOS `location { ... }` stanza: the keys carry the street
     # address the `location` rule itself must not eat (it is a stanza opener,
@@ -755,6 +898,11 @@ _RULE_VENDORS: dict[str, str] = {
     "routeros-secret": "mikrotik",
     "routeros-snmp-community": "mikrotik",
     "routeros-license-id": "mikrotik",
+    # FortiOS grammar: the `ENC` marker, and a `set name` whose meaning only the
+    # `config` section it sits in supplies.
+    "fortios-encrypted": "fortinet",
+    "fortios-object-name": "fortinet",
+    "fortios-snmp-community": "fortinet",
 }
 
 #: rules whose value needs a code path rather than a plain span replacement
@@ -793,8 +941,13 @@ _BLOB: list[tuple[str, str, str, int]] = [
     # `[!#]?` for the same reason as `hardware-model`: RouterOS's `/export`
     # header writes `# serial number = HEA08XXXXXX`, and one serial rule with
     # one action has to reach it too.
+    # `(?:set\s+)?` is FortiOS, which writes `set serial-number "FGT60FTK…"`
+    # under `config system central-management` and on an HA peer. Adjacent, for
+    # the reason `bare-password` is: FortiOS puts nothing between `set` and the
+    # key it is setting.
     ("serial-number",
-     r"^\s*[!#]?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$",
+     r"^\s*[!#]?\s*(?:set\s+)?(?:System\s+)?[Ss]erial[-\s]*(?:[Nn]umber)?"
+     r"\s*[:=]?\s+(\S+.*)$",
      "identity", 0),
 ]
 
@@ -1020,6 +1173,7 @@ class RuleCatalogue:
         stanza: list[str] = []
         ios_block: str | None = None
         ros_section: tuple[str, ...] = ()
+        fos_stack: tuple[str, ...] = ()
         index = 0
         while index < len(source):
             raw = source[index]
@@ -1030,13 +1184,18 @@ class RuleCatalogue:
             # IOS-style block header is inside its own block -- and it has to
             # be, or a `/export terse` line would never be inside anything
             ros_section = routeros_scope(raw, ros_section)
+            # the `config` line is inside the section it opens, and the `end`
+            # is outside it -- the same asymmetry an IOS-style block header has,
+            # and for the same reason: the header carries the section's name and
+            # the terminator carries nothing.
+            fos_stack = fortios_scope(raw, fos_stack)
             set_match = _SET_SCOPE.match(raw)
             if re.match(r"\s*set\s+system\s+location\b", raw, re.I):
                 line_scope = ("location",)
             else:
                 line_scope = (set_match.group(1).lower(),) if set_match else ()
             inside = (tuple(stanza) + ((ios_block,) if ios_block else ())
-                      + ros_section + line_scope)
+                      + ros_section + fortios_scopes(fos_stack) + line_scope)
 
             block = next(((start, end, name, family)
                           for start, end, name, family in self._blocks
@@ -1169,7 +1328,9 @@ class RuleCatalogue:
 # ---------------------------------------------------------------------------
 
 HOSTNAME_PATS = (
-    re.compile(r"^\s*(?:hostname|switchname)\s+(\S+)", re.I),
+    # `set hostname "fw-edge-01"` is FortiOS's spelling; the quotes come off
+    # with the JunOS `;` in `_add`
+    re.compile(r"^\s*(?:set\s+)?(?:hostname|switchname)\s+(\S+)", re.I),
     re.compile(r"^\s*(?:set\s+system\s+)?host-name\s+(\S+?);?\s*$", re.I),
     re.compile(r"^\s*!\s*device:\s*(\S+)", re.I),
 )
@@ -1186,6 +1347,10 @@ USERNAME_PATS = (
     re.compile(r"^\s*snmp-server\s+user\s+(\S+)", re.I),
     re.compile(r"^\s*!\s*Last configuration change.*?\bby\s+(\S+)", re.I),
     re.compile(r"^\s*##\s*Last changed:.*?\bby\s+(\S+)", re.I),
+    # the tail of the FortiOS header: the administrator whose session wrote the
+    # backup. `## Last changed: … by <user>` is the JunOS line that says the
+    # same thing, and this is here for the same reason.
+    re.compile(r"^\s*#\s*config-version\s*=.*?[:\s]user=(\S+?)\s*$", re.I),
 )
 
 #: A name only the enclosing section identifies, and the sections that identify
@@ -1205,6 +1370,11 @@ SCOPED_HOSTNAME_PATS = (
 SCOPED_USERNAME_PATS = (
     (("user", "ppp-secret"),
      re.compile(r'(?<![-\w])name=("[^"]*"|\S+)', re.I)),
+    # FortiOS names an entry with the `edit` that opens it, so under `config
+    # system admin` and `config user local` the login IS the block header. The
+    # `$` anchor is the guard: an `edit` line carries the name and nothing else,
+    # which is what keeps this off every other word in the file.
+    (("user",), re.compile(r'^\s*edit\s+("[^"]*"|\S+)\s*$', re.I)),
 )
 
 IPV4_RE = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?![\w.])")
@@ -1356,6 +1526,120 @@ def routeros_scope(line: str, current: tuple[str, ...]) -> tuple[str, ...]:
     path = match.group(1)
     return next((scopes for scopes, pat in _ROUTEROS_SCOPES if pat.match(path)),
                 ())
+
+
+#: a FortiOS ``config`` header, and the ``end`` that closes it. FortiOS is the
+#: third block grammar in this file and the only NESTED one: ``config system
+#: snmp community`` holds an ``edit`` which holds a ``config hosts`` of its own,
+#: so the section is a STACK where RouterOS's is a single current path.
+#:
+#: ``edit`` / ``next`` are deliberately not tracked. They delimit one entry
+#: inside a section, and no rule needs to know which entry it is in -- only
+#: which section, exactly as on RouterOS. Tracking them would also have to
+#: survive an ``end`` that closes a ``config`` from inside an ``edit``, which is
+#: state with no reader.
+#:
+#: Anything after ``config`` is the path, deliberately. This started as a
+#: word-path shape like :data:`_ROUTEROS_SECTION`'s, and that was wrong, because
+#: the two ways of being wrong here are NOT symmetric:
+#:
+#: * A header the pattern does not recognise is never pushed -- but its ``end``
+#:   still pops, and what it pops is the section AROUND it. `config system
+#:   replacemsg auth "auth-password-page"` ends in a quoted argument, the word
+#:   path refused it, and its ``end`` closed the enclosing `config system snmp
+#:   community` early -- so the `set name` after it was no longer in the section
+#:   that makes it a community string, and a community survived. A LEAK.
+#: * A line wrongly taken for a header is pushed and never popped, so scopes
+#:   reach further than they should. That over-applies a rule; it cannot leave a
+#:   secret in the file.
+#:
+#: A redaction tool takes the second. So the recogniser asks only what FortiOS
+#: itself asks -- the line begins with the word ``config`` -- and a shape nobody
+#: has thought of yet still keeps the stack balanced.
+#:
+#: ``config-register 0x2102`` is not this: a hyphen follows the word, not
+#: whitespace. A banner body cannot reach here at all, because
+#: :meth:`RuleCatalogue.transform` consumes a banner whole before the next line
+#: is scoped. ``end`` alone at column zero is ALSO how an IOS running-config
+#: finishes, and that costs nothing: a file with no ``config`` line in it has an
+#: empty stack, and popping an empty stack is a no-op.
+_FORTIOS_CONFIG = re.compile(r"^\s*config\s+(\S.*?)\s*$", re.I)
+_FORTIOS_END = re.compile(r"^\s*end\s*$", re.I)
+
+#: a FortiOS section path -> the scopes it opens, longest path first, because
+#: ``system snmp community`` is not ``system snmp``.
+#:
+#: Named by the rule set out above :data:`_BLOCK_SCOPES`: JunOS's own name
+#: wherever both dialects have the block, so ONE rule reaches every dialect --
+#: ``config system interface`` is scope ``interfaces`` exactly as an ``interface
+#: Gi0/0`` block, an ``interfaces { … }`` stanza and a ``/interface ethernet``
+#: section are. A section only FortiOS has keeps its own name.
+#:
+#: Those names are what make ``set name`` and ``set alias`` decidable at all.
+#: ``set name`` is an SNMP community string under ``config system snmp
+#: community`` and a policy label under ``config firewall policy``; ``set
+#: alias`` is a port label on an interface and a device label under ``config
+#: system global``. The line is identical in every one of them, so the section
+#: is the only evidence there is -- which is the argument for scope in the first
+#: place, and why none of this is a vendor gate: a file with no ``config system
+#: snmp community`` in it cannot reach the rule that needs one.
+#:
+#: ``object-labels`` carries the same claim here as it does on RouterOS: that
+#: nothing in the grammar REFERENCES that section's name. A firewall policy is
+#: referred to by its ``edit <id>`` and never by its ``set name``, so acting on
+#: the name cannot break the file. An interface is the counter-example and is
+#: deliberately absent: ``edit "port1"`` is pointed at by ``set srcintf
+#: "port1"`` from every policy in the file, so a rule that saw only the
+#: declaration would break the configuration AND leak the value through every
+#: reference that kept it.
+#: ``fortios-interface-names`` marks the four sections whose ``edit`` name and
+#: ``set member`` list are INTERFACE names: an interface, a zone, a
+#: switch-interface and a virtual-switch are all things a ``set srcintf`` can
+#: point at. It is a scope and not an unscoped pattern because `set member` is
+#: also how a `config firewall addrgrp` lists ADDRESS objects, and substituting
+#: one of those with an interface's tag would break the file in the exact way
+#: `object-labels` exists to prevent.
+_FORTIOS_SCOPES = (
+    (("snmp-community", "snmp"),
+     re.compile(r"system\s+snmp\s+community(?![\w-])", re.I)),
+    (("snmp",), re.compile(r"system\s+snmp(?![\w-])", re.I)),
+    (("system-global",), re.compile(r"system\s+global(?![\w-])", re.I)),
+    (("interfaces", "fortios-interface-names"),
+     re.compile(r"system\s+interface(?![\w-])", re.I)),
+    (("fortios-interface-names",),
+     re.compile(r"system\s+(?:zone|switch-interface|virtual-switch)(?![\w-])",
+                re.I)),
+    (("fortios-route-device",), re.compile(r"router\s+static6?(?![\w-])", re.I)),
+    (("user",), re.compile(r"(?:system\s+admin|user\s+local)(?![\w-])", re.I)),
+    (("object-labels",), re.compile(r"firewall\s+policy(?![\w-])", re.I)),
+)
+
+
+def fortios_scope(line: str, stack: tuple[str, ...]) -> tuple[str, ...]:
+    """The FortiOS ``config`` path stack after ``line``.
+
+    Returns the stack, not the scopes: the scopes are the union over every path
+    on it (:func:`fortios_scopes`), because a nested section is still inside the
+    one that opened it -- a ``config hosts`` under ``config system snmp
+    community`` has not left the community.
+    """
+    match = _FORTIOS_CONFIG.match(line)
+    if match:
+        return stack + (match.group(1),)
+    if _FORTIOS_END.match(line):
+        return stack[:-1]
+    return stack
+
+
+def fortios_scopes(stack: tuple[str, ...]) -> tuple[str, ...]:
+    """Every scope the paths on ``stack`` open, in stack order, deduplicated."""
+    out: list[str] = []
+    for path in stack:
+        for scopes, pat in _FORTIOS_SCOPES:
+            if pat.match(path):
+                out.extend(scope for scope in scopes if scope not in out)
+                break
+    return tuple(out)
 
 
 #: the opening line of a wrapped RouterOS command: an ``add`` / ``set`` /

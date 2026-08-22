@@ -335,9 +335,9 @@ def test_the_output_says_netredact_wrote_it(fixtures, capsys):
     assert "re-run from the original" in first
 
 
-@pytest.mark.parametrize("name", ["juniper.cfg", "mikrotik.cfg"])
+@pytest.mark.parametrize("name", ["juniper.cfg", "mikrotik.cfg", "fortinet.cfg"])
 def test_the_marker_is_a_comment_in_the_files_own_grammar(fixtures, name, capsys):
-    """JunOS and RouterOS both comment with `#`, so the marker has to."""
+    """JunOS, RouterOS and FortiOS all comment with `#`, so the marker has to."""
     assert main([str(fixtures / name)]) == EXIT_OK
     assert capsys.readouterr().out.splitlines()[0].startswith("# netredact-sanitised")
 

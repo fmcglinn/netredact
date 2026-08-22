@@ -72,9 +72,13 @@ VTOK = ENC[:-1] + r"|type|value|key|level\s+\d+)"
 #: is 44 characters of base64, so ``long-base64-left`` happens to catch one
 #: today, but a check that only knows a shape must not be the only thing
 #: standing between a regressed rule and a credential in the output.
+#: ``psksecret``, ``privatekey`` and ``…-pwd`` are FortiOS's own spellings of
+#: three of the words above, and none of them is reached by the word above it:
+#: ``\bsecret\b`` does not match inside ``psksecret``, because ``k`` is a word
+#: character and the boundary is not there.
 _CRED_KEYWORDS = (r"password|passwd|passphrase|secret|pre-?shared-key|"
                   r"private-key|key-string|auth(?:entication)?-key|"
-                  r"encrypted-password|wpa-psk")
+                  r"encrypted-password|wpa-psk|psksecret|privatekey|[\w-]*pwd")
 
 #: ``community`` only where it is an SNMP community: after ``snmp-server`` /
 #: ``snmp`` / ``set snmp``, or first on the line (the JunOS ``snmp { community
@@ -82,6 +86,39 @@ _CRED_KEYWORDS = (r"password|passwd|passphrase|secret|pre-?shared-key|"
 #: ``match large-community AS64500-EXPORT`` and any description mentioning a
 #: community were reported -- 44 of 46 findings on a real provider config.
 _CRED_COMMUNITY = r"(?:^\s*|\bsnmp(?:-server)?\s+)community"
+
+#: FortiOS's ``set <key> ENC <blob>``, the marker it writes in front of a
+#: stored credential. Named for exactly the reason ``wpa-psk`` and
+#: ``private-key`` are named: without it a regressed ``fortios-encrypted`` left
+#: an SNMPv3 authentication password in the output with only
+#: ``long-base64-left`` -- a check that knows a shape and not what the material
+#: is -- standing between it and a clean ``--strict``.
+#:
+#: The ``set <key>`` in front is the guard and not decoration: the bare word
+#: would fire on any kept description with "enc" in it. Matching the marker
+#: rather than a list of keys is the same argument the rule makes -- FortiOS
+#: writes ``ENC`` in front of a secret and in front of nothing else, so a key
+#: this tool has never heard of is still checked.
+_CRED_FORTIOS = r"^\s*set\s+[\w-]+\s+ENC"
+
+#: an SNMP community, in the two grammars that give the line no keyword at all.
+#: RouterOS writes `name=public` under `/snmp community` and FortiOS `set name
+#: "public"` under `config system snmp community`; in both, the SECTION is the
+#: only evidence that the value is a community string, so `credential-left` --
+#: which reads one line and knows nothing of where it sits -- went silent on a
+#: kept one. That is the fail-open this file exists to prevent: `secrets =
+#: "keep"` is allowed, passing `--strict` over it is not.
+#:
+#: Paired with :data:`_COMMUNITY_HANDLED`.
+_SCOPED_COMMUNITY = re.compile(r'(?:^\s*set\s+name\s+|(?<![-\w])name=)'
+                               r'("[^"]*"|\S+)', re.I)
+
+#: a community value there is nothing to report: one netredact has already dealt
+#: with -- `secrets` admits `hash` and `redact` only, so both spellings are
+#: angle-bracketed and nothing else has to be recognised -- or an empty string,
+#: which is a community that is ABSENT rather than one that survived. Same
+#: judgement `credential-left` makes below, and for the same reason.
+_COMMUNITY_HANDLED = re.compile(r"""(?:"?<[^\s<>]*>"?\s*;?|""|'')""")
 
 #: the credential checks: unconditional, whatever the policy keeps
 VERIFY_RULES = [
@@ -97,10 +134,21 @@ VERIFY_RULES = [
     ("long-base64-left", re.compile(r"(?<![\w+/=])[A-Za-z0-9+/]{40,}={0,2}(?![\w+/=])")),
     # the optional `=` is RouterOS's separator: `password=<REMOVED>` is a
     # credential this tool has already dealt with, and without it every
-    # `key=value` pair netredact had destroyed was reported as a survivor
+    # `key=value` pair netredact had destroyed was reported as a survivor.
+    #
+    # `""` and `''` say the credential is ABSENT, not that it survived. RouterOS
+    # writes an unset key that way -- `auth-key=""` on a `/routing ospf
+    # interface-template` is an interface with no authentication on it -- and
+    # every one of them was reported as a finding a human had to look at, on a
+    # line carrying no credential at all. That is the same judgement
+    # :data:`RANCID_SENTINEL` already makes for `## SECRET-DATA`: evidence the
+    # value is not there beats the keyword that introduces it.
+    #
+    # The empty value ends only THIS match; `search` keeps scanning, so
+    # `auth-key="" password=hunter2` still fires on the second keyword.
     ("credential-left", re.compile(
-        rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b)"
-        rf"(?!\s*=?\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<))", re.I)),
+        rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b|{_CRED_FORTIOS}\b)"
+        rf"(?!\s*=?\s*(?:{VTOK}\s*)*(?:$|[;{{]|\"?<|\"\"|''))", re.I)),
 ]
 
 #: the ``identity`` half of ``pem-left``: a certificate is public material that
@@ -173,7 +221,12 @@ DEFAULT_IGNORE = (
     r"\buser-[0-9a-f]{4}@(?:example|d[0-9a-f]{4}\.example)\.\w+",
     r"/\*\s*(?:ACCESS-DENIED|SECRET-DATA)\s*\*/",
     r"\b(?:no|service)\s+password\b",
-    r"password-(?:policy|encryption)",
+    # `password-policy` is IOS-style; `password-expire` and
+    # `password-expire-warning` are the FortiOS knobs of the same kind. Listed
+    # rather than generalised to `password-\w+`: a knob that is not here is
+    # noise in the report, and a credential wrongly swept into a general
+    # pattern is silence -- and this project takes the noise.
+    r"password-(?:policy|encryption|expire\w*)",
     r"\bpassword\s+encryption\b",
     r"\bkey[-\s]chain\b",
     r"\bsecret-?data\b",
@@ -198,6 +251,13 @@ DEFAULT_IGNORE = (
     # judged -- ignoring that too would be exactly the fail-open this check
     # exists to prevent.
     r"^/[a-z][\w-]*(?:\s+(?!(?:add|set|remove|print|get|find)\b)[a-z][\w-]*)*",
+    # A FortiOS `config` header is a section path for the same reason, and it is
+    # ALL path: unlike RouterOS there is no command after it, so the line is
+    # ignored whole. `config system replacemsg auth "auth-password-page"` names
+    # a message template, and the check read the `password` inside that name as
+    # a surviving credential -- as it did for `auth-cert-passwd-page` next to
+    # it. Nothing on one of these lines is a value.
+    r"^\s*config\s+\S.*$",
     MARKER_IGNORE,
 )
 
@@ -385,7 +445,20 @@ def verify(lines, config: Config | None = None, *,
             replace=lambda hit: R.RuleReplacement.with_text("\x00")) != [line]
 
     findings: list[Finding] = []
+    # Both section trackers, for `_SCOPED_COMMUNITY`. They are the ones the
+    # rules use, so the check and the rule can never disagree about where a
+    # line is -- the same argument the collect pass makes for sharing them.
+    ros_section: tuple[str, ...] = ()
+    fos_stack: tuple[str, ...] = ()
+    community_check = "credential-left" not in disabled
     for i, (line, shaped_line) in enumerate(zip(lines, shaped_lines, strict=True), 1):
+        ros_section = R.routeros_scope(line, ros_section)
+        fos_stack = R.fortios_scope(line, fos_stack)
+        if community_check and "snmp-community" in (
+                ros_section + R.fortios_scopes(fos_stack)):
+            match = _SCOPED_COMMUNITY.search(line)
+            if match and not _COMMUNITY_HANDLED.fullmatch(match.group(1)):
+                findings.append(Finding(i, "credential-left", line.strip()))
         stripped = ignore.sub(" ", line)
         shaped = ignore.sub(" ", shaped_line)
         for name, pat in active:

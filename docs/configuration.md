@@ -64,7 +64,7 @@ of keep, pseudo, hash, redact
 |---|---|---|
 | `salt_file` | unset | CLI-oriented file holding the HMAC salt, created `0600` by the CLI if missing. Reuse it to keep substitutes consistent across runs and devices. **A re-identification key — protect it.** Library callers pass `salt=` bytes to `sanitise_text`; the library never reads or writes this path. |
 | `marker` | `true` | Write one comment line at the top of the output naming netredact and its version — `!` for IOS-style grammar, `#` for JunOS and RouterOS. It is the only thing in a sanitised file that says it is one, and so the only evidence a re-run can be refused on: turn it off and a second pass re-maps pseudonyms with nothing to warn you. CLI-oriented — `sanitise_text` never adds it, see [the library docs](library.md). |
-| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `juniper`, `mikrotik` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
+| `vendor` | `"auto"` | `auto`, `arista`, `cisco`, `fortinet`, `juniper`, `mikrotik` — the vendors the detector knows, and nothing else. Only affects the report; every rule is applied to every file regardless. |
 
 ## Every rule has exactly one home
 
@@ -143,8 +143,8 @@ junos-location-body = "redact"
 Typed operational identifiers default to `keep`. Options are
 `acl-firewall-filter`, `route-map`, `prefix-list`, `policy-statement`, `vrf`,
 `peer-group`, `label-switched-path`, `configuration-group` and
-`routing-filter-chain`. Firewall-filter and policy term names inherit their
-parent's action. `pseudo` preserves supported declarations and references;
+`routing-filter-chain` and `fortios-interface`. Firewall-filter and policy term
+names inherit their parent's action. `pseudo` preserves supported declarations and references;
 `redact` may make output unloadable.
 
 `label-switched-path` covers JunOS MPLS LSP names: the `label-switched-path`
@@ -171,6 +171,31 @@ scoped to that section and nothing else, because `chain=` is firewall grammar
 too and `input`, `forward` and `srcnat` are RouterOS's own names -- substituting
 one of those would break the file. On a service-provider router a chain name
 frequently carries the operator or the customer it describes.
+
+`fortios-interface` covers FortiOS interface names: the `edit` declaration
+under `config system interface`, `config system zone`, `config system
+switch-interface` and `config system virtual-switch`, and the references to
+them -- `set interface`, `set srcintf`, `set dstintf`, `set extintf`, `set
+associated-interface`, `set outgoing-interface`, `set src-interface`, `set
+dst-interface`, `set member` inside those four sections, and `set device` under
+`config router static`. A list is a run of quoted names on one line and every
+entry moves.
+
+Names the platform owns are structural and are never substituted: the factory
+ports (`port1`, `wan1`, `internal`, `dmz`, `mgmt`, `ha`, `lan`, `modem`), the
+pseudo-interfaces (`fortilink`, `virtual-wan-link`, `ssl.root`, `npu0_vlink0`,
+`vsys_*`), and the `any` wildcard, which means *every* interface -- substituting
+it would change what a policy does. What is left is what an operator typed,
+which is where a customer name reaches an interface. A `port1` is also the
+FortiOS spelling of the interface numbering the report promises never to scrub.
+
+**This type carries more risk than the others, which is why it stays `keep`
+unless you ask for it.** An interface is pointed at from nearly everywhere in a
+FortiOS configuration, and coverage above is a list of reference spellings
+rather than a closed grammar: a spelling not on that list leaves a reference
+naming an interface that no longer exists. `set member` is the reason for the
+section scope -- in a `config firewall addrgrp` it lists addresses, not
+interfaces. Review the output before loading it.
 
 An operational name is treated as one whole value. Names very often encode
 other identities -- `gncg-cor1_to_rcbc-agr1-1` carries two device names -- and

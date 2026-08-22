@@ -225,15 +225,19 @@ class Sanitiser:
 
     # -- pass 1: learn the identities this device uses ---------------------
     def collect(self, lines) -> None:
-        # The one piece of state this pass has, and it earns its place: a
-        # RouterOS `name=` is the device's own name, a login or an interface
-        # depending only on the section above it, so the flat pattern tables
-        # cannot decide it. The scoped tables are consulted exactly like the
-        # flat ones; the section tracker is the same one the rules use, so the
-        # two can never disagree about where a line is.
-        section: tuple[str, ...] = ()
+        # The only state this pass has, and it earns its place: a RouterOS
+        # `name=` is the device's own name, a login or an interface depending
+        # only on the section above it, and a FortiOS `edit "netops"` is a login
+        # only because `config system admin` opened the block. The flat pattern
+        # tables cannot decide either. The scoped tables are consulted exactly
+        # like the flat ones; both section trackers are the ones the rules use,
+        # so the two passes can never disagree about where a line is.
+        ros_section: tuple[str, ...] = ()
+        fos_stack: tuple[str, ...] = ()
         for line in lines:
-            section = R.routeros_scope(line, section)
+            ros_section = R.routeros_scope(line, ros_section)
+            fos_stack = R.fortios_scope(line, fos_stack)
+            section = ros_section + R.fortios_scopes(fos_stack)
             for pat in R.HOSTNAME_PATS:
                 m = pat.search(line)
                 if m:

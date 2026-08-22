@@ -510,3 +510,200 @@ def test_a_peer_name_is_not_collected_as_a_hostname_or_a_login():
     assert '"a peer label"' in result.text
     assert not result.mapping.get("hostname")
     assert not result.mapping.get("username")
+
+
+# ---------------------------------------------------------------------------
+# FortiOS. The third block grammar in the file and the only NESTED one: a
+# `config` opens a section that `end` closes, an `edit` names one entry inside
+# it, and a `config` inside an `edit` opens another section without leaving the
+# first. So the section is a stack where RouterOS's is a single current path.
+#
+# What the stack is for: `set name` and `set alias` are written identically in
+# every section and mean something different in each. The section is the whole
+# of the evidence, which is the argument for scope in the first place.
+# ---------------------------------------------------------------------------
+
+#: one FortiOS file with `set name` in two sections and `set alias` in two more
+FOS_SCOPED = """config system global
+    set alias "Northwind HQ Edge"
+end
+config system interface
+    edit "port1"
+        set alias "TRANSIT: TransitCo - CID TC-772311"
+        set description "upstream handover"
+    next
+end
+config system snmp community
+    edit 1
+        set name "pubR0nly"
+    next
+end
+config firewall policy
+    edit 1
+        set name "TransitCo transit out"
+    next
+end
+"""
+
+
+def test_a_fortios_set_name_is_a_community_only_inside_the_snmp_section():
+    """The same three words in two sections, and only one of them is a secret."""
+    out = sanitise_text(FOS_SCOPED, Config(), salt=SALT)
+    assert 'set name "<REMOVED>"' in out.text
+    assert "pubR0nly" not in out.text
+    assert out.counts["fortios-snmp-community"] == 1
+    # the firewall policy's name is `text`, which the default policy keeps
+    assert 'set name "TransitCo transit out"' in out.text
+
+
+def test_a_fortios_policy_name_is_text_and_moves_with_the_text_family():
+    out = sanitise_text(FOS_SCOPED, policy(text="redact"), salt=SALT)
+    assert "TransitCo transit out" not in out.text
+    assert out.counts["fortios-object-name"] == 1
+    # and the community is NOT text: it stays with `secrets`
+    assert out.counts["fortios-snmp-community"] == 1
+
+
+def test_a_fortios_alias_is_split_by_scope_exactly_as_a_description_is():
+    """On an interface it is a port label a reviewer needs; under `system
+    global` it is the device's own label. Two families, one selector."""
+    out = sanitise_text(FOS_SCOPED, maximal(), salt=SALT)
+    assert out.counts["interface-description"] == 2   # port1's alias AND description
+    assert out.counts["description"] == 1             # the device alias
+    for leak in ("Northwind HQ Edge", "TransitCo - CID TC-772311",
+                 "upstream handover"):
+        assert leak not in out.text, leak
+
+
+def test_a_fortios_interface_alias_survives_a_policy_that_keeps_interfaces():
+    """The split is only worth having if the two halves can be told apart."""
+    out = sanitise_text(FOS_SCOPED, policy(text="redact", interfaces="keep"),
+                        salt=SALT).text
+    assert 'set alias "TRANSIT: TransitCo - CID TC-772311"' in out
+    assert "Northwind HQ Edge" not in out
+
+
+def test_a_fortios_end_leaves_the_section_it_closed():
+    """Without this the `system global` scope would still be in force at the
+    firewall policy, and every later `set alias` would be read as the device's
+    own label."""
+    assert R.fortios_scope("config system global", ()) == ("system global",)
+    assert R.fortios_scope("end", ("system global",)) == ()
+    # a stray `end` -- an IOS running-config finishes with one -- pops nothing
+    assert R.fortios_scope("end", ()) == ()
+
+
+def test_a_nested_fortios_config_does_not_leave_the_section_around_it():
+    """`config hosts` sits inside an `edit` inside `config system snmp
+    community`, and a line in it has not left the community."""
+    stack = ()
+    for line in ("config system snmp community", "    edit 1",
+                 "        config hosts", "            edit 1"):
+        stack = R.fortios_scope(line, stack)
+    assert stack == ("system snmp community", "hosts")
+    assert "snmp-community" in R.fortios_scopes(stack)
+    # and the inner `end` closes only the inner section
+    stack = R.fortios_scope("        end", stack)
+    assert stack == ("system snmp community",)
+
+
+@pytest.mark.parametrize("header", [
+    # the shape that found this: a quoted argument after the path
+    'config system replacemsg auth "auth-password-page"',
+    "config system replacemsg-image",
+    "config hosts",
+    "config system global",
+])
+def test_any_config_line_opens_a_section(header):
+    """Permissive on purpose. A header the recogniser MISSES is never pushed --
+    but its `end` still pops, and what it pops is the section around it."""
+    assert R.fortios_scope(header, ()) != ()
+
+
+def test_an_unrecognised_header_would_close_the_section_around_it():
+    """The leak this cost, kept as a test because the failure was silent: the
+    quoted-argument header was refused, its `end` closed the enclosing `config
+    system snmp community`, and the `set name` after it was no longer in the
+    section that makes it a community string."""
+    stack = R.fortios_scope("config system snmp community", ())
+    stack = R.fortios_scope(
+        '    config system replacemsg auth "auth-password-page"', stack)
+    stack = R.fortios_scope("    end", stack)
+    assert "snmp-community" in R.fortios_scopes(stack)
+
+
+def test_a_community_survives_nothing_after_a_nested_unknown_section():
+    text = ("config system snmp community\n"
+            "    edit 1\n"
+            '        config replacemsg auth "auth-password-page"\n'
+            "        end\n"
+            '        set name "pubR0nly"\n'
+            "    next\n"
+            "end\n")
+    result = sanitise_text(text, Config(), salt=SALT)
+    assert "pubR0nly" not in result.text, result.text
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_config_register_is_not_a_fortios_section():
+    """A hyphen follows the word, not whitespace."""
+    assert R.fortios_scope("config-register 0x2102", ()) == ()
+
+
+def test_edit_and_next_are_not_sections():
+    """They delimit one entry, not a section, and no rule needs to know which
+    entry it is in. Tracking them would need state with no reader."""
+    stack = R.fortios_scope("config system admin", ())
+    assert R.fortios_scope('    edit "netops"', stack) == stack
+    assert R.fortios_scope("    next", stack) == stack
+
+
+def test_a_fortios_scope_is_not_a_vendor_gate(cisco):
+    """The same standard every scope is held to: a file with no `config system
+    snmp community` in it cannot reach the rule that needs one, so nothing has
+    to ask what vendor the file is."""
+    out = sanitise_text(cisco, maximal(), salt=SALT)
+    assert not out.counts["fortios-snmp-community"]
+    assert not out.counts["fortios-object-name"]
+
+
+#: FortiOS names an entry with the `edit` that opens it, so under
+#: `config system admin` the login IS the block header
+FOS_IDENTITY = """#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0:user=netops
+config system global
+    set hostname "fw-edge-01"
+end
+config system admin
+    edit "netops"
+        set accprofile "super_admin"
+    next
+end
+config system interface
+    edit "port1"
+        set vdom "root"
+    next
+end
+"""
+
+
+def test_a_fortios_edit_is_a_login_only_under_an_admin_section():
+    """`edit "port1"` is an interface and `edit "netops"` is a person, and the
+    two lines are the same line. Only the section tells them apart."""
+    result = sanitise_text(FOS_IDENTITY, policy(usernames="pseudo"), salt=SALT)
+    assert "netops" not in result.text
+    assert "netops" in result.mapping["username"]
+    assert 'edit "port1"' in result.text, "an interface name is not a login"
+
+
+def test_a_fortios_hostname_is_found_behind_its_set():
+    result = sanitise_text(FOS_IDENTITY, policy(hostnames="pseudo"), salt=SALT)
+    assert "fw-edge-01" not in result.text
+    assert "fw-edge-01" in result.mapping["hostname"]
+
+
+def test_the_administrator_in_the_fortios_header_is_the_same_login():
+    """`user=netops` in the header and `edit "netops"` under `config system
+    admin` are one person, so they must get one pseudonym."""
+    result = sanitise_text(FOS_IDENTITY, policy(usernames="pseudo"), salt=SALT)
+    pseudonym = result.mapping["username"]["netops"]
+    assert result.text.count(pseudonym) == 2, result.text

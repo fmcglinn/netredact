@@ -7,7 +7,7 @@ from collections import Counter
 from ipaddress import ip_address
 
 from .config import OperationalNamesPolicy
-from .rules import routeros_scope
+from .rules import fortios_scope, fortios_scopes, routeros_scope
 
 _PREFIX = {
     "acl-firewall-filter": ("ACL", "acl"),
@@ -23,9 +23,33 @@ _PREFIX = {
     # read its own output back as an already-sanitised value and leave a real
     # one standing -- the reason `vlans` avoids `vlan` too.
     "routing-filter-chain": ("FILTER-CHAIN", "filter-chain"),
+    # FortiOS interface names. The token is short on purpose: FortiOS caps an
+    # interface name at 15 characters, and `pseudo` is only worth having if the
+    # substitute still LOADS -- `fos-if-a1b2c3` is 13. `fos-if` is also not a
+    # name anyone would choose, which is what `_render` needs in order to read
+    # its own output back without mistaking a real name for one of its own.
+    "fortios-interface": ("FOS-IF", "fos-if"),
 }
 
 _RESERVED_VRFS = {"default", "global", "none"}
+
+#: FortiOS interface names that are the platform's and not the operator's: the
+#: factory ports, the pseudo-interfaces, and the wildcard. Structural, exactly
+#: as :data:`_RESERVED_VRFS` is -- `set srcintf "any"` means every interface and
+#: substituting it would change what the policy does, and a `port1` is the
+#: FortiOS spelling of the interface NUMBERING this tool promises never to
+#: scrub. What is left is what an operator typed, which is where a customer name
+#: reaches an interface.
+_FORTIOS_SYSTEM_INTERFACES = re.compile(
+    r"any|port\d+|wan\d*|internal\d*|dmz\d*|mgmt\d*|ha\d*|lan\d*|modem"
+    r"|fortilink|virtual-wan-link|npu\d*_vlink\d*|vsys_\w+"
+    r"|(?:ssl|l2t|naf)\.\w+", re.I)
+
+#: keys whose value is an interface name wherever they appear. Each of these
+#: names an interface and nothing else, which is what lets them go unscoped.
+_FORTIOS_INTERFACE_REFS = (
+    r"srcintf|dstintf|interface|extintf|associated-interface"
+    r"|outgoing-interface|src-interface|dst-interface")
 
 
 class OperationalNames:
@@ -48,6 +72,11 @@ class OperationalNames:
         #: firewall chain under `/ip firewall filter`, where `input`, `forward`
         #: and `srcnat` are RouterOS's own and substituting one breaks the file.
         self._ros_section: tuple[str, ...] = ()
+        #: the FortiOS `config` path stack, tracked here for the same reason.
+        #: An `edit` name is an interface under `config system interface` and a
+        #: policy id under `config firewall policy`, and only the stack says
+        #: which.
+        self._fos_stack: tuple[str, ...] = ()
 
     def _render(self, kind: str, value: str, *, term: bool = False,
                 context: str = "") -> str:
@@ -79,6 +108,24 @@ class OperationalNames:
         regex = re.compile(pattern, flags)
         return regex.sub(lambda m: m.group(1) + callback(m.group(2)), line)
 
+    @staticmethod
+    def _replace_values(line: str, pattern: str, callback, *, flags=re.I) -> str:
+        """Substitute EVERY value after a keyword, not just the first.
+
+        FortiOS writes a list as a run of quoted tokens on one line -- `set
+        srcintf "port2" "port3"` -- and a keyword rule that took only the first
+        would leave the second naming an interface that no longer exists, which
+        is a configuration that does not load. The same argument :data:`_PAIRS`
+        makes for being searched rather than matched.
+        """
+        def one(match: re.Match) -> str:
+            values = re.sub(r'"[^"]*"|\S+',
+                            lambda token: callback(token.group(0)),
+                            match.group(2))
+            return match.group(1) + values + match.group(3)
+
+        return re.sub(pattern, one, line, flags=flags)
+
     def line(self, line: str) -> str:
         original = line
         self._ros_section = routeros_scope(line, self._ros_section)
@@ -105,6 +152,45 @@ class OperationalNames:
             r"((?:(?:input|output)\.|(?<![-\w])\.)(?:filter|filter-chain)=)"
             r"([^\s;]+)",
             chain)
+
+        # FortiOS interface names. ONE type carries the `edit` declaration and
+        # every reference, which is the whole point: the tag is a function of
+        # the value, so an interface declared under `config system interface`
+        # and named by a `set srcintf` in a firewall policy render identically
+        # and the file still loads. Two types could be given two actions, and
+        # then it would not -- the argument `pseudowire-name` and
+        # `routing-filter-chain` both make for being one rule.
+        #
+        # THE RISK, stated plainly because it is the reason this type defaults
+        # to `keep`: coverage here is a list of reference spellings, and a
+        # spelling not on it leaves a reference pointing at an interface that no
+        # longer exists. The keys below are the ones FortiOS uses; a `set
+        # member` outside the four interface sections is an ADDRESS group and is
+        # deliberately not one of them.
+        self._fos_stack = fortios_scope(line, self._fos_stack)
+        fos = fortios_scopes(self._fos_stack)
+
+        def interface(value: str) -> str:
+            bare = value.strip('"')
+            if not bare or _FORTIOS_SYSTEM_INTERFACES.fullmatch(bare):
+                return value
+            rendered = self._render("fortios-interface", bare)
+            return f'"{rendered}"' if value.startswith('"') else rendered
+
+        if "fortios-interface-names" in fos:
+            # the declaration, and the member list of a zone or an aggregate
+            for pat in (r'^(\s*edit\s+)("[^"]*"|\S+)(\s*)$',
+                        r'^(\s*set\s+member\s+)(.*?)(\s*)$'):
+                line = self._replace_values(line, pat, interface)
+        if "fortios-route-device" in fos:
+            # `set device` is an interface on a static route and something else
+            # elsewhere, so it is scoped where the keys below are not
+            line = self._replace_values(
+                line, r"^(\s*set\s+device\s+)(.*?)(\s*)$", interface)
+        line = self._replace_values(
+            line,
+            rf"^(\s*set\s+(?:{_FORTIOS_INTERFACE_REFS})\s+)(.*?)(\s*)$",
+            interface)
 
         parent = None
         match = re.search(r"\bpolicy-statement\s+(\S+)\s*\{", original, re.I)

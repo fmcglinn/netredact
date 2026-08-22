@@ -77,6 +77,28 @@ VENDOR_HINTS = (
         (r"^add\s+\S+=", WEAK),
         (r"^#\s*model\s*=", WEAK),
     )),
+    ("fortinet", (
+        # the first line of every FortiOS backup, and the two header comments
+        # under it. `platform` acts on the model and the release INSIDE this
+        # line and leaves the key itself standing, which is the whole reason
+        # detection is allowed to rest on it -- see `hardware-model`.
+        (r"^#config-version\s*=", DECISIVE),
+        (r"^#(?:buildno|conf_file_ver|global_vdom|vdom)\s*=", DECISIVE),
+        # `set <key> ENC <blob>`: FortiOS's marker on a stored credential, and
+        # nobody else's grammar. It survives redaction because the marker is
+        # the grammar and only the blob after it is the value.
+        (r"^\s*set\s+[\w-]+\s+ENC\s+\S", DECISIVE),
+        # the block grammar itself. `config` at column zero opening a section
+        # that `end` closes, and `next` closing an `edit` -- no other dialect
+        # writes either word alone on a line.
+        (r"^config\s+[a-z]", STRONG),
+        (r"^\s*next\s*$", STRONG),
+        (r"^\s*edit\s+\"", STRONG),
+        (r"^\s*set\s+vdom\s+", STRONG),
+        (r"^\s*set\s+accprofile\s+", STRONG),
+        (r"^end\s*$", WEAK),
+        (r"^\s*set\s+allowaccess\s+", WEAK),
+    )),
     ("cisco", (
         (r"^\s*boot-start-marker", DECISIVE),
         # the `show running-config` preamble, which Arista does not emit

@@ -267,6 +267,174 @@ def test_a_routeros_section_path_is_not_a_surviving_credential():
 
 
 # ---------------------------------------------------------------------------
+# FortiOS. `set <key> ENC <blob>` is the marker FortiOS writes in front of a
+# stored credential, and the check knows it by that marker rather than by a
+# list of keys -- so an SNMPv3 `auth-pwd` and a key no release has invented yet
+# are both judged.
+#
+# Why it is named at all: `long-base64-left` happened to catch these, and a
+# check that only knows a shape must never be the only thing between a
+# regressed rule and a credential in the output. That is the argument
+# `wpa-psk` and `private-key` are already in the keyword list for.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", [
+    "        set auth-pwd ENC MWlJokDb+fAtYJhw/fISq9OwNfsPCVN2HjDKT",
+    "        set priv-pwd ENC Zm9ydGluZXQtcHJpdmFjeS1rZXktdGVzdG9u",
+    "        set psksecret ENC cHNrc2VjcmV0YmxvYjAxMjM0NTY3ODlhYmM",
+    "        set some-future-credential ENC c29tZWZ1dHVyZWNyZWRlbnQ",
+    # short enough that no shape check would speak: the marker is all there is
+    "        set auth-pwd ENC QUFBQQ",
+])
+def test_a_kept_fortios_credential_is_always_reported(line):
+    assert "credential-left" in {f.check for f in verify([line], Config())}
+
+
+@pytest.mark.parametrize("line", [
+    "        set auth-pwd ENC <REMOVED>",
+    '        set auth-pwd ENC "<SECRET-a1b2c3>"',
+    "        set password ENC <REMOVED>",
+])
+def test_a_handled_fortios_credential_is_not_reported(line):
+    """`ENC` is one of the tokens allowed between a keyword and its
+    placeholder, which it gets for free: `VTOK` is derived from the same hint
+    table the rules use, so the two cannot fall out of step."""
+    assert verify([line], Config()) == []
+
+
+def test_the_word_enc_in_kept_free_text_is_not_a_credential():
+    """The `set <key>` in front of the marker is the guard, not decoration."""
+    assert verify(['    set description "ENC handover, rack 4"'],
+                  Config()) == []
+
+
+@pytest.mark.parametrize("line", [
+    # a message TEMPLATE name, which is grammar and not a value. These two were
+    # the whole finding list on a real FortiGate backup.
+    'config system replacemsg auth "auth-password-page"',
+    'config system replacemsg auth "auth-cert-passwd-page"',
+    "config system snmp community",
+    "config user password-policy",
+])
+def test_a_fortios_config_header_is_a_section_path_and_not_a_value(line):
+    assert verify([line], Config()) == []
+
+
+def test_a_credential_inside_the_section_is_still_judged():
+    """The header is ignored whole; the lines under it are not."""
+    assert "credential-left" in {f.check for f in verify(
+        ['config system admin', '    set psksecret hunter2'], Config())}
+
+
+def test_a_fortios_password_policy_knob_is_not_a_credential():
+    assert verify(["config system password-policy",
+                   "    set status enable"], Config()) == []
+
+
+# ---------------------------------------------------------------------------
+# An empty value is a credential that is ABSENT, not one that survived.
+# RouterOS writes an unset key that way -- `auth-key=""` on a `/routing ospf
+# interface-template` is an interface with no authentication on it -- and every
+# one of them was reported as a line a human had to look at, carrying no
+# credential at all. Same judgement `RANCID_SENTINEL` already makes for
+# `## SECRET-DATA`: evidence the value is not there beats the keyword that
+# introduces it.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", [
+    'add area=backbone-v2 auth-id=1 auth-key="" cost=10 interfaces=vlan4040-1941',
+    "add auth-key='' interfaces=ether1",
+    'add name=guest wpa2-pre-shared-key=""',
+    'set psksecret ""',
+    "        set auth-pwd ENC \"\"",
+    "  password \"\";",
+])
+def test_an_empty_credential_is_not_a_surviving_credential(line):
+    assert verify([line], Config()) == []
+
+
+def test_the_rule_leaves_an_empty_value_alone_and_counts_nothing():
+    """There is nothing to destroy, so nothing is destroyed and nothing is
+    claimed to have been."""
+    line = 'add area=backbone-v2 auth-key="" interfaces=ether1\n'
+    result = sanitise_text(line, Config(), salt=SALT)
+    assert result.text == line
+    assert not result.counts
+    assert result.findings == []
+
+
+def test_an_empty_value_ends_only_its_own_match():
+    """The danger in this exemption: a line with an empty key AND a real
+    credential on it must still be reported. `search` keeps scanning, and this
+    is what says so."""
+    line = 'add auth-key="" password=hunter2'
+    assert "credential-left" in {f.check for f in verify([line], Config())}
+
+
+def test_a_real_quoted_key_is_still_reported():
+    assert "credential-left" in {
+        f.check for f in verify(['add auth-key="RealKey42"'], Config())}
+
+
+def test_an_empty_snmp_community_is_not_a_surviving_community():
+    assert verify(["/snmp community", 'add name="" addresses=128.66.16.0/24'],
+                  Config()) == []
+    assert verify(["config system snmp community", "    edit 1",
+                   '        set name ""'], Config()) == []
+
+
+# ---------------------------------------------------------------------------
+# An SNMP community in a grammar that gives the line no keyword. RouterOS
+# writes `name=public` and FortiOS `set name "public"`, and in both the SECTION
+# is the only evidence the value is a community string -- so `credential-left`,
+# which reads one line at a time, went silent on a kept one. `secrets = "keep"`
+# is allowed; passing `--strict` over it is the fail-open this check prevents.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("lines", [
+    ["config system snmp community", '    edit 1', '        set name "pubR0nly"'],
+    ["/snmp community", "add addresses=128.66.16.0/24 name=pubR0nly"],
+])
+def test_a_kept_snmp_community_is_reported_in_either_grammar(lines):
+    assert "credential-left" in {f.check for f in verify(lines, Config())}
+
+
+@pytest.mark.parametrize("lines", [
+    ["config system snmp community", '    edit 1', '        set name "<REMOVED>"'],
+    ["config system snmp community", '    edit 1',
+     '        set name "<SECRET-a1b2c3>"'],
+    ["/snmp community", "add addresses=128.66.16.0/24 name=<REMOVED>"],
+])
+def test_a_handled_snmp_community_is_not_reported(lines):
+    assert verify(lines, Config()) == []
+
+
+@pytest.mark.parametrize("lines", [
+    # the same `set name` one section over is a policy label, not a secret
+    ["config firewall policy", "    edit 1", '        set name "transit out"'],
+    # and the section has to be closed by its `end`, or every later `set name`
+    # in the file would read as a community
+    ["config system snmp community", "end", "config firewall policy",
+     "    edit 1", '        set name "transit out"'],
+    ["/snmp community", "/ip firewall filter", "add chain=input name=notacommunity"],
+])
+def test_a_name_outside_the_community_section_is_not_a_credential(lines):
+    assert verify(lines, Config()) == []
+
+
+def test_a_clean_fortios_backup_verifies_clean(fortinet):
+    result = sanitise_text(fortinet, Config(), salt=SALT)
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_keeping_a_fortios_secret_still_fails_the_safety_net(fortinet):
+    """Setting `secrets = "keep"` is allowed. Passing `--strict` silently over
+    it is not, and that is what these checks are for."""
+    result = sanitise_text(fortinet, policy(secrets="keep"), salt=SALT)
+    assert "credential-left" in {f.check for f in result.findings}
+
+
+# ---------------------------------------------------------------------------
 # The RouterOS provenance header. Every other check knows a shape or a keyword,
 # and a header value has neither: a licence id is an opaque word. So a header
 # key no rule knew about left the tool with NOTHING reported -- silence, which

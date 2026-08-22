@@ -7,7 +7,7 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**67 rules**: 39 `secrets`, 7 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 3 `interfaces`, 1 `vlans`, 2 `circuits`.
+**71 rules**: 42 `secrets`, 8 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 3 `interfaces`, 1 `vlans`, 2 `circuits`.
 
 - 16 verification checks
 
@@ -26,7 +26,7 @@ Three tokens stand in for material that recurs in every pattern.
 and its secret:
 
 ```
-(?:\d+|sha512|sha256|sha1|md5|encrypted|clear|ascii|ascii-text|hex|hexadecimal|plain-text)
+(?:\d+|sha512|sha256|sha1|md5|encrypted|enc|clear|ascii|ascii-text|hex|hexadecimal|plain-text)
 ```
 
 `<VAL>` -- the value matcher: a quoted string, or a run of
@@ -135,8 +135,8 @@ Each rule name links to its pattern, which is listed in full under
 |---|---|---|---|
 | [`enable-secret`](#enable-secret) | `secrets` | `enable secret` / `enable password`, any encoding |  |
 | [`username-secret`](#username-secret) | `secrets` | `username U ... password\|secret X` |  |
-| [`bare-password`](#bare-password) | `secrets` | an indented `password` / `passwd` line, e.g. under `line vty` |  |
-| [`bare-secret`](#bare-secret) | `secrets` | a bare `secret` line, including JunOS `set ... secret` |  |
+| [`bare-password`](#bare-password) | `secrets` | an indented `password` / `passwd` line, e.g. under `line vty`, and FortiOS `set password ENC X` |  |
+| [`bare-secret`](#bare-secret) | `secrets` | a bare `secret` line, including JunOS `set ... secret` and FortiOS `set secret` / `set psksecret` |  |
 | [`authentication-password`](#authentication-password) | `secrets` |  |  |
 | [`encoded-key`](#encoded-key) | `secrets` | any `key 0\|7\|8\|encrypted X` anywhere on the line |  |
 | [`aaa-server-key`](#aaa-server-key) | `secrets` | `key X` on a tacacs / radius / ldap / server-private line |  |
@@ -162,6 +162,10 @@ Each rule name links to its pattern, which is listed in full under
 | [`wpa-psk`](#wpa-psk) | `secrets` | `wpa-psk X` |  |
 | [`ftp-password`](#ftp-password) | `secrets` | `ip ftp\|tftp\|http client password X` |  |
 | [`routeros-license-id`](#routeros-license-id) | `identity` | RouterOS's licence identifier under both names it goes by -- `# software id = X` and `# system id = X` in the `/export` header, `system-id:` in `/system license print`. Tied to the one device, so `identity` and not `platform`. The `:` or `=` is required, because `system-id` is also an IS-IS keyword -- mikrotik grammar |  |
+| [`fortios-encrypted`](#fortios-encrypted) | `secrets` | FortiOS `set <key> ENC X` -- the marker FortiOS writes in front of a stored credential and in front of nothing else, so the rule needs no list of keys -- fortinet grammar |  |
+| [`fortios-credential-key`](#fortios-credential-key) | `secrets` | FortiOS `set <qualifier>-password\|passwd\|pwd\|secret\|passphrase X` without the `ENC` marker -- the cleartext a typed or templated configuration carries |  |
+| [`fortios-snmp-community`](#fortios-snmp-community) | `secrets` | `set name` under `config system snmp community`, which is what FortiOS calls a community string -- fortinet grammar | inside `snmp-community` |
+| [`fortios-object-name`](#fortios-object-name) | `text` | `set name` on a FortiOS object nothing refers to by name -- a firewall policy, which the configuration addresses by its `edit <id>` -- fortinet grammar | inside `object-labels` |
 | [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
 | [`script-checksum`](#script-checksum) | `identity` |  |  |
 | [`unsupported-transceiver`](#unsupported-transceiver) | `secrets` | Arista `service unsupported-transceiver <label> <code>`: a TAC-issued code, and a label that in practice carries a project name -- arista grammar |  |
@@ -224,13 +228,13 @@ block also carries the pattern that ends it.
 ### `bare-password`
 
 ```
-\s*(?:password|passwd)\s+(?:<ENC>\s+)*
+\s*(?:set\s+)?(?:password|passwd)\s+(?:<ENC>\s+)*
 ```
 
 ### `bare-secret`
 
 ```
-\s*(?:set\s+\S.*?\s)?secret\s+(?:<ENC>\s+)*
+\s*(?:set\s+(?:\S.*?\s)?)?(?:psk)?secret\s+(?:<ENC>\s+)*
 ```
 
 ### `authentication-password`
@@ -383,6 +387,30 @@ block also carries the pattern that ends it.
 \s*#?\s*(?:software|system)[-\s]id\s*[:=]\s*
 ```
 
+### `fortios-encrypted`
+
+```
+\s*set\s+(?!(?:password|passwd|(?:psk)?secret)\s)[\w-]+\s+ENC\s+
+```
+
+### `fortios-credential-key`
+
+```
+\s*set\s+(?!(?:password|passwd|(?:psk)?secret)\s)[\w-]*(?:password|passwd|pwd|secret|passphrase)\d*\s+(?!ENC\s)
+```
+
+### `fortios-snmp-community`
+
+```
+\s*set\s+name\s+
+```
+
+### `fortios-object-name`
+
+```
+\s*set\s+name\s+
+```
+
 ### `junos-password`
 
 ```
@@ -404,13 +432,13 @@ block also carries the pattern that ends it.
 ### `hardware-model`
 
 ```
-(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),)
+(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),|^\s*#\s*config-version\s*=\s*([^\s:<>-]+)(?=-\d))
 ```
 
 ### `os-version`
 
 ```
-(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$)
+(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$|^\s*#\s*config-version\s*=\s*(?:<[^\s:<>]*>|[^\s:<>-]+)-(\d[^\s:<>]*)|^\s*#\s*buildno\s*=\s*(\S+)\s*$)
 ```
 
 ### `software-image`
@@ -428,13 +456,13 @@ block also carries the pattern that ends it.
 ### `location`
 
 ```
-(?:^\s*(?:set\s+snmp\s+|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
+(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
 ```
 
 ### `contact`
 
 ```
-(?:^\s*(?:set\s+snmp\s+|snmp-server\s+)?contact\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
+(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?contact(?:-info)?\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
 ```
 
 ### `junos-location-body`
@@ -446,7 +474,7 @@ block also carries the pattern that ends it.
 ### `description`
 
 ```
-^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+^\s*(?:(?:set\s+(?:\S.*?\s)?)?description|set\s+(?:comments?|alias))\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
 ```
 
 ### `acl-remark`
@@ -464,7 +492,7 @@ block also carries the pattern that ends it.
 ### `interface-description`
 
 ```
-^\s*(?:set\s+\S.*?\s)?description\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
+^\s*(?:(?:set\s+(?:\S.*?\s)?)?description|set\s+(?:comments?|alias))\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$
 ```
 
 ### `vlan-name`
@@ -584,7 +612,7 @@ block also carries the pattern that ends it.
 ### `serial-number`
 
 ```
-^\s*[!#]?\s*(?:System\s+)?[Ss]erial\s*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
+^\s*[!#]?\s*(?:set\s+)?(?:System\s+)?[Ss]erial[-\s]*(?:[Nn]umber)?\s*[:=]?\s+(\S+.*)$
 ```
 
 ### `certificate-block`

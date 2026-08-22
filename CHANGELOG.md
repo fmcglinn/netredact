@@ -299,6 +299,161 @@ All notable changes to this project are documented here. The format follows
   one constant, so the rule and the check cannot disagree, and it covers
   `ecdsa-sha2-*` as well as `ssh-rsa` / `ssh-dss` / `ssh-ed25519`.
 
+- **Fortinet FortiOS support.** FortiOS spells every leaf `set <key> <value>`
+  inside a `config … end` block and marks a stored credential with `ENC`. Three
+  new rules cover it, plus a fourth kind of block for the scope names the rules
+  already share.
+
+  `fortios-encrypted` in `secrets` is keyed on the MARKER and not on a list of
+  keys: FortiOS writes `ENC` in front of a secret and in front of nothing else,
+  so `auth-pwd`, `priv-pwd`, `privatekey`, `ppk-secret`, `secondary-secret` and
+  whatever a later release invents are all covered the day they appear. A
+  lookahead keeps it disjoint from `bare-password` and `bare-secret`, and that
+  is load-bearing rather than tidy: two rules matching one span would splice
+  twice, and the second would hash the first's marker. Those two keep their own
+  rules because they also occur *without* the marker, which this rule by
+  construction cannot see. `fortios-snmp-community` in `secrets` and
+  `fortios-object-name` in `text` are both `set name`, told apart by the section
+  and by nothing else.
+
+  `bare-password`, `bare-secret`, `serial-number`, `description`, `location`,
+  `contact` and the `hostname` collector all learned the adjacent `set` form,
+  because FortiOS puts nothing between `set` and the key it is setting where
+  JunOS always has a path in between. Until they did, `set password ENC <blob>`
+  matched nothing at all: the rules looked for `password` and found `set`, and
+  an admin password, a RADIUS shared secret and an IPsec pre-shared key went
+  through in full. `credential-left` and `long-base64-left` reported them, so
+  `--strict` failed rather than passing over them -- but reported is not
+  removed. `set alias` and `set comments` join `description` for the same
+  reason, which gets them the existing scope split for free.
+
+  `ENC` joins the encoding hints, and it had to: with the prefix fixed and the
+  hint missing, `ENC` was the value and the line came out
+  `set password <SECRET-…> <blob>` -- a marker saying the line was handled with
+  the credential still on it, which is the failure `ENC_RUN` exists to prevent.
+
+  **Scope.** A `config` line opens a section that `end` closes, and unlike every
+  other dialect here it NESTS -- `config hosts` inside an `edit` inside `config
+  system snmp community` -- so the section is a stack. `edit` / `next` are not
+  tracked: they delimit one entry, and no rule needs to know which. Where more
+  than one dialect has the block the name stays JunOS's own, so one rule reaches
+  all of them; a section only FortiOS has keeps its own name. Those names are
+  what make `set name` and `set alias` decidable at all -- a community string
+  under `config system snmp community`, a policy label under `config firewall
+  policy`, a port label on an interface, the device's own label under `config
+  system global`, and a login from the `edit` that opens an entry under `config
+  system admin`. `object-labels` carries the same claim it does on RouterOS:
+  that nothing REFERENCES that section's name. An interface is the
+  counter-example and is deliberately absent -- `edit "port1"` is pointed at by
+  `set srcintf "port1"` from every policy in the file. None of it is a vendor
+  gate: a file with no such section cannot reach the rules that need one.
+
+  **The header.** `#config-version=FGT60F-7.2.5-FW-build1517-230606:…:user=netops`
+  carries a model, a release and a login on one line, introduced by nothing but
+  their position, so it is split the way the Arista `! device:` header is: a
+  branch on the rule that owns each kind of value, never one rule for the whole
+  line. `#buildno=` is a second `os-version` branch. The two act on one line in
+  sequence, so `os-version` has to find the release past whatever
+  `hardware-model` just wrote there -- and the release must begin with a digit,
+  which no placeholder does, which is what makes a second pass a no-op.
+
+  Detection reports `fortinet` from `#config-version=`, `#buildno=`, the `ENC`
+  marker and the block grammar. The key survives every branch that acts on that
+  line, which is what lets a redacted file still name its vendor. The provenance
+  marker comments with `#`.
+
+  The verifier learns the `ENC` marker so a regressed rule cannot leave an
+  SNMPv3 password behind with only `long-base64-left` -- a check that knows a
+  shape and not what the material is -- standing between it and a clean
+  `--strict`. `psksecret`, `privatekey` and `…-pwd` join the credential
+  keywords: `\bsecret\b` does not match inside `psksecret`.
+
+  `fortios-credential-key` is the same keys WITHOUT the marker -- the cleartext
+  a typed or templated configuration carries, where a backup carries `ENC`. A
+  qualified key name is still that key, exactly as it is on RouterOS, so the
+  qualifier is admitted rather than a list of keys being written out:
+  `auth-pwd`, `group-password`, `key-passphrase`, `password2`. The `\d*\s+`
+  after the credential word is the guard -- `set password-policy status enable`
+  and `set password-expire 5` have a hyphen there, and admitting a hyphenated
+  suffix would have redacted `status` and `5` and broken both knobs.
+
+  `[operational-names] fortios-interface` covers FortiOS interface names: the
+  `edit` declaration under `config system interface`, `config system zone`,
+  `config system switch-interface` and `config system virtual-switch`, and the
+  references to them -- `set interface`, `set srcintf`, `set dstintf`, `set
+  extintf`, `set associated-interface`, `set outgoing-interface`, `set member`
+  inside those four sections, and `set device` under `config router static`. A
+  list is a run of quoted names on one line and every entry moves. One type
+  carries the declaration and every reference, so the tag is a function of the
+  value and the file still loads; two types could be given two actions and it
+  would not.
+
+  Names the platform owns stay: the factory ports, the pseudo-interfaces, and
+  the `any` wildcard, which means *every* interface -- substituting it would
+  change what a policy does. That is `_RESERVED_VRFS` reasoning, and it also
+  keeps true the report's promise that interface numbering is never scrubbed.
+  This type carries more risk than the others and defaults to `keep` for it:
+  coverage is a list of reference spellings rather than a closed grammar, and a
+  spelling not on it leaves a reference naming an interface that no longer
+  exists. `set member` is the reason for the section scope -- in a `config
+  firewall addrgrp` it lists addresses.
+
+  A kept SNMP community is now reported in BOTH the grammars that give the line
+  no keyword: RouterOS's `name=` under `/snmp community` and FortiOS's `set
+  name` under `config system snmp community`. The section is the only evidence
+  that the value is a community string, so `credential-left` -- which reads one
+  line at a time -- had gone silent on one. `secrets = "keep"` is allowed;
+  passing `--strict` over it is the fail-open these checks exist to prevent.
+
+  A FortiOS RANCID capture is segmented and stripped. `show full-configuration`
+  and the bare `show` join the allowlisted configuration commands, and FortiOS
+  prompts -- `fw-edge-01 # show`, with the VDOM optionally in brackets -- are
+  recognised, which `_PROMPT` never did because it requires a `user@host` that
+  FortiOS does not write. They are boundaries only and never evidence for
+  detection, and the comment leader is required: detection is what licenses
+  deleting everything unrecognised, so a banner body containing `a # b` must not
+  be able to turn a configuration into a capture.
+
+### Fixed
+
+- A FortiOS `config` header whose path ends in a quoted argument -- `config
+  system replacemsg auth "auth-password-page"` -- was not recognised as opening
+  a section, and **that leaked**. The header was never pushed, but its `end`
+  still popped, so what it closed was the section AROUND it: a `config system
+  snmp community` ended early and the `set name` after it was no longer in the
+  section that makes it a community string, so the community survived.
+
+  The recogniser now asks only what FortiOS itself asks -- the line begins with
+  the word `config` -- because the two ways of being wrong are not symmetric. A
+  header that is missed unbalances the stack and can leave a secret in the file;
+  a line wrongly taken for a header over-applies a rule and cannot. A redaction
+  tool takes the second. `config-register 0x2102` is still not a section: a
+  hyphen follows the word, not whitespace.
+
+- `credential-left` no longer reports a FortiOS `config` header. `config system
+  replacemsg auth "auth-password-page"` names a message template, and the check
+  read the `password` inside that name as a surviving credential, as it did for
+  `auth-cert-passwd-page` beside it. A `config` line is a section path and all
+  of it is path -- unlike RouterOS there is no command after it -- so the line
+  is ignored whole, exactly as a `/`-prefixed RouterOS path already is. The
+  lines UNDER the header are judged as before.
+
+
+- `credential-left` no longer reports an EMPTY credential. RouterOS writes an
+  unset key as `auth-key=""` -- a `/routing ospf interface-template` with no
+  authentication on it -- and every one of them came back as a line a human had
+  to look at, on a line carrying no credential at all. Three of them were the
+  entire finding list on a clean provider export. The rule was already right:
+  there is nothing to destroy, so nothing is destroyed and nothing is counted.
+  Only the check was wrong. `''` and the FortiOS `set <key> ENC ""` are the same
+  case, and so is an empty SNMP community in either grammar.
+
+  This is the judgement `RANCID_SENTINEL` already makes for `## SECRET-DATA`:
+  evidence that the value is not there beats the keyword that introduces it. The
+  empty value ends only its own match, so `auth-key="" password=hunter2` still
+  fires on the second keyword -- which is what keeps the exemption from being a
+  way to hide a real credential behind an empty one.
+
 ## [0.1.0] - 2026-08-20
 
 First release.

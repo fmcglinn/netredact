@@ -43,11 +43,11 @@ WINDOW = 10
 def _comment(vendor: str) -> str:
     """The comment character for a vendor's grammar.
 
-    JunOS and RouterOS comment with ``#``; IOS-style grammars use ``!``. An
-    unknown vendor gets ``!``, which the ``set`` format also tolerates at the
-    start of a line.
+    JunOS, RouterOS and FortiOS comment with ``#``; IOS-style grammars use
+    ``!``. An unknown vendor gets ``!``, which the ``set`` format also tolerates
+    at the start of a line.
     """
-    return "#" if vendor in ("juniper", "mikrotik") else "!"
+    return "#" if vendor in ("juniper", "mikrotik", "fortinet") else "!"
 
 
 def marker_for(vendor: str, version: str) -> str:

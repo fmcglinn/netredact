@@ -53,6 +53,17 @@ ROS_HEADER = (
     "# serial number = HEA08XXXXXX\n"
 )
 
+#: the FortiOS backup header. One line carries a model, a release and the login
+#: of the administrator who saved the file, introduced by nothing but their
+#: position -- the same situation as the Arista header and split the same way,
+#: a branch on the rule that owns each kind of value.
+FOS_HEADER = (
+    "#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0:user=netops\n"
+    "#conf_file_ver=17423905517731923\n"
+    "#buildno=1517\n"
+    "#global_vdom=1\n"
+)
+
 
 def redacted(text: str) -> str:
     cfg = policy(platform="redact")
@@ -171,6 +182,52 @@ def test_a_license_id_is_identity_and_not_platform():
     assert "software id = <REMOVED>" in out
 
 
+def test_the_fortios_header_loses_its_model_and_release_and_keeps_its_key():
+    """`#config-version=` is what the detector reads, so it has to survive."""
+    out = redacted(FOS_HEADER)
+    assert "FGT60F" not in out and "7.2.5-FW-build1517-230606" not in out
+    assert out.startswith("#config-version=<REMOVED>-<REMOVED>:")
+    # the rest of the line is grammar and is left exactly as it was
+    assert ":opmode=0:vdom=0:user=netops" in out
+    assert "#buildno=<REMOVED>" in out
+
+
+def test_the_fortios_header_fields_belong_to_different_rules():
+    cfg = policy(platform="redact", identity="redact")
+    cfg.collection.rancid_diagnostics = "keep"
+    result = sanitise_text(FOS_HEADER, cfg, salt=SALT)
+    assert result.counts["hardware-model"] == 1     # FGT60F
+    assert result.counts["os-version"] == 2         # the release, and buildno
+
+
+def test_the_fortios_release_is_still_found_after_the_model_is_replaced():
+    """The two rules act on ONE line in sequence, so the second reads what the
+    first wrote. `<MODEL-a1b2c3>` and `<REMOVED>` both carry characters a model
+    code cannot, and the release has to be found past either of them."""
+    for action, marker in (("hash", "<MODEL-"), ("redact", "<REMOVED>")):
+        out = sanitise_text(FOS_HEADER, policy(platform=action), salt=SALT).text
+        assert marker in out, out
+        assert "7.2.5-FW-build1517-230606" not in out, (action, out)
+
+
+def test_a_fortios_model_is_kept_or_taken_by_the_same_knob_as_any_other():
+    """A rule of its own would be a second action for one disclosure, so
+    `[platform] hardware-model = "keep"` would mean different things on
+    different dialects."""
+    out = sanitise_text(FOS_HEADER, section("platform", "redact",
+                                            hardware_model="keep"), salt=SALT).text
+    assert out.startswith("#config-version=FGT60F-<REMOVED>:")
+
+
+def test_the_fortios_header_is_idempotent_under_every_platform_action():
+    """The release must begin with a digit, which no placeholder does. Without
+    that, a second pass read `<MODEL` as a model and nested the markers."""
+    for action in ("hash", "redact"):
+        cfg = policy(platform=action, usernames="pseudo")
+        once = sanitise_text(FOS_HEADER, cfg, salt=SALT).text
+        assert sanitise_text(once, cfg, salt=SALT).text == once, action
+
+
 def test_a_boot_image_goes_whether_or_not_it_is_commented_out():
     out = redacted("! boot system flash:/EOS64-4.32.1F.swi\n"
                    "boot system flash:c2900-universalk9-mz.SPA.155-3.M.bin\n")
@@ -269,6 +326,11 @@ def test_the_section_defaults_to_keep_and_names_every_platform_rule():
     ("version 21.4R3-S4.9;\nsystem {\n", "juniper"),
     ("# 2026-08-19 10:22:33 by RouterOS 7.15.3\n", "mikrotik"),
     ("# software id = ABCD-EFGH\n", "mikrotik"),
+    ("#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0\n", "fortinet"),
+    ("#buildno=1517\n", "fortinet"),
+    # no header at all: the block grammar and the `ENC` marker carry it
+    ("config system admin\n    edit \"netops\"\n"
+     "        set password ENC AAAA\n    next\nend\n", "fortinet"),
     # no header at all: the section paths and the selector expression carry it
     ("/interface ethernet\nset [ find default-name=ether1 ] name=ether1\n",
      "mikrotik"),
@@ -294,6 +356,25 @@ def test_routeros_detection_survives_platform_and_identity_destroying_it():
 
 def test_a_routeros_export_is_not_read_as_another_vendor(mikrotik):
     assert detect_vendor(mikrotik) == "mikrotik"
+
+
+def test_fortios_detection_survives_platform_destroying_its_evidence():
+    """`#config-version=` keeps its key when the model and release after it are
+    removed, which is the arrangement the Arista and RouterOS headers already
+    rely on -- and the reason detection reads the input and never the output."""
+    out = sanitise_text(FOS_HEADER, policy(platform="redact"), salt=SALT).text
+    assert "FGT60F" not in out and "7.2.5" not in out
+    assert detect_vendor(out) == "fortinet"
+
+
+def test_a_fortios_backup_is_not_read_as_another_vendor(fortinet):
+    assert detect_vendor(fortinet) == "fortinet"
+
+
+def test_a_junos_set_file_is_not_read_as_fortios(edge_junos):
+    """Both grammars write `set <key> <value>` lines, and one of the FortiOS
+    hints is the word `set`. The vendor a file reports must not flip on that."""
+    assert detect_vendor(edge_junos) == "juniper"
 
 
 def test_detection_survives_the_platform_family_destroying_its_evidence():
