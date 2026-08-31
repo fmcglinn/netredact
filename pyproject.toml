@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "netredact"
 dynamic = ["version"]
-description = "Redact secrets and pseudonymise identifying data in Cisco, Arista, Juniper and Fortinet network configurations"
+description = "Redact secrets and pseudonymise identifying data in Cisco, Arista, Juniper, MikroTik and Fortinet network configurations"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 # the name carries "redact", so the other words people search for live here
-keywords = ["network", "cisco", "arista", "juniper", "fortinet", "ios",
-            "eos", "junos", "fortios", "fortigate",
+keywords = ["network", "cisco", "arista", "juniper", "fortinet", "mikrotik", "ios",
+            "eos", "junos", "fortios", "fortigate", "routeros",
             "sanitise", "sanitize", "anonymise", "anonymize", "pseudonymise",
             "deidentify", "redact", "secrets", "netdevops"]
 authors = [{ name = "Fraser McGlinn" }]

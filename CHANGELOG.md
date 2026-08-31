@@ -4,441 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Added
-
-- **Fortinet FortiOS / FortiGate support.** A FortiOS config states nothing
-  twice: the grammar is `config <path>` … `end` with `edit <id>` … `next`
-  inside it, and every value is a bare `set <attribute> <value>` whose meaning
-  comes from the block above it rather than from the line. So the sanitiser now
-  tracks that block as a fourth kind of scope, sharing JunOS's names wherever
-  the grammars share the block -- `config system interface` is scope
-  `interfaces`, `config system snmp community` is scope `snmp` -- and one new
-  rule, `fortios-secret`, covers every credential the platform has: `password`,
-  `passwd`, `psksecret`, `ppk-secret`, `auth-pwd`, `priv-pwd`, `passphrase`,
-  `api-key`, `secret` and `key`, with or without the `ENC` token FortiOS marks
-  its encrypted values with. The keyword has to be the first token after `set`,
-  which is what keeps the two ordinary words in that list off a JunOS `set`
-  path where `bare-secret` and `quoted-key` own them. `fortios-snmp-community`
-  selects a `set name` inside an SNMP community block and nowhere else -- a
-  bare `set name` is everywhere in FortiOS, so the block is the whole of the
-  evidence -- and `fortios-interface-alias` puts a port's `set alias` in the
-  `interfaces` family beside its description. The `#config-version=` header is
-  split across the families that own its parts, as Arista's `! device:` line
-  already was: the model to `hardware-model`, the release, its build and the
-  `#buildno=` / `#branch_pt=` lines to `os-version`, and the administrator in
-  its `user=` field to `usernames`. `location`, `contact`, `description` and
-  the hostname sources learned FortiOS's spellings of fields they already had
-  (`set location`, `set contact-info`, `set comments`, `set hostname`), and the
-  `set alias` in `config system global` is collected as a second name for the
-  device itself -- so it and the hostname render as one pseudonym. An admin,
-  API, local or SNMPv3 user's `edit "<name>"` is collected as a username, which
-  is what makes one pseudonym reach both the account and the header that names
-  it. Detection is reporting-only as ever, and its FortiOS hints are chosen to
-  survive sanitising: the header it reads is exactly what `platform` deletes,
-  so the `config` / `edit "` / `next` shapes carry the answer once it is gone.
-  A bare `end` is deliberately not one of them -- an IOS running-config ends
-  with one.
-
-- FortiOS credentials are covered by the verification pass, which had a silent
-  blind spot over them: `psksecret` and `ppk-secret` end in a word
-  `credential-left` already knew, but the check reads whole words, so an IPsec
-  pre-shared key, an SNMPv3 secret and an NTP `set key` left the tool in the
-  device's encrypted form with **no finding at all** and `--strict` exiting 0.
-  The keyword list gained the FortiOS spellings, and `key` / `secret` -- too
-  ordinary to name unqualified -- are recognised in the `set <attribute>` shape
-  that narrows them. `ENC` is now one of the encoding hints the rules and the
-  check share, so a FortiOS line whose credential netredact destroyed is not
-  reported as a leak by the check that exists to catch them.
-
-- A command-line argument may be a directory, walked recursively, so a backup
-  tree can be sanitised in one run: `netredact backups/ -r`. The walk skips
-  what plainly is not a configuration -- dot-files, dot-directories pruned
-  whole rather than descended into, symlinks of either kind, anything with a NUL
-  byte anywhere in it, and anything whose first non-blank line opens a PEM block
-  -- because netredact would rewrite one of those as text rather than sanitise
-  it, and under `-r` there is no second copy. It does not filter on extension,
-  because a RANCID repository names its files after the devices. Each verdict is
-  counted on stderr with a few of the paths behind it, so a run says how much it
-  left out and what kind of thing it was. A file named on the command line is
-  still attempted whatever it looks like, since naming it is the instruction;
-  the exception is `-r`, where a named binary or PEM file is refused by name,
-  because that is the only mode in which the original does not survive. Under
-  `-o` the tree is mirrored rather than flattened, so two zones' identically
-  named files cannot land on top of each other. `-o` is a directory whenever
-  the command line says it can only be one -- an input is a directory, several
-  inputs were named, or the path ends in a separator -- and it is created on the
-  first write, along with the zone directories under it; only an existing regular
-  file refuses such a run, and it refuses before anything is written. One named
-  file with one `-o` path still names a file, so a typo in it is reported rather
-  than built into a directory chain.
-  Two inputs that would write to one destination are a usage error instead of a
-  silent overwrite. A directory with no destination at all is a usage error
-  too: a whole tree concatenated onto stdout is never what naming the directory
-  meant. `-r` / `--replace` writes each file back over itself and cannot be
-  combined with `-o`.
-
-- A file comes back the way it arrived. Input is decoded as UTF-8, and a file
-  that is not valid UTF-8 is refused rather than decoded lossily, because
-  `errors="replace"` would put U+FFFD in the only copy under `-r`; `--force`
-  accepts the substitution. CRLF endings are preserved: the rules and the
-  verifier work a line at a time, so the endings are normalised for them and put
-  back on the way out. Every output is written through a temporary in the same
-  directory and then moved into place, which is atomic, so a full disk or a
-  signal cannot leave a half-written configuration where that file was the only
-  copy -- and no temporary survives a failure. A file that cannot be read or
-  written is reported with the reason the operating system gave and the run
-  exits 1, rather than being counted as a skipped non-configuration and reported
-  as success with the secrets still in place. The rest of the run still happens,
-  because a tree abandoned part-way -- some files replaced, some not, and no
-  statement of which -- is the worst outcome available.
-
-- Sanitised output says so. Every file the CLI writes carries one comment line
-  at the top -- `! netredact-sanitised <version> ...`, or `#` in JunOS grammar --
-  and netredact refuses to sanitise a file that already has one, because a
-  second pass re-maps `pseudo` substitutes and with `-r` the original is
-  already gone. `--force` overrides that refusal and every other one netredact
-  makes -- a named binary or PEM file under `-r`, and input that is not valid
-  UTF-8 -- so there is one flag to reach for and one thing it means: process an
-  input netredact would otherwise refuse. `marker = false` switches the
-  line off and takes the guard with it. The marker carries the tool and the
-  version and nothing else: no timestamp, no counts, nothing that could hint
-  at what was found. `sanitise_text` does not add it -- the transformation
-  preserves line count, so writing the marker belongs to whoever writes the
-  file (`netredact.provenance`), while `Result.already_sanitised` reports
-  whether the input had one.
-
-- MikroTik RouterOS `/export` configurations. RouterOS spells every argument as
-  a `key=value` pair on an `add` / `set` command, so four new `secrets` rules
-  match unanchored: `routeros-password` (`password=`, `passphrase=`, and the
-  hyphenated `authentication-password=` / `encryption-password=`),
-  `routeros-secret`, `routeros-pre-shared-key` (`pre-shared-key=`,
-  `wpa-pre-shared-key=`, `wpa2-pre-shared-key=`) and `routeros-snmp-community`.
-  The `=` is what keeps each of them off the space-form rule of the same name
-  and that rule off them, so every value still has exactly one owner. A bare
-  `name=` is deliberately NOT a secret outside `/snmp community`: everywhere
-  else in an export it names an interface, a bridge or a firewall rule. All of
-  these are *searched* rather than matched, because one command line can carry
-  two pairs belonging to a single rule -- a wireless security profile routinely
-  sets `wpa-pre-shared-key=` and `wpa2-pre-shared-key=` on one line, and a rule
-  that fires once per line took the second and left the first passphrase
-  standing next to a marker saying the line had been dealt with.
-
-  WireGuard is covered by three of them: `routeros-private-key` takes the
-  interface's own key, `routeros-pre-shared-key` now admits RouterOS's second
-  spelling of the same field -- `preshared-key=`, with no inner hyphen, beside
-  the wireless `wpa2-pre-shared-key=` -- and `routeros-public-key` is
-  `identity`, not `secrets`, because a public key is published on purpose. It
-  still needs a rule: 44 characters of base64 is exactly what
-  `long-base64-left` looks for, and the check cannot tell an authorised key
-  from a leaked one, so a config that kept its peers failed `--strict` until a
-  named `identity` rule claimed the span for the check to be blinded to.
-
-  A qualified key name is still that key: RouterOS writes `ipsec-secret=`,
-  `authentication-password=` and `wpa2-pre-shared-key=` and means the same field
-  each time, so the credential rules admit any hyphenated prefix. `name=` and
-  `comment=` deliberately do not, because there the guard is the point --
-  `default-name=ether1` names a factory default, not something an operator
-  chose. Getting that asymmetry wrong was silent in the worst direction: a bare
-  `secret=` did not merely fail to help with `ipsec-secret=`, it refused it.
-
-  `routeros-license-id` reads RouterOS's licence identifier under both names it
-  goes by: the `/export` header writes `# software id = ` on some versions and
-  platforms and `# system id = ` on others, and `/system license print` writes
-  `system-id:`. One value, one meaning, one rule. The `:` or `=` is required,
-  because `system-id` is IS-IS and FabricPath grammar too and neither carries a
-  separator -- the same margin `hardware-model` keeps.
-
-- A new conditional check, `routeros-header-left`, gated on `[identity]`
-  acting. Every other check knows a shape or a keyword, and a value in a
-  RouterOS `/export` provenance header has neither -- a licence id is an opaque
-  word -- so a header key that no rule knew about left the tool with nothing
-  reported at all. Silence is the one outcome this project treats as worse than
-  a miss, so this check's evidence is structural instead: the value sits in a
-  header comment, and no rule claimed it. Ownership is asked of the rule table
-  rather than of a list of key names written out in the verifier, so a key that
-  gains a rule leaves the check the same day, and values netredact itself wrote
-  are recognised from the marker and constant tables.
-
-  `comment=` is RouterOS's `description`, and it is split by scope in exactly
-  the same way: `interface-comment` in `[interfaces]` inside a `/interface …`
-  section, `comment` in `[text]` everywhere else, the two made disjoint so no
-  comment is matched by both. The `/export` header is read by the rules that
-  already own each kind of value -- `hardware-model` and `serial-number` now
-  admit a `#` comment leader alongside `!`, and `os-version` reads the release
-  out of `by RouterOS 7.15.3` -- plus one new `identity` rule, `software-id`,
-  because a licence id is tied to the one device and not to a production line.
-  `location=` and `contact=` reach the rules of those names.
-
-- A label `name=` is free text, and it is split into two rules by scope exactly
-  as `description` is: `routeros-peer-name` in `[interfaces]` inside a RouterOS
-  `/interface …` section, `routeros-object-name` in `[text]` everywhere else.
-  On a provider config this is where a customer and an order reference live --
-  `name="Cust: 4G - Quantum - BPI000000562604"` on a `/routing bgp connection`.
-
-  Both are scoped to `object-labels`, which is the one scope named for a
-  property rather than a block, and it earns that: it marks the sections whose
-  `name=` nothing else refers to, currently `/interface wireguard peers` and
-  `/routing bgp connection`. That distinction cannot be read off the line, the
-  key or even the value -- only off the section -- and it is the difference
-  between a rule that is safe and one that breaks the file. An interface, a
-  bridge, a BGP template, an OSPF area or an address list is named so that
-  another line can point at it (`interface=ether1-transit`,
-  `area=backbone-v2`), so acting on such a declaration alone would break the
-  configuration AND leak the value through every reference that kept it. The
-  list is therefore the guard rather than a convenience, and the way to cover a
-  referenced name is to carry its references in the same rule, as
-  `pseudowire-name` does, not to add it here.
-
-  A RouterOS section now opens several scopes where its path nests, which is
-  what lets a peer's `comment=` still be an interface comment while its `name=`
-  is a rule of its own.
-
-- `[operational-names] routing-filter-chain` acts on RouterOS routing-filter
-  chain names: the `chain=` declaration under `/routing filter rule`, and the
-  `input.filter=` / `output.filter-chain=` references on a `/routing bgp
-  connection`, including RouterOS's abbreviated `.filter=` and `.filter-chain=`
-  forms. On a service-provider router a chain name frequently carries the
-  operator or the customer it describes.
-
-  One type carries the declaration and every reference, which is the point: the
-  tag is a function of the value, so a chain named in one section and used in
-  another still name the same thing afterwards. Two types could be given two
-  actions and the file would no longer load -- the argument `pseudowire-name`
-  makes for being one rule.
-
-  The declaration is scoped to `/routing filter rule` and nothing else, because
-  `chain=` is firewall grammar too and `input`, `forward` and `srcnat` are
-  RouterOS's own names: substituting one of those would break the file.
-  `OperationalNames` tracks the RouterOS section itself, the way it already
-  tracks JunOS brace depth, so a scoped declaration needs nothing from its
-  caller. `input.allow-as=1` is a count and is left alone by this and by
-  `[as-numbers]` alike.
-
-- `[as-numbers]` reaches RouterOS's spellings. RouterOS writes an ASN as a
-  `key=value` pair and RouterOS 7 abbreviates a nested property to a leading
-  dot, so one `/routing bgp connection` line carries `as=65501` and `.as=65500`
-  -- the latter being `remote.as=`. The existing patterns require whitespace
-  after the keyword, so they reached none of them, not even the `remote-as=`
-  RouterOS 6 wrote and whose keyword they already knew: an explicit
-  `as-numbers` policy was silently doing nothing on a RouterOS file. The
-  boundary in front of the bare two-letter `as` key is the safety margin, so a
-  key that merely ends in those letters -- `alias=`, `class=`, `bias=` -- keeps
-  its value.
-
-  The verifier no longer keeps its own list of ASN grammars: `as-number-left`
-  now asks `operational.asn_candidates`, i.e. the transformation itself. Two
-  lists that had drifted would go quiet about precisely what the rule failed to
-  reach, which is the direction that matters, and this one had.
-
-- `routeros-auth-key` takes RouterOS's `auth-key=` and `authentication-key=`,
-  e.g. on `/routing ospf interface-template`. It is spelled out rather than
-  reached by a generic `key=`, which would also claim `public-key=` and put two
-  rules with two families on one span; `auth=md5` and `auth-id=1` on the same
-  line are a method and an index, and the `-key` is what tells them apart. This
-  one was leaving in silence -- `auth-key` was not a keyword the verifier knew
-  either, and an OSPF key is neither long enough nor hex enough for a shape
-  check -- so the keyword is now in `credential-left` as well.
-
-- A third kind of block for the scope names the rules already use: a RouterOS
-  `/export` section, which a `/`-prefixed line opens and the next one ends.
-  Where more than one dialect has the block the name stays JunOS's own, so one
-  rule reaches all of them -- a `/interface ethernet` section is `interfaces`
-  exactly as an `interface Gi0/0` block and an `interfaces { … }` stanza are.
-  A section only RouterOS has keeps its own name: `snmp-community`,
-  `system-identity`, `user`, `ppp-secret`. `/export terse` repeats the whole
-  path on every command line and is scoped from the line itself, the way a
-  JunOS `set` line is. Those own-name sections are what make a RouterOS
-  `name=` decidable at all: it is the device's own name under `/system
-  identity`, a login under `/user`, a subscriber's account under `/ppp secret`,
-  a community string under `/snmp community`, and an object name everywhere
-  else -- so the collect pass now tracks the section too. None of this is a
-  vendor gate: a file with no such section in it cannot reach the rules that
-  need one.
-
-- A wrap is undone with NOTHING in its place, not with a space. `/export` wraps
-  at whatever column it runs out of room at, which is regularly in the middle of
-  a token and even in the middle of a word inside a quoted string: a
-  `/routing filter rule` carries `{set bgp-path-\` + `prepend 1; accept}` as one
-  `bgp-path-prepend`, and `set bgp-large-communities orig\` + `in-inband-mgmt`
-  as one `origin-inband-mgmt`. Joining those with a space did not merely
-  reformat the file, it corrupted it -- `bgp-path- prepend` is not a keyword and
-  the list name became two words, so the output no longer loaded. Where a
-  separator is wanted the export has already written it before the backslash, so
-  the line up to the backslash is kept verbatim, trailing space and all, and
-  only the continuation's indent is dropped. A literal `\n` escape inside a rule
-  string now survives byte for byte.
-
-- A wrapped RouterOS command is joined into one logical line before any rule
-  runs, and written back out unwrapped. `/export` breaks a long command with a
-  trailing `\` and continues it indented on the next line, and a rule sees one
-  line at a time -- so a wrapped `wpa2-pre-shared-key="…` had the tail of its
-  value carried past every rule that could recognise it: the value matcher
-  could not close the quote, a marker landed on the opening fragment, and the
-  rest of the passphrase left the tool with `--strict` reporting success. Only
-  an `add` / `set` / `remove` at the start of a line is read this way, because a
-  trailing backslash means nothing in IOS or JunOS but is perfectly ordinary in
-  an ASCII-art banner. The line count of the output changes, as it already can
-  where a block body or a banner collapses.
-
-- `mikrotik` is a value `vendor` accepts and a value the detector answers,
-  from `by RouterOS` and `# software id =` as decisive markers plus the section
-  paths and `set [ find … ]`. Both decisive markers keep their keyword when the
-  release and the id are removed, so detection still works on redacted output.
-  The provenance marker comments with `#` on a RouterOS file, as it does on
-  JunOS.
-
-- `[operational-names] label-switched-path` acts on JunOS MPLS LSP names --
-  the `label-switched-path` and `static-label-switched-path` declarations and
-  the `lsp-next-hop` references to them -- in both the `set` and curly-brace
-  syntaxes and at any depth, so an LSP declared inside a `groups` stanza is
-  covered on the same terms as one under `protocols mpls`. Named paths and
-  p2mp trees are separate namespaces and stay out of scope.
-
-- `[operational-names] configuration-group` acts on JunOS configuration group
-  names: the `set groups NAME` declaration, the names a `groups { ... }` block
-  declares as its direct children, and every `apply-groups` /
-  `apply-groups-except` reference, bare or in a bracketed list. Configuration
-  nested inside a group is acted on by the selector that owns it, not treated
-  as part of the name.
-
-- Library callers can associate labels such as filenames with a sanitising run.
-  `Result.label_replacements` exposes immutable, replacement-only metadata so
-  callers can derive safe display tokens without retaining unmatched label
-  fragments or re-identification data.
-
-- RANCID collection preprocessing now removes diagnostic command sections,
-  collector prompts, and device metadata before normal sanitization. Unknown
-  commands fail closed; `[collection] rancid_diagnostics = "keep"` restores
-  the unstripped wrapper. Reports expose normalized command names and removed
-  line counts without retaining diagnostic contents.
-
-- `authentication password <secret>` is a credential wherever it sits on the
-  line, not only where `password` opens it. `bare-password` is anchored, so it
-  only ever saw the hierarchical form; JunOS subscriber management writes the
-  same credential at the end of a long `set` path -- under `dhcp-local-server
-  dual-stack-group <name> authentication` and under `interfaces <ifd>
-  auto-configure stacked-vlan-ranges authentication` -- and those lines left the
-  tool in cleartext with `--strict` exiting 0. The `authentication` qualifier is
-  what keeps the unanchored form off the knobs: `no password`, `service
-  password-encryption` and `aaa authentication password-prompt` are untouched.
-
-- New `identity` rule `script-checksum` selects the digest a script file is
-  pinned to: `set system scripts {commit,op,event} file <name> checksum sha-256
-  <hex>`, the same tail under `event-options event-script file`, and the
-  hierarchical spelling of both. It is not a credential, but a 64-character hex
-  run tripped `long-hex-left` and `long-base64-left`, so `--strict` failed on
-  configurations with no secret left in them. Filed under `identity` because a
-  checksum ties the file to one exact script on one device: kept at defaults and
-  no longer reported, and reachable by `[identity] script-checksum` when the
-  policy wants it gone. It renders as `<CKSUM-…>` / `cksum-…`.
-
-- `ssh-public-key` finds a key blob whose algorithm token is not glued to it.
-  IOS renders an authorised key as `key-hash <alg> <fingerprint> <blob>`, and
-  the rule required the algorithm immediately before the blob, so the key
-  survived and only `long-base64-left` spoke -- a reported miss rather than a
-  decision. A second branch recognises the blob by its own base64 type-string
-  header, which `ssh-key-left` already used; both now read that signature from
-  one constant, so the rule and the check cannot disagree, and it covers
-  `ecdsa-sha2-*` as well as `ssh-rsa` / `ssh-dss` / `ssh-ed25519`.
-
-- FortiOS coverage is widened past the attribute list. `fortios-secret` names
-  the credential keys FortiOS has always had, which is the right shape for
-  those; two rules now cover the ones it has not. `fortios-encrypted` reads the
-  `ENC` marker alone, so a key no release has invented yet is still a
-  credential the day it appears, and `fortios-credential-key` reads the
-  qualified spelling without the marker -- `group-password`, `key-passphrase`,
-  `password2` -- which is what a typed or templated configuration carries where
-  a backup carries `ENC`. All three are disjoint by construction: two rules
-  matching one span would splice twice and the second would hash the first's
-  marker. The `\d*\s+` guard is what keeps the second off the knobs, because
-  `set password-policy status enable` has a hyphen where `set password2
-  <secret>` has a space. `fortios-object-name` takes a `set name` in a block
-  whose names nothing references -- a firewall policy, addressed by its `edit
-  <id>`.
-
-- `FortiBlocks` gained three things. A path may open SEVERAL scopes, because
-  `config system interface` answers two questions at once -- what a `set
-  description` in it is, and what its `edit` names. `config system snmp
-  community` opens a `snmp-community` scope of its own, since `config system
-  snmp sysinfo` is `snmp` too and a `set name` there is not a community string.
-  And the header recogniser is now permissive: see **Fixed** below for the leak
-  that bought that.
-
-- `[operational-names] fortios-interface` acts on FortiOS interface names,
-  carrying the `edit` declaration and every reference in ONE type -- `set
-  interface`, `srcintf`, `dstintf`, `extintf`, `associated-interface`,
-  `outgoing-interface`, `set member` inside the four interface-ish blocks, and
-  `set device` under `config router static`. A list is a run of quoted names on
-  one line and every entry moves. The tag is a function of the value, so the
-  declaration and its references render alike and the file still loads.
-
-  Names the platform owns stay: the factory ports, the pseudo-interfaces, and
-  the `any` wildcard, which means *every* interface -- substituting it would
-  change what a policy does. That is `_RESERVED_VRFS` reasoning, and it keeps
-  true the report's promise that interface numbering is never scrubbed. This
-  type defaults to `keep` and carries more risk than the others: coverage is a
-  list of reference spellings rather than a closed grammar, and a spelling not
-  on it leaves a reference naming an interface that no longer exists.
-
-- A FortiOS RANCID capture is segmented and stripped. `show full-configuration`
-  and the bare `show` join the allowlisted configuration commands, and FortiOS
-  prompts -- `fw-edge-01 # show`, with the VDOM optionally in brackets -- are
-  recognised, which `_PROMPT` never did because it requires a `user@host` that
-  FortiOS does not write. They are boundaries only and never evidence for
-  detection, and the comment leader is required: detection is what licenses
-  deleting everything unrecognised, so a banner body containing `a # b` must not
-  be able to turn a configuration into a capture.
-
-- A kept SNMP community is reported in BOTH the grammars that give the line no
-  keyword: RouterOS's `name=` under `/snmp community` and FortiOS's `set name`
-  under `config system snmp community`. The block is the only evidence the
-  value is a community string, so `credential-left` -- which reads one line at
-  a time -- had gone silent on one. `secrets = "keep"` is allowed; passing
-  `--strict` over it is the fail-open these checks exist to prevent.
-
-### Fixed
-
-- A FortiOS `config` header whose path ends in a quoted argument -- `config
-  system replacemsg auth "auth-password-page"` -- was not recognised as opening
-  a section, and **that leaked**. The header was never pushed, but its `end`
-  still popped, so what it closed was the section AROUND it: a `config system
-  snmp community` ended early and the `set name` after it was no longer in the
-  section that makes it a community string, so the community survived.
-
-  The recogniser now asks only what FortiOS itself asks -- the line begins with
-  the word `config` -- because the two ways of being wrong are not symmetric. A
-  header that is missed unbalances the stack and can leave a secret in the file;
-  a line wrongly taken for a header over-applies a rule and cannot. A redaction
-  tool takes the second. `config-register 0x2102` is still not a section: a
-  hyphen follows the word, not whitespace.
-
-- `credential-left` no longer reports a FortiOS `config` header. `config system
-  replacemsg auth "auth-password-page"` names a message template, and the check
-  read the `password` inside that name as a surviving credential, as it did for
-  `auth-cert-passwd-page` beside it. A `config` line is a section path and all
-  of it is path -- unlike RouterOS there is no command after it -- so the line
-  is ignored whole, exactly as a `/`-prefixed RouterOS path already is. The
-  lines UNDER the header are judged as before.
-
-
-- `credential-left` no longer reports an EMPTY credential. RouterOS writes an
-  unset key as `auth-key=""` -- a `/routing ospf interface-template` with no
-  authentication on it -- and every one of them came back as a line a human had
-  to look at, on a line carrying no credential at all. Three of them were the
-  entire finding list on a clean provider export. The rule was already right:
-  there is nothing to destroy, so nothing is destroyed and nothing is counted.
-  Only the check was wrong. `''` and the FortiOS `set <key> ENC ""` are the same
-  case, and so is an empty SNMP community in either grammar.
-
-  This is the judgement `RANCID_SENTINEL` already makes for `## SECRET-DATA`:
-  evidence that the value is not there beats the keyword that introduces it. The
-  empty value ends only its own match, so `auth-key="" password=hunter2` still
-  fires on the second keyword -- which is what keeps the exemption from being a
-  way to hide a real credential behind an empty one.
-
-## [0.1.0] - 2026-08-20
+## [0.1.0] - 2026-08-31
 
 First release.
 
@@ -714,3 +280,413 @@ First release.
 - **Library API:** `Config`, `sanitise_text`, `Result`. The library writes to
   no stream: problems come back on the `Result` or are raised, so reporting
   stays the CLI's job.
+
+- **Fortinet FortiOS / FortiGate support.** A FortiOS config states nothing
+  twice: the grammar is `config <path>` … `end` with `edit <id>` … `next`
+  inside it, and every value is a bare `set <attribute> <value>` whose meaning
+  comes from the block above it rather than from the line. So the sanitiser
+  tracks that block as a fourth kind of scope, sharing JunOS's names wherever
+  the grammars share the block -- `config system interface` is scope
+  `interfaces`, `config system snmp community` is scope `snmp` -- and one new
+  rule, `fortios-secret`, covers every credential the platform has: `password`,
+  `passwd`, `psksecret`, `ppk-secret`, `auth-pwd`, `priv-pwd`, `passphrase`,
+  `api-key`, `secret` and `key`, with or without the `ENC` token FortiOS marks
+  its encrypted values with. The keyword has to be the first token after `set`,
+  which is what keeps the two ordinary words in that list off a JunOS `set`
+  path where `bare-secret` and `quoted-key` own them. `fortios-snmp-community`
+  selects a `set name` inside an SNMP community block and nowhere else -- a
+  bare `set name` is everywhere in FortiOS, so the block is the whole of the
+  evidence -- and `fortios-interface-alias` puts a port's `set alias` in the
+  `interfaces` family beside its description. The `#config-version=` header is
+  split across the families that own its parts, as Arista's `! device:` line
+  already was: the model to `hardware-model`, the release, its build and the
+  `#buildno=` / `#branch_pt=` lines to `os-version`, and the administrator in
+  its `user=` field to `usernames`. `location`, `contact`, `description` and
+  the hostname sources cover FortiOS's spellings of those fields
+  (`set location`, `set contact-info`, `set comments`, `set hostname`), and the
+  `set alias` in `config system global` is collected as a second name for the
+  device itself -- so it and the hostname render as one pseudonym. An admin,
+  API, local or SNMPv3 user's `edit "<name>"` is collected as a username, which
+  is what makes one pseudonym reach both the account and the header that names
+  it. Detection is reporting-only as ever, and its FortiOS hints are chosen to
+  survive sanitising: the header it reads is exactly what `platform` deletes,
+  so the `config` / `edit "` / `next` shapes carry the answer once it is gone.
+  A bare `end` is deliberately not one of them -- an IOS running-config ends
+  with one.
+
+- FortiOS credentials are covered by the verification pass, which would
+  otherwise have a silent blind spot over them: `psksecret` and `ppk-secret`
+  end in a word `credential-left` knows, but the check reads whole words, so
+  an IPsec pre-shared key, an SNMPv3 secret and an NTP `set key` could leave
+  the tool in the device's encrypted form with **no finding at all** and
+  `--strict` exiting 0. The keyword list carries the FortiOS spellings, and
+  `key` / `secret` -- too
+  ordinary to name unqualified -- are recognised in the `set <attribute>` shape
+  that narrows them. `ENC` is one of the encoding hints the rules and the
+  check share, so a FortiOS line whose credential netredact destroyed is not
+  reported as a leak by the check that exists to catch them.
+
+- A command-line argument may be a directory, walked recursively, so a backup
+  tree can be sanitised in one run: `netredact backups/ -r`. The walk skips
+  what plainly is not a configuration -- dot-files, dot-directories pruned
+  whole rather than descended into, symlinks of either kind, anything with a NUL
+  byte anywhere in it, and anything whose first non-blank line opens a PEM block
+  -- because netredact would rewrite one of those as text rather than sanitise
+  it, and under `-r` there is no second copy. It does not filter on extension,
+  because a RANCID repository names its files after the devices. Each verdict is
+  counted on stderr with a few of the paths behind it, so a run says how much it
+  left out and what kind of thing it was. A file named on the command line is
+  still attempted whatever it looks like, since naming it is the instruction;
+  the exception is `-r`, where a named binary or PEM file is refused by name,
+  because that is the only mode in which the original does not survive. Under
+  `-o` the tree is mirrored rather than flattened, so two zones' identically
+  named files cannot land on top of each other. `-o` is a directory whenever
+  the command line says it can only be one -- an input is a directory, several
+  inputs were named, or the path ends in a separator -- and it is created on the
+  first write, along with the zone directories under it; only an existing regular
+  file refuses such a run, and it refuses before anything is written. One named
+  file with one `-o` path still names a file, so a typo in it is reported rather
+  than built into a directory chain.
+  Two inputs that would write to one destination are a usage error instead of a
+  silent overwrite. A directory with no destination at all is a usage error
+  too: a whole tree concatenated onto stdout is never what naming the directory
+  meant. `-r` / `--replace` writes each file back over itself and cannot be
+  combined with `-o`.
+
+- A file comes back the way it arrived. Input is decoded as UTF-8, and a file
+  that is not valid UTF-8 is refused rather than decoded lossily, because
+  `errors="replace"` would put U+FFFD in the only copy under `-r`; `--force`
+  accepts the substitution. CRLF endings are preserved: the rules and the
+  verifier work a line at a time, so the endings are normalised for them and put
+  back on the way out. Every output is written through a temporary in the same
+  directory and then moved into place, which is atomic, so a full disk or a
+  signal cannot leave a half-written configuration where that file was the only
+  copy -- and no temporary survives a failure. A file that cannot be read or
+  written is reported with the reason the operating system gave and the run
+  exits 1, rather than being counted as a skipped non-configuration and reported
+  as success with the secrets still in place. The rest of the run still happens,
+  because a tree abandoned part-way -- some files replaced, some not, and no
+  statement of which -- is the worst outcome available.
+
+- Sanitised output says so. Every file the CLI writes carries one comment line
+  at the top -- `! netredact-sanitised <version> ...`, or `#` in JunOS grammar --
+  and netredact refuses to sanitise a file that already has one, because a
+  second pass re-maps `pseudo` substitutes and with `-r` the original is
+  already gone. `--force` overrides that refusal and every other one netredact
+  makes -- a named binary or PEM file under `-r`, and input that is not valid
+  UTF-8 -- so there is one flag to reach for and one thing it means: process an
+  input netredact would otherwise refuse. `marker = false` switches the
+  line off and takes the guard with it. The marker carries the tool and the
+  version and nothing else: no timestamp, no counts, nothing that could hint
+  at what was found. `sanitise_text` does not add it -- the transformation
+  preserves line count, so writing the marker belongs to whoever writes the
+  file (`netredact.provenance`), while `Result.already_sanitised` reports
+  whether the input had one.
+
+- MikroTik RouterOS `/export` configurations. RouterOS spells every argument as
+  a `key=value` pair on an `add` / `set` command, so four new `secrets` rules
+  match unanchored: `routeros-password` (`password=`, `passphrase=`, and the
+  hyphenated `authentication-password=` / `encryption-password=`),
+  `routeros-secret`, `routeros-pre-shared-key` (`pre-shared-key=`,
+  `wpa-pre-shared-key=`, `wpa2-pre-shared-key=`) and `routeros-snmp-community`.
+  The `=` is what keeps each of them off the space-form rule of the same name
+  and that rule off them, so every value still has exactly one owner. A bare
+  `name=` is deliberately NOT a secret outside `/snmp community`: everywhere
+  else in an export it names an interface, a bridge or a firewall rule. All of
+  these are *searched* rather than matched, because one command line can carry
+  two pairs belonging to a single rule -- a wireless security profile routinely
+  sets `wpa-pre-shared-key=` and `wpa2-pre-shared-key=` on one line, and a rule
+  that fires once per line took the second and left the first passphrase
+  standing next to a marker saying the line had been dealt with.
+
+  WireGuard is covered by three of them: `routeros-private-key` takes the
+  interface's own key, `routeros-pre-shared-key` admits RouterOS's second
+  spelling of the same field -- `preshared-key=`, with no inner hyphen, beside
+  the wireless `wpa2-pre-shared-key=` -- and `routeros-public-key` is
+  `identity`, not `secrets`, because a public key is published on purpose. It
+  still needs a rule: 44 characters of base64 is exactly what
+  `long-base64-left` looks for, and the check cannot tell an authorised key
+  from a leaked one, so a config that kept its peers failed `--strict` until a
+  named `identity` rule claimed the span for the check to be blinded to.
+
+  A qualified key name is still that key: RouterOS writes `ipsec-secret=`,
+  `authentication-password=` and `wpa2-pre-shared-key=` and means the same field
+  each time, so the credential rules admit any hyphenated prefix. `name=` and
+  `comment=` deliberately do not, because there the guard is the point --
+  `default-name=ether1` names a factory default, not something an operator
+  chose. Getting that asymmetry wrong was silent in the worst direction: a bare
+  `secret=` did not merely fail to help with `ipsec-secret=`, it refused it.
+
+  `routeros-license-id` reads RouterOS's licence identifier under both names it
+  goes by: the `/export` header writes `# software id = ` on some versions and
+  platforms and `# system id = ` on others, and `/system license print` writes
+  `system-id:`. One value, one meaning, one rule. The `:` or `=` is required,
+  because `system-id` is IS-IS and FabricPath grammar too and neither carries a
+  separator -- the same margin `hardware-model` keeps.
+
+- A new conditional check, `routeros-header-left`, gated on `[identity]`
+  acting. Every other check knows a shape or a keyword, and a value in a
+  RouterOS `/export` provenance header has neither -- a licence id is an opaque
+  word -- so a header key that no rule knew about left the tool with nothing
+  reported at all. Silence is the one outcome this project treats as worse than
+  a miss, so this check's evidence is structural instead: the value sits in a
+  header comment, and no rule claimed it. Ownership is asked of the rule table
+  rather than of a list of key names written out in the verifier, so a key that
+  gains a rule leaves the check the same day, and values netredact itself wrote
+  are recognised from the marker and constant tables.
+
+  `comment=` is RouterOS's `description`, and it is split by scope in exactly
+  the same way: `interface-comment` in `[interfaces]` inside a `/interface …`
+  section, `comment` in `[text]` everywhere else, the two made disjoint so no
+  comment is matched by both. The `/export` header is read by the rules that
+  already own each kind of value -- `hardware-model` and `serial-number`
+  admit a `#` comment leader alongside `!`, and `os-version` reads the release
+  out of `by RouterOS 7.15.3` -- plus one new `identity` rule, `software-id`,
+  because a licence id is tied to the one device and not to a production line.
+  `location=` and `contact=` reach the rules of those names.
+
+- A label `name=` is free text, and it is split into two rules by scope exactly
+  as `description` is: `routeros-peer-name` in `[interfaces]` inside a RouterOS
+  `/interface …` section, `routeros-object-name` in `[text]` everywhere else.
+  On a provider config this is where a customer and an order reference live --
+  `name="Cust: 4G - Quantum - BPI000000562604"` on a `/routing bgp connection`.
+
+  Both are scoped to `object-labels`, which is the one scope named for a
+  property rather than a block, and it earns that: it marks the sections whose
+  `name=` nothing else refers to, currently `/interface wireguard peers` and
+  `/routing bgp connection`. That distinction cannot be read off the line, the
+  key or even the value -- only off the section -- and it is the difference
+  between a rule that is safe and one that breaks the file. An interface, a
+  bridge, a BGP template, an OSPF area or an address list is named so that
+  another line can point at it (`interface=ether1-transit`,
+  `area=backbone-v2`), so acting on such a declaration alone would break the
+  configuration AND leak the value through every reference that kept it. The
+  list is therefore the guard rather than a convenience, and the way to cover a
+  referenced name is to carry its references in the same rule, as
+  `pseudowire-name` does, not to add it here.
+
+  A RouterOS section opens several scopes where its path nests, which is
+  what lets a peer's `comment=` still be an interface comment while its `name=`
+  is a rule of its own.
+
+- `[operational-names] routing-filter-chain` acts on RouterOS routing-filter
+  chain names: the `chain=` declaration under `/routing filter rule`, and the
+  `input.filter=` / `output.filter-chain=` references on a `/routing bgp
+  connection`, including RouterOS's abbreviated `.filter=` and `.filter-chain=`
+  forms. On a service-provider router a chain name frequently carries the
+  operator or the customer it describes.
+
+  One type carries the declaration and every reference, which is the point: the
+  tag is a function of the value, so a chain named in one section and used in
+  another still name the same thing afterwards. Two types could be given two
+  actions and the file would no longer load -- the argument `pseudowire-name`
+  makes for being one rule.
+
+  The declaration is scoped to `/routing filter rule` and nothing else, because
+  `chain=` is firewall grammar too and `input`, `forward` and `srcnat` are
+  RouterOS's own names: substituting one of those would break the file.
+  `OperationalNames` tracks the RouterOS section itself, the way it already
+  tracks JunOS brace depth, so a scoped declaration needs nothing from its
+  caller. `input.allow-as=1` is a count and is left alone by this and by
+  `[as-numbers]` alike.
+
+- `[as-numbers]` reaches RouterOS's spellings. RouterOS writes an ASN as a
+  `key=value` pair and RouterOS 7 abbreviates a nested property to a leading
+  dot, so one `/routing bgp connection` line carries `as=65501` and `.as=65500`
+  -- the latter being `remote.as=`. The existing patterns require whitespace
+  after the keyword, so they reached none of them, not even the `remote-as=`
+  RouterOS 6 wrote and whose keyword they already knew: an explicit
+  `as-numbers` policy was silently doing nothing on a RouterOS file. The
+  boundary in front of the bare two-letter `as` key is the safety margin, so a
+  key that merely ends in those letters -- `alias=`, `class=`, `bias=` -- keeps
+  its value.
+
+  The verifier keeps no list of ASN grammars of its own: `as-number-left` asks
+  `operational.asn_candidates`, i.e. the transformation itself. Two lists that
+  drifted would go quiet about precisely what the rule failed to reach, which
+  is the direction that matters.
+
+- `routeros-auth-key` takes RouterOS's `auth-key=` and `authentication-key=`,
+  e.g. on `/routing ospf interface-template`. It is spelled out rather than
+  reached by a generic `key=`, which would also claim `public-key=` and put two
+  rules with two families on one span; `auth=md5` and `auth-id=1` on the same
+  line are a method and an index, and the `-key` is what tells them apart. An
+  OSPF key is neither long enough nor hex enough for a shape check, so the
+  keyword is in `credential-left` as well: without it a kept key would leave
+  in silence.
+
+- A third kind of block for the scope names the rules use: a RouterOS
+  `/export` section, which a `/`-prefixed line opens and the next one ends.
+  Where more than one dialect has the block the name stays JunOS's own, so one
+  rule reaches all of them -- a `/interface ethernet` section is `interfaces`
+  exactly as an `interface Gi0/0` block and an `interfaces { … }` stanza are.
+  A section only RouterOS has keeps its own name: `snmp-community`,
+  `system-identity`, `user`, `ppp-secret`. `/export terse` repeats the whole
+  path on every command line and is scoped from the line itself, the way a
+  JunOS `set` line is. Those own-name sections are what make a RouterOS
+  `name=` decidable at all: it is the device's own name under `/system
+  identity`, a login under `/user`, a subscriber's account under `/ppp secret`,
+  a community string under `/snmp community`, and an object name everywhere
+  else -- so the collect pass tracks the section too. None of this is a
+  vendor gate: a file with no such section in it cannot reach the rules that
+  need one.
+
+- A wrap is undone with NOTHING in its place, not with a space. `/export` wraps
+  at whatever column it runs out of room at, which is regularly in the middle of
+  a token and even in the middle of a word inside a quoted string: a
+  `/routing filter rule` carries `{set bgp-path-\` + `prepend 1; accept}` as one
+  `bgp-path-prepend`, and `set bgp-large-communities orig\` + `in-inband-mgmt`
+  as one `origin-inband-mgmt`. Joining those with a space would not merely
+  reformat the file, it would corrupt it -- `bgp-path- prepend` is not a keyword
+  and the list name becomes two words, so the output does not load. Where a
+  separator is wanted the export has already written it before the backslash, so
+  the line up to the backslash is kept verbatim, trailing space and all, and
+  only the continuation's indent is dropped. A literal `\n` escape inside a rule
+  string survives byte for byte.
+
+- A wrapped RouterOS command is joined into one logical line before any rule
+  runs, and written back out unwrapped. `/export` breaks a long command with a
+  trailing `\` and continues it indented on the next line, and a rule sees one
+  line at a time -- so a wrapped `wpa2-pre-shared-key="…` had the tail of its
+  value carried past every rule that could recognise it: the value matcher
+  could not close the quote, a marker landed on the opening fragment, and the
+  rest of the passphrase left the tool with `--strict` reporting success. Only
+  an `add` / `set` / `remove` at the start of a line is read this way, because a
+  trailing backslash means nothing in IOS or JunOS but is perfectly ordinary in
+  an ASCII-art banner. The line count of the output changes, as it already can
+  where a block body or a banner collapses.
+
+- `mikrotik` is a value `vendor` accepts and a value the detector answers,
+  from `by RouterOS` and `# software id =` as decisive markers plus the section
+  paths and `set [ find … ]`. Both decisive markers keep their keyword when the
+  release and the id are removed, so detection still works on redacted output.
+  The provenance marker comments with `#` on a RouterOS file, as it does on
+  JunOS.
+
+- `[operational-names] label-switched-path` acts on JunOS MPLS LSP names --
+  the `label-switched-path` and `static-label-switched-path` declarations and
+  the `lsp-next-hop` references to them -- in both the `set` and curly-brace
+  syntaxes and at any depth, so an LSP declared inside a `groups` stanza is
+  covered on the same terms as one under `protocols mpls`. Named paths and
+  p2mp trees are separate namespaces and stay out of scope.
+
+- `[operational-names] configuration-group` acts on JunOS configuration group
+  names: the `set groups NAME` declaration, the names a `groups { ... }` block
+  declares as its direct children, and every `apply-groups` /
+  `apply-groups-except` reference, bare or in a bracketed list. Configuration
+  nested inside a group is acted on by the selector that owns it, not treated
+  as part of the name.
+
+- Library callers can associate labels such as filenames with a sanitising run.
+  `Result.label_replacements` exposes immutable, replacement-only metadata so
+  callers can derive safe display tokens without retaining unmatched label
+  fragments or re-identification data.
+
+- RANCID collection preprocessing removes diagnostic command sections,
+  collector prompts, and device metadata before normal sanitization. Unknown
+  commands fail closed; `[collection] rancid_diagnostics = "keep"` restores
+  the unstripped wrapper. Reports expose normalized command names and removed
+  line counts without retaining diagnostic contents.
+
+- `authentication password <secret>` is a credential wherever it sits on the
+  line, not only where `password` opens it. `bare-password` is anchored, so it
+  only ever saw the hierarchical form; JunOS subscriber management writes the
+  same credential at the end of a long `set` path -- under `dhcp-local-server
+  dual-stack-group <name> authentication` and under `interfaces <ifd>
+  auto-configure stacked-vlan-ranges authentication` -- and those lines left the
+  tool in cleartext with `--strict` exiting 0. The `authentication` qualifier is
+  what keeps the unanchored form off the knobs: `no password`, `service
+  password-encryption` and `aaa authentication password-prompt` are untouched.
+
+- New `identity` rule `script-checksum` selects the digest a script file is
+  pinned to: `set system scripts {commit,op,event} file <name> checksum sha-256
+  <hex>`, the same tail under `event-options event-script file`, and the
+  hierarchical spelling of both. It is not a credential, but a 64-character hex
+  run trips `long-hex-left` and `long-base64-left`, which would fail `--strict`
+  on configurations with no secret left in them. Filed under `identity` because
+  a checksum ties the file to one exact script on one device: kept at defaults
+  and not reported, and reachable by `[identity] script-checksum` when the
+  policy wants it gone. It renders as `<CKSUM-…>` / `cksum-…`.
+
+- `ssh-public-key` finds a key blob whose algorithm token is not glued to it.
+  IOS renders an authorised key as `key-hash <alg> <fingerprint> <blob>`, where
+  requiring the algorithm immediately before the blob would leave the key in
+  place and let only `long-base64-left` speak -- a reported miss rather than a
+  decision. A second branch recognises the blob by its own base64 type-string
+  header, the signature `ssh-key-left` uses; both read it from one constant, so
+  the rule and the check cannot disagree, and it covers
+  `ecdsa-sha2-*` as well as `ssh-rsa` / `ssh-dss` / `ssh-ed25519`.
+
+- FortiOS coverage is widened past the attribute list. `fortios-secret` names
+  the credential keys FortiOS has always had, which is the right shape for
+  those; two rules cover the ones it has not. `fortios-encrypted` reads the
+  `ENC` marker alone, so a key no release has invented yet is still a
+  credential the day it appears, and `fortios-credential-key` reads the
+  qualified spelling without the marker -- `group-password`, `key-passphrase`,
+  `password2` -- which is what a typed or templated configuration carries where
+  a backup carries `ENC`. All three are disjoint by construction: two rules
+  matching one span would splice twice and the second would hash the first's
+  marker. The `\d*\s+` guard is what keeps the second off the knobs, because
+  `set password-policy status enable` has a hyphen where `set password2
+  <secret>` has a space. `fortios-object-name` takes a `set name` in a block
+  whose names nothing references -- a firewall policy, addressed by its `edit
+  <id>`.
+
+- `FortiBlocks` does three things. A path may open SEVERAL scopes, because
+  `config system interface` answers two questions at once -- what a `set
+  description` in it is, and what its `edit` names. `config system snmp
+  community` opens a `snmp-community` scope of its own, since `config system
+  snmp sysinfo` is `snmp` too and a `set name` there is not a community string.
+  And the header recogniser is permissive: it asks only what FortiOS itself
+  asks, that the line begins with the word `config`. The two ways of being
+  wrong are not symmetric -- a header that is missed unbalances the stack and
+  can leave a secret in the file, while a line wrongly taken for a header
+  over-applies a rule and cannot -- and a redaction tool takes the second.
+  `config-register 0x2102` is not a section: a hyphen follows the word, not
+  whitespace.
+
+- `[operational-names] fortios-interface` acts on FortiOS interface names,
+  carrying the `edit` declaration and every reference in ONE type -- `set
+  interface`, `srcintf`, `dstintf`, `extintf`, `associated-interface`,
+  `outgoing-interface`, `set member` inside the four interface-ish blocks, and
+  `set device` under `config router static`. A list is a run of quoted names on
+  one line and every entry moves. The tag is a function of the value, so the
+  declaration and its references render alike and the file still loads.
+
+  Names the platform owns stay: the factory ports, the pseudo-interfaces, and
+  the `any` wildcard, which means *every* interface -- substituting it would
+  change what a policy does. That is `_RESERVED_VRFS` reasoning, and it keeps
+  true the report's promise that interface numbering is never scrubbed. This
+  type defaults to `keep` and carries more risk than the others: coverage is a
+  list of reference spellings rather than a closed grammar, and a spelling not
+  on it leaves a reference naming an interface that no longer exists.
+
+- A FortiOS RANCID capture is segmented and stripped. `show full-configuration`
+  and the bare `show` join the allowlisted configuration commands, and FortiOS
+  prompts -- `fw-edge-01 # show`, with the VDOM optionally in brackets -- are
+  recognised, which `_PROMPT` never did because it requires a `user@host` that
+  FortiOS does not write. They are boundaries only and never evidence for
+  detection, and the comment leader is required: detection is what licenses
+  deleting everything unrecognised, so a banner body containing `a # b` must not
+  be able to turn a configuration into a capture.
+
+- A kept SNMP community is reported in BOTH the grammars that give the line no
+  keyword: RouterOS's `name=` under `/snmp community` and FortiOS's `set name`
+  under `config system snmp community`. The block is the only evidence the
+  value is a community string, so `credential-left` -- which reads one line at
+  a time -- cannot see it on the line alone. `secrets = "keep"` is allowed; passing
+  `--strict` over it is the fail-open these checks exist to prevent.
+
+- `credential-left` ignores two shapes that carry no credential. A section path
+  is all path -- a FortiOS `config` line, like the `/`-prefixed RouterOS path
+  beside it -- so `config system replacemsg auth "auth-password-page"` and the
+  `auth-cert-passwd-page` next to it are not read as surviving passwords; the
+  lines UNDER the header are judged on their own. And an empty credential is
+  nothing to report: RouterOS writes an unset key as `auth-key=""`, on a
+  `/routing ospf interface-template` with no authentication on it, and `''` and
+  the FortiOS `set <key> ENC ""` are the same case, as is an empty SNMP
+  community in either grammar. This is the judgement `RANCID_SENTINEL` makes
+  for `## SECRET-DATA`: evidence that the value is not there beats the keyword
+  that introduces it. The empty value ends only its own match, so `auth-key=""
+  password=hunter2` still fires on the second keyword -- which is what keeps
+  the exemption from being a way to hide a real credential behind an empty one.
