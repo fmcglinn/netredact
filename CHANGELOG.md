@@ -29,13 +29,13 @@ First release.
   illegal combination: the substitute would be `HMAC(salt, real_secret)`, and a
   lab config that reached production would carry a computable credential.
 
-- **Fourteen families, and 53 rules across them.** Seven families are made of
-  named rules — `secrets` (32), `text` (7), `identity` (6), `platform` (4),
-  `circuits` (2), `interfaces` (1) and `vlans` (1). Four are the names the
-  collect pass learns rather than rules — `hostnames`, `domains`, `usernames`,
-  `emails`. Three are value spaces with their own partition — `ipv4` (10
-  address classes), `ipv6` (11 classes) and `macs` (OUI and NIC halves,
-  independently actionable).
+- **Fifteen families, and 73 rules across them.** Eight families are made of
+  named rules — `secrets` (43), `identity` (9), `text` (8), `platform` (4),
+  `interfaces` (4), `circuits` (2), `locations` (2) and `vlans` (1). Four are
+  the names the collect pass learns rather than rules — `hostnames`,
+  `domains`, `usernames`, `emails`. Three are value spaces with their own
+  partition — `ipv4` (10 address classes), `ipv6` (11 classes) and `macs`
+  (OUI and NIC halves, independently actionable).
 
 - **Every rule has exactly one home.** A family whose members are named rules
   is a section, and inside it each rule is a key alongside a `default` for the
@@ -49,7 +49,7 @@ First release.
 
   The section classes are **generated from the rule table**, so a rule added to
   a family gets a key, a line in `--print-config` and a cell in the option
-  sweep with nothing to keep in step by hand. Every one of the 53 keys is
+  sweep with nothing to keep in step by hand. Every one of the 73 keys is
   printed at its default, so the granularity is discoverable rather than
   documented-only.
 
@@ -65,7 +65,7 @@ First release.
   mistakes in one section are reported together, and a key naming one of your
   own `[[custom]]` rules is pointed at that rule's `action`.
 
-- **53 redaction rules** across keyword patterns, inline blobs and multi-line
+- **73 redaction rules** across keyword patterns, inline blobs and multi-line
   blocks, covering enable and user credentials, AAA and shared keys, SNMP v1
   through v3, IKE and IPsec pre-shared keys, routing and redundancy protocol
   authentication, PPP, wireless, certificates, PEM blocks and SSH keys.
