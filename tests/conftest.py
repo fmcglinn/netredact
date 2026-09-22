@@ -11,7 +11,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 #: all of them read this, so a fixture added here is inside "every fixture" the
 #: day it exists rather than the day someone remembers all four lists.
 FIXTURE_NAMES = ("cisco.cfg", "arista.cfg", "juniper.cfg", "fortinet.cfg",
-                 "edge.cfg", "edge-junos.cfg", "qk.cfg", "mikrotik.cfg")
+                 "edge.cfg", "edge-junos.cfg", "qk.cfg", "mikrotik.cfg",
+                 "huawei.cfg")
 
 
 @pytest.fixture
@@ -61,6 +62,11 @@ def qk():
 @pytest.fixture
 def mikrotik():
     return read("mikrotik.cfg")
+
+
+@pytest.fixture
+def huawei():
+    return read("huawei.cfg")
 
 
 SALT = b"deterministic-test-salt-do-not-use-in-anger"

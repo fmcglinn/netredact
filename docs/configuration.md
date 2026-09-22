@@ -544,6 +544,70 @@ the ability to say what the file is. It does not, because detection also reads
 the FortiOS grammar itself — `config <path>`, `edit "<name>"`, `next` — and a
 file without those shapes is not a FortiOS config.
 
+### Huawei's version marker
+
+```
+[MA5600V800R013: 3910]
+```
+
+An OLT capture states the product once, in a bracketed marker that sits in the
+configuration as a section header of its own. `hardware-model` takes `MA5600`
+and `os-version` takes `V800R013`, so what is left says a Huawei box wrote the
+file and nothing about which one:
+
+```
+[<REMOVED><REMOVED>: 3910]
+```
+
+`hardware-model` also covers the board part numbers — `board add 0/0 H805GPFD`,
+and the same numbers again in the `display board` table a RANCID capture keeps
+as a comment above the configuration. Left out, the model was destroyed where
+the device configures it and kept twelve lines higher up where the device
+reports it, which is not a policy anybody asked for.
+
+This marker is *all* the platform material an OLT capture has, so it is the
+sharpest case for the rule below: destroying it must not cost netredact the
+ability to say what the file is. It does not, because detection reads the
+provisioning grammar instead — `ont add ... sn-auth ...`, `service-port <n>
+vlan <n> gpon ...` — whose keywords survive every action, since only the values
+around them ever move.
+
+### Wrapped lines, and what netredact will not guess
+
+Two dialects arrive with a long command split across physical lines.
+
+RouterOS marks its wraps: `/export` writes a trailing `\` and continues on the
+next line. Huawei marks nothing at all. `display current-configuration` wraps
+at the width of the session that collected it, so the break is a bare newline
+in the middle of whatever it landed on and the remainder starts at column zero:
+
+```
+ ont add 0 0 sn-auth "48575443AAAA0001" ... ont-srvprofile-id 110 desc "
+Bob's Bakery Pty Ltd, 50M"
+```
+
+Both are undone before any rule runs, because a rule sees one line at a time
+and a wrap would otherwise carry the tail of a value past every rule that could
+recognise it. A half-redacted line reads as a finished one, which is worse than
+a plain miss.
+
+A Huawei line is only joined on evidence in the file, never on a guess about
+it. Three things have to hold at once: the line is spelled like one of the
+Huawei commands that carries a quoted value; it is unfinished at its end; and
+the next line is at column zero while this one is indented. "Unfinished" is
+itself two tests, because one is not enough — a quoted value still open, *or*
+an `ont add` that has named a credential and not yet the service profile it
+cannot end without. The second test exists because a Huawei cipher blob is
+emitted raw and its payload carries bare quotes, so a wrap inside one can land
+on a line whose quotes balance.
+
+**netredact does not reflow on column.** The wrap column is not stated anywhere
+in the file, the observable breaks do not agree on one, and joining on a
+guessed column would corrupt values rather than merely fail to help. Where the
+evidence above is absent the line is left exactly as it arrived — and if a
+credential fragment is on it, `huawei-cipher-left` reports it rather than
+letting `--strict` pass in silence.
+
 ### False positives, and the vendor detector
 
 `hardware-model` insists on a `:` or `=` after the keyword. That separator is

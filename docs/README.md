@@ -1,7 +1,8 @@
 # netredact documentation
 
 Strip secrets and identifying data out of Cisco IOS/IOS-XE/NX-OS, Arista EOS,
-Juniper JunOS, MikroTik RouterOS and Fortinet FortiOS configurations.
+Juniper JunOS, MikroTik RouterOS, Fortinet FortiOS and Huawei MA5600T/MA5800
+GPON OLT configurations.
 
 ## Start here
 
@@ -66,7 +67,7 @@ it before you send anything.
 
 Interface numbering, key-chain names, BGP communities and unsupported grammar
 are not transformed. Operational names and ASNs are opt-in and limited to the
-documented Cisco, Arista, JunOS, RouterOS and FortiOS forms.
+documented Cisco, Arista, JunOS, RouterOS, FortiOS and Huawei forms.
 
 **Warning:** netredact reduces exposure; it does not guarantee anonymisation.
 Review every output and decide whether it is safe and lawful to share.

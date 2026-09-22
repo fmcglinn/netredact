@@ -336,6 +336,13 @@ def test_the_section_defaults_to_keep_and_names_every_platform_rule():
      "mikrotik"),
     ("#config-version=FGVM64-7.4.4-FW-build2662-240514:opmode=0\n", "fortinet"),
     ("config system global\n    set hostname \"fw\"\nend\n", "fortinet"),
+    ("[MA5600V800R013: 3910]\n", "huawei"),
+    # no version marker at all: the provisioning grammar carries it, which is
+    # the arrangement Huawei detection has to rely on -- both halves of that
+    # marker belong to `platform`
+    (' ont add 0 0 sn-auth "48575443AAAA0001" password-auth "x" omci\n',
+     "huawei"),
+    (" service-port 2 vlan 1091 gpon 0/0/0 ont 0 gemport 1\n", "huawei"),
 ])
 def test_a_platform_line_names_the_vendor_on_its_own(text, vendor):
     assert detect_vendor(text) == vendor
@@ -371,6 +378,20 @@ def test_fortios_detection_survives_platform_destroying_its_evidence():
 
 def test_a_fortios_backup_is_not_read_as_another_vendor(fortinet):
     assert detect_vendor(fortinet) == "fortinet"
+
+
+def test_huawei_detection_survives_platform_destroying_its_only_marker(huawei):
+    """Huawei is the hardest case in the table, because `[MA5600V800R013: 3910]`
+    is the only line in an OLT capture that names the product AND both halves
+    of it belong to `platform`. What is left is the provisioning grammar, whose
+    keywords survive every action because only the values move."""
+    out = sanitise_text(huawei, policy(platform="redact"), salt=SALT).text
+    assert "MA5600" not in out and "V800R013" not in out
+    assert detect_vendor(out) == "huawei"
+
+
+def test_a_huawei_olt_capture_is_not_read_as_another_vendor(huawei):
+    assert detect_vendor(huawei) == "huawei"
 
 
 def test_a_junos_set_file_is_not_read_as_fortios(edge_junos):

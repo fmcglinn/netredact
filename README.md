@@ -1,8 +1,9 @@
 # netredact
 
 Strip secrets and identifying data out of Cisco IOS/IOS-XE/NX-OS, Arista EOS,
-Juniper JunOS, MikroTik RouterOS and Fortinet FortiOS configurations, so you
-can hand one to a vendor, a contractor, a forum or a language model.
+Juniper JunOS, MikroTik RouterOS, Fortinet FortiOS and Huawei MA5600T/MA5800
+GPON OLT configurations, so you can hand one to a vendor, a contractor, a forum
+or a language model.
 
 Python 3.11+, standard library only, no runtime dependencies.
 

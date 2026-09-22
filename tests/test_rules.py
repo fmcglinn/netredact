@@ -25,9 +25,9 @@ def test_inventory_is_immutable_and_rule_names_are_unique():
 
 def test_every_rule_has_the_expected_family():
     counts = Counter(info.family for info in inventory())
-    assert counts == {"secrets": 43, "text": 8, "locations": 2,
-                      "identity": 9, "platform": 4,
-                      "interfaces": 4, "vlans": 1, "circuits": 2}
+    assert counts == {"secrets": 48, "text": 11, "locations": 3,
+                      "identity": 11, "platform": 4,
+                      "interfaces": 6, "vlans": 1, "circuits": 2}
     assert set(counts) <= set(FAMILIES)
 
 
@@ -38,6 +38,9 @@ def test_every_rule_has_the_expected_family():
     ("pem-cert", "identity"), ("hardware-model", "platform"),
     ("interface-description", "interfaces"), ("vlan-name", "vlans"),
     ("patch-name", "circuits"), ("pseudowire-name", "circuits"),
+    ("huawei-ont-credential", "secrets"), ("huawei-cipher", "secrets"),
+    ("huawei-ont-serial", "identity"), ("huawei-snmp-engineid", "identity"),
+    ("huawei-ont-desc", "interfaces"), ("huawei-profile-name", "text"),
 ])
 def test_inventory_names_each_rules_family(name, family):
     assert next(info.family for info in inventory() if info.name == name) == family
@@ -56,6 +59,7 @@ def test_inventory_carries_descriptive_metadata():
     assert rules["comment"].excluded_scopes == ("interfaces",)
     assert rules["patch-name"].vendor == "arista"
     assert rules["routeros-snmp-community"].vendor == "mikrotik"
+    assert rules["huawei-ont-credential"].vendor == "huawei"
     assert rules["routeros-snmp-community"].required_scope == "snmp-community"
     assert rules["enable-secret"].vendor is None
     assert rules["pem-key"].end_pattern
@@ -239,3 +243,112 @@ def test_masks_are_never_a_rule_target():
 
 def test_configuration_has_no_legacy_descriptions_section():
     assert not hasattr(Config(), "descriptions")
+
+
+# ---------------------------------------------------------------------------
+# Huawei wraps, which carry no marker at all. `display current-configuration`
+# breaks at the width of the collecting session and the remainder arrives at
+# column zero, so the evidence has to be assembled from the command keyword,
+# an unclosed quoted value and that column-zero remainder together -- see
+# `rules._HUAWEI_WRAPPED`. Each piece is here because dropping it either
+# abandons half a credential or swallows the next command whole.
+# ---------------------------------------------------------------------------
+
+#: (source lines, the one logical line they are) -- real shapes from an OLT
+#: capture, with the values replaced
+HUAWEI_WRAPS = [
+    # the common case: the break lands immediately after `desc "`, because
+    # everything in front of it is a fixed-width prefix
+    ([' ont add 0 0 sn-auth "48575443AAAA0001" password-auth "%YQ%" omci desc "',
+      'Bob\'s Bakery Pty Ltd, 50M"'],
+     ' ont add 0 0 sn-auth "48575443AAAA0001" password-auth "%YQ%" omci desc '
+     '"Bob\'s Bakery Pty Ltd, 50M"'),
+    # the break lands INSIDE a cipher blob, which is the case that leaves a
+    # credential in the output if it is not joined
+    ([' ont add 0 1 sn-auth "4857544" password-auth "%#%#NwOntPass%F&"=q;s',
+      'Z![l;4wuBEAcXQBS15%#%#" omci ont-lineprofile-id 305'],
+     ' ont add 0 1 sn-auth "4857544" password-auth "%#%#NwOntPass%F&"=q;s'
+     'Z![l;4wuBEAcXQBS15%#%#" omci ont-lineprofile-id 305'),
+    # and twice over, because a value long enough to wrap once can wrap again.
+    # A remainder is at column zero -- that is what distinguishes it from the
+    # next command, every one of which is indented.
+    ([' service-port desc 2 description "ORD-11223, Bob\'s ',
+      'Bakery Pty Ltd - ',
+      'L2, 50M"'],
+     ' service-port desc 2 description "ORD-11223, Bob\'s Bakery Pty Ltd - '
+     'L2, 50M"'),
+]
+
+
+@pytest.mark.parametrize("source,joined", HUAWEI_WRAPS,
+                         ids=range(len(HUAWEI_WRAPS)))
+def test_a_huawei_wrap_is_undone_with_nothing_in_its_place(source, joined):
+    """The break fell inside a value, and a value has no separator in it."""
+    assert R.join_continuations(source) == [joined]
+
+
+def test_an_ont_command_is_unfinished_until_it_names_its_service_profile():
+    """The second way of seeing a wrap, and the only one that works on a
+    `%#%#` credential: those blobs carry bare quotes, so a wrap inside one can
+    land on a line whose quotes BALANCE. `ont add` always names both profiles,
+    so the grammar says the line is unfinished when the quotes cannot.
+
+    It has to be the SECOND profile. Stopping at `ont-lineprofile-id` joined
+    the credential back together and left a third fragment -- carrying the
+    customer -- standing on its own, where `huawei-ont-desc` cannot see it.
+    """
+    # six quotes on the first line and four of them payload, so the count
+    # BALANCES and `_quote_open` sees a finished line. Only the grammar does
+    # not.
+    source = [' ont add 1 0 sn-auth "4857" password-auth "%#%#Pa"ss"q;%#%#" omci ',
+              'ont-lineprofile-id 310 ',
+              'ont-srvprofile-id 110 desc "Northwind Retail Group, 100M" ']
+    assert not R._quote_open(source[0])
+    assert R.join_continuations(source) == [
+        ' ont add 1 0 sn-auth "4857" password-auth "%#%#Pa"ss"q;%#%#" omci '
+        'ont-lineprofile-id 310 '
+        'ont-srvprofile-id 110 desc "Northwind Retail Group, 100M" ']
+
+    # and the point of joining it: both values are now reachable
+    hits = []
+
+    def replace(hit):
+        hits.append(hit.name)
+        return RuleReplacement.with_text("MASKED")
+
+    RuleCatalogue.builtins().transform(source, replace=replace)
+    assert "huawei-ont-credential" in hits and "huawei-ont-desc" in hits
+
+
+def test_a_complete_huawei_command_never_swallows_the_next_one():
+    """A Huawei cipher blob carries arbitrary punctuation, bare quotes
+    included, so an odd quote count is NOT on its own evidence that the line
+    was wrapped. The indent is what settles it: every command inside a
+    `[...-config]` section is indented and no wrap remainder is."""
+    source = [' terminal user name history_password root *J$1a$oSXP"0f!$*$*',
+              ' traffic table ip index 40 name "biz-20m-up" cir 5120']
+    assert R.join_continuations(source) == source
+
+
+def test_a_huawei_wrap_is_not_joined_across_the_files_own_structure():
+    """`#` separates two sections and `[...]` opens one. Neither is the
+    remainder of anything, whatever the line above it left open."""
+    for following in ("#", "[vlan-config]", "  <gpon-0/1>", "!"):
+        source = [' ont add 0 0 sn-auth "4857" desc "', following]
+        assert R.join_continuations(source) == source
+
+
+def test_another_dialect_is_never_joined_on_an_unbalanced_quote():
+    """The command keyword is the guard, and it is needed: an unbalanced quote
+    is perfectly ordinary in a banner body, and joining one would mangle it."""
+    source = ['banner motd ^', '  Welcome to "ACME', '^']
+    assert R.join_continuations(source) == source
+
+
+def test_huawei_joining_is_idempotent_so_verification_stays_line_aligned():
+    source = HUAWEI_WRAPS[0][0]
+    once = R.join_continuations(source)
+    assert R.join_continuations(once) == once
+    view = RuleCatalogue.builtins().verification_view(
+        once, blind=lambda info: True)
+    assert len(view) == len(once)

@@ -268,6 +268,15 @@ class OperationalNames:
             r"(\bvrf\s+(?:(?:instance|definition|forwarding|member)\s+)?)(\S+)",
             r"(\bip\s+vrf\s+)(\S+)",
             r"(\brouting-instances?\s+)(\S+)",
+            # Huawei's spelling. It earns its place by carrying the REFERENCES
+            # as well as the declaration -- `ip vpn-instance mgmt` states the
+            # instance and `ip binding vpn-instance`, `ip route-static
+            # vpn-instance`, `sysman vpn-instance` and `ntp-service ...
+            # vpn-instance` all point at it, which is the whole reason a VRF
+            # name is an `[operational-names]` type and not a rule. The
+            # lookbehind keeps it off `vpn-instance-capability`, a BGP knob
+            # whose argument is an enum and not a name.
+            r"((?<![\w-])vpn-instance\s+)(\S+)",
         ):
             line = self._replace_group(line, pat, vrf)
 

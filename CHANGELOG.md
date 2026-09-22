@@ -4,6 +4,84 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Huawei MA5600T / MA5800 GPON OLT support**, read from `display
+  current-configuration` as RANCID captures it. Thirteen new rules take the
+  rule count to 86: the credentials on an `ont add` line, the `*...*` cipher on
+  a `terminal user name` line, `snmp-agent` communities and SNMPv3 secrets, the
+  `%#%#` cipher wherever it appears, the ONT serial, the engine id, the ONT and
+  port descriptions a provider writes the subscriber into, the profile and
+  traffic-table names, the rack label and the MSTP region. `sysname` joins the
+  hostname sources, the local user table and `ssh user` join the username
+  sources, and `vpn-instance` joins the `vrf` operational-name type so the
+  declaration and its four reference spellings move together.
+
+- **Huawei credentials are reached through the grammar, not the quoting.** The
+  device writes an ONT password as a cipher blob inside `"..."`, but emits the
+  blob raw — so its payload carries bare quotes, eight on a line with six of
+  them payload. A rule that closed the value at a quote closed it in the middle
+  of the credential and wrote a marker over the first fragment, which reads as
+  handled with the rest of the password still on the line. `ont add` puts its
+  credentials between `password-auth` and the `omci` that follows, so the
+  region between those two keywords is the target and the quotes inside it are
+  never consulted.
+
+- **Huawei wrapped lines are joined, on evidence in the file.** `display
+  current-configuration` wraps at the width of the session that collected it
+  and marks the break with nothing at all, so a customer name or the tail of a
+  password arrives at column zero on a line of its own. A line is joined only
+  when three things hold together: it is spelled like a Huawei command that
+  carries a quoted value, it is unfinished at its end, and the next line is at
+  column zero while it is indented. "Unfinished" is two tests, because one is
+  not enough — a quoted value still open, *or* an `ont add` that has named a
+  credential and not yet the service profile it cannot end without, which is
+  the only test that works when the blob's own quotes balance.
+
+  netredact does **not** reflow on column. The wrap column is stated nowhere in
+  the file and the observable breaks do not agree on one, so joining on a
+  guessed column would corrupt values rather than fail to help.
+
+- **`huawei-cipher-left`**, an unconditional credential check, for the cases a
+  rule cannot reach: `%#%#`, the `$1a$` marker, and a `*`-delimited blob where
+  the `terminal user name` grammar puts one or in front of that command's tail
+  grammar. The last has no keyword to go on at all, which is what makes a
+  regression in the rule that destroys those fragments impossible to miss.
+
+- **`[MA5600V800R013: 3910]` is split like the Arista and FortiOS headers** —
+  `hardware-model` takes `MA5600`, `os-version` takes `V800R013` — and
+  `hardware-model` now also covers board part numbers, both where `board add`
+  configures them and where the `display board` table a capture keeps as a
+  comment reports them. That marker is all the platform material an OLT capture
+  has, so detection reads the provisioning grammar instead: `ont add ...
+  sn-auth ...` and `service-port <n> vlan <n> gpon ...` keep their keywords
+  through every action.
+
+- **The ONT serial is `identity`**, alongside `serial-number`. In SN-auth mode
+  it is what admits the ONT to the PON, but it is a hardware serial, so the
+  secrets-only default keeps it and `pseudo` keeps an `ont confirm` elsewhere in
+  the file reading as the same ONT.
+
+- **`snmp-agent sys-info location` and `contact`** join the `location` and
+  `contact` rules as further branches, so one action governs each field
+  whichever dialect states it.
+
+### Fixed
+
+- **`credential-left` no longer reports a credential it has already dealt
+  with** when the keyword carries a hyphenated qualifier. A hyphen is a word
+  boundary, so `\bpassword\b` matched inside `password-auth` and then judged
+  the line on `-auth "<REMOVED>"`, which matches none of the "already handled"
+  shapes — every ONT line of a real capture was reported as a survivor after
+  its credential had been destroyed. Putting the longer spelling first in the
+  alternation does not fix it and cannot: the longer branch matches, the
+  lookahead refuses it, and the engine backtracks to the shorter one. The
+  qualifier is now admitted where the judgement is made, which also stops the
+  same false report on a handled `secret-key <REMOVED>` — while leaving the
+  keyword's reach over a real `secret-key hunter2` exactly as it was.
+
 ## [0.1.0] - 2026-08-31
 
 First release.

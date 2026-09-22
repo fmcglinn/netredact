@@ -127,6 +127,33 @@ VAL = rf'(?!(?:{RANCID_SENTINEL}))(?:(?:"[^"]*")|(?:\'[^\']*\')|[^\s;]+)'
 VAL_MACRO = "%VAL%"
 #: the capturing spelling of :data:`VAL`, substituted for :data:`VAL_MACRO`
 VAL_GROUP = rf"""((?!(?:{RANCID_SENTINEL}))(?:"[^"]*"|'[^']*'|[^\s;]+))"""
+#: a Huawei quoted value.
+#:
+#: Huawei escapes an embedded double quote by DOUBLING it, so ``password-auth
+#: "%NwOntPass""H^9a...%"`` is ONE value with a quote in the middle of it.
+#: :data:`VAL`, whose ``"[^"]*"`` closes at the first quote it meets, took
+#: ``"%NwOntPass"`` and wrote a marker over that much -- leaving the rest of
+#: the credential on the line next to a placeholder saying it had been dealt
+#: with, which is the half-redacted line this project treats as worse than a
+#: plain miss.
+#:
+#: ``(?:[^"]|"")*`` consumes the doubled pair as a unit instead. The two
+#: branches cannot both match the same character, so the alternation is
+#: unambiguous and the star cannot backtrack catastrophically; and because a
+#: closing quote is only recognised where a doubled pair is not, ``"A" hex "B"``
+#: is still two values and not one.
+HUAWEI_QUOTED = r'"(?:[^"]|"")*"'
+
+#: a Huawei value: the quoted form above, or a bare run to whitespace.
+#:
+#: Written out rather than borrowed from :data:`VAL`, and the difference is the
+#: semicolon. ``VAL`` stops at one, because in JunOS a ``;`` terminates the
+#: statement -- but Huawei's grammar has no such terminator and its cipher
+#: blobs are arbitrary punctuation, ``snmp-agent community read
+#: $5;,WML.z{R;N[7IgJZ@KpE6T/Wn|"zV}`Dv.TW9Ba8R>'IN/$`` among them. Borrowing
+#: ``VAL`` there would have taken ``$5`` and left the community string.
+HUAWEI_VAL = rf'(?:{HUAWEI_QUOTED}|\S+)'
+
 #: encoding / algorithm hints that sit between the keyword and the secret.
 #: ``enc`` is FortiOS's marker on a stored credential -- ``set password ENC
 #: <blob>``. Without it here the blob was not the value, ``ENC`` was: the line
@@ -559,6 +586,150 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # over, and :data:`_OUTSIDE` is not needed because no block opens both.
     ("fortios-object-name", r"\s*set\s+name\s+", "text", "object-labels"),
 
+    # ---- Huawei MA5600T / MA5800 (GPON OLT) --------------------------------
+    # THE CREDENTIALS ARE NOT REACHED THROUGH THEIR QUOTING, and that is the
+    # whole design of this group. `display current-configuration` writes an
+    # ONT's stored password as a cipher blob inside double quotes -- but the
+    # blob is emitted RAW, so its own punctuation routinely includes a bare
+    # `"`:
+    #
+    #     password-auth "%#%#NwOntPass...>w{R8{cPeRqD%F&"=q;sJ-:[>rH%#%#"
+    #
+    # There are eight quotes on that line and six of them are payload. Any
+    # rule that closed the value at a quote closed it in the middle of the
+    # credential and wrote a marker over the first fragment, which is the
+    # half-redacted line this project treats as worse than a plain miss.
+    #
+    # What IS reliable is the command's own grammar. `ont add` puts the
+    # credentials between `password-auth` and the `omci` that introduces the
+    # profile ids, so the region between those two keywords is the target and
+    # the quotes inside it are never consulted. `hex` gets its own group
+    # rather than being swallowed with the rest: it is a second rendering of
+    # the same credential, and keeping the keyword visible is what says so.
+    #
+    # The second branch is the one that keeps this fail-safe. A Huawei capture
+    # wraps at the width of the collecting session, and where a wrap lands
+    # inside a blob whose embedded quotes defeat :func:`_quote_open` the
+    # joiner declines it (see :data:`_HUAWEI_WRAPPED`) and the line arrives
+    # here with no `omci` on it at all. Rather than decline the line and leave
+    # a password on it, the fallback takes everything from `password-auth` to
+    # the end: blunter than the first branch, and the bluntness is the point.
+    ("huawei-ont-credential",
+     _alt(r"^\s*ont\s+(?:add|confirm|modify)\s.*?\bpassword-auth\s+"
+          r"(\S.*?)(?:\s+hex\s+(\S.*?))?(?=\s+omci(?![-\w]))",
+          r"^\s*ont\s+(?:add|confirm|modify)\s.*?\bpassword-auth\s+(\S.*?)\s*$"),
+     "secrets", None),
+    # The MA5600T local user table. `terminal user name <flag> <user>
+    # *<cipher>* <level> <created> <modified> <creator> <id> "<desc>"`, where
+    # the cipher is delimited by `*` and everything between the delimiters is
+    # payload -- `*[4JJE5U**BAW5;JF`U_X-Q^=!*` has two of them inside it, so
+    # the blob has to be taken to the LAST `*` and not the next one.
+    #
+    # Three branches, in decreasing confidence:
+    #
+    # * the whole command is on the line, so the trailing grammar -- a level
+    #   digit and a `yyyy:mm:dd:hh:mm:ss` stamp -- says exactly where the
+    #   cipher ends, and the creation times, the creator and the account's
+    #   description all survive.
+    # * the line was wrapped and the trailing grammar is on the next one, so
+    #   there is nothing to anchor against and everything from the `*` goes.
+    # * the wrap fell INSIDE the cipher, so the remainder arrives as a line of
+    #   its own with the blob's tail on the front of it. The lookahead is the
+    #   evidence and it is a strong one: a token ending in `*`, then a level
+    #   and two colon-separated timestamps, is this command's tail and no
+    #   other dialect writes anything like it.
+    ("huawei-terminal-user",
+     _alt(r"^\s*terminal\s+user\s+name\s+\S+\s+\S+\s+(\*.*\*)"
+          r"(?=\s+\d+\s+\d{4}:\d{2}:)",
+          r"^\s*terminal\s+user\s+name\s+\S+\s+\S+\s+(\*.*?)\s*$",
+          r"^(\S*\*)(?=\s+\d+\s+\d{4}:\d{2}:\d{2}:\d{2}:\d{2}:\d{2}\s)"),
+     "secrets", None),
+    # An SNMP community, under both the grammars Huawei states one in. The
+    # value is taken with `\S+` rather than `%VAL%` because `VAL` stops at a
+    # `;` -- the JunOS statement terminator, which Huawei's grammar does not
+    # have -- and a Huawei cipher blob carries semicolons freely: `snmp-agent
+    # community read $5;,WML.z{R;N[7IgJZ@...$` would have handed over `$5` and
+    # left the community string on the line.
+    #
+    # `snmp-agent` rather than `snmp-server`, which is what keeps this off the
+    # IOS-style rule and that one off this: `snmp-community` above wants
+    # `snmp-server` or `set snmp`, so each spelling has exactly one owner.
+    ("huawei-snmp-community",
+     _alt(r"^\s*snmp-agent\s+community\s+(?:read|write)\s+"
+          r"(?:(?:cipher|simple)\s+)?(\S+)",
+          r"^\s*snmp-agent\s+target-host\s+.*?\bsecurityname\s+(\S+)"),
+     "secrets", None),
+    # SNMPv3, where Huawei spells out what Cisco writes as `auth md5 X` /
+    # `priv aes 128 X`. `snmp-v3-auth` and `snmp-v3-priv` want the bare words,
+    # so the `-mode` suffix is what gives this rule the line and those two the
+    # IOS one.
+    ("huawei-snmp-usm",
+     r"^\s*snmp-agent\s.*?\b(?:authentication|privacy)-mode\s+"
+     r"(?:md5|sha\d*|sha2-\d+|aes\d*|des\d*|3des)\s+(\S+)", "secrets", None),
+    # The engine id, and `identity` for the same reason Cisco's is: it names
+    # this one box and nothing else, and it is a 24-character hex run, so
+    # `long-hex-left` reported it on every capture until a rule owned it. A
+    # rule the shape checks can be blinded to is the whole difference between
+    # "kept on purpose" and "missed".
+    ("huawei-snmp-engineid",
+     r"\s*snmp-agent\s+local-engineid\s+", "identity", None),
+    # The ONT's serial number. `identity`, alongside `serial-number`: it is
+    # the hardware serial of one subscriber's terminal, so `pseudo` is the
+    # action to reach for -- an `ont confirm` elsewhere in the file names the
+    # same ONT, and a pseudonym keeps the two reading as one ONT.
+    #
+    # Reached with `%VAL%` rather than the grammar anchor the credentials
+    # need, because this value is the one on an `ont add` line that is NOT a
+    # cipher blob: it is `48575443` -- "HWTC" -- and eight more hex digits.
+    ("huawei-ont-serial",
+     r"^\s*ont\s+(?:add|confirm|modify)\s.*?\bsn-auth\s+%VAL%",
+     "identity", None),
+    # What an ONT and a service port are called, which on this box is the
+    # subscriber: `desc "ORD-772311, TransitCo Ltd - SME, 300M"`
+    # carries an order reference, a customer and the bandwidth they bought.
+    #
+    # `interfaces` and not `text`, for the reason `fortios-interface-alias` is
+    # `interfaces`: it is the label a reviewer reads the topology by, and a
+    # provider needs the ports to stay distinguishable from each other.
+    #
+    # Both take the REST of the line, and both are safe to: `desc` is the last
+    # field of `ont add` and `description` the last field of `service-port
+    # desc`, so there is no following keyword for an embedded quote to hide.
+    ("huawei-ont-desc",
+     r"^\s*ont\s+(?:add|confirm|modify)\s.*?\bdesc\s+(\S.*?)\s*$",
+     "interfaces", None),
+    # `service-port desc <n> description "..."` is the subscriber's, and `port
+    # desc <f>/<s>/<p> description "..."` is the uplink's -- one grammar, so
+    # one rule, and one action for both.
+    ("huawei-port-desc",
+     r"^\s*(?:service-)?port\s+desc\s+\S+\s+description\s+(\S.*?)\s*$",
+     "interfaces", None),
+    # `rack info 0 description "NW-RACK-01" name "NW-RACK-01"
+    # manufactured-name "Huawei"`. The cabinet a chassis stands in, which is a
+    # place -- so
+    # `locations`, alongside the `snmp location` this box states four lines
+    # further down. `manufactured-name` is deliberately left: it says
+    # "Huawei", which the whole file already does.
+    ("huawei-rack-info",
+     r"^\s*rack\s+info\s+\d+\s+description\s+%VAL%(?:\s+name\s+%VAL%)?",
+     "locations", None),
+    # The names of the profiles a subscriber is provisioned against -- a line
+    # profile, a service profile, a DBA profile, a traffic table. `text`, and
+    # safe to act on, because the configuration refers to every one of them by
+    # its NUMBER and never by its name: `ont-lineprofile-id 305`,
+    # `traffic-table index 45`. A name nothing points at is a label, which is
+    # the same argument `object-labels` makes on RouterOS and FortiOS.
+    #
+    # `(?:\S+\s+)*?` rather than `.*?`: whole tokens only, so the keyword has
+    # to be a word of the command and cannot be found inside a value.
+    ("huawei-profile-name",
+     r"\s*(?:\S+\s+)*?profile-name\s+", "text", None),
+    ("huawei-traffic-table-name",
+     r"\s*traffic\s+table\s+\S+\s+index\s+\d+\s+name\s+", "text", None),
+    # The MSTP region, which on a provider's access ring is named after the
+    # site it stands in -- `region-name manila`.
+    ("huawei-region-name", r"\s*region-name\s+", "text", None),
+
     # ---- Juniper specifics -------------------------------------------------
     ("junos-password", r".*\b(?:encrypted-password|plain-text-password-value)\s+", "secrets", None),
     # The digest a script file is pinned to. NOT a credential, but a 64-char hex
@@ -629,7 +800,27 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
           rf"{_EOS_HEADER}([^)]+),",
           # the FortiOS header: the model is everything before the first `-`
           # that a dotted release follows, so `FGVM64` and `FWF-60E` both work
-          rf"{_FORTIOS_HEADER}([\w-]+?)-(?=\d+\.\d)"), "platform", None),
+          rf"{_FORTIOS_HEADER}([\w-]+?)-(?=\d+\.\d)",
+          # Huawei's own version marker, `[MA5600V800R013: 3910]`, which sits
+          # in the configuration as a section header of its own. Like the
+          # Arista and FortiOS headers it states a model and a release with
+          # nothing but position to introduce them, so each is a branch on the
+          # rule that owns that kind of value.
+          r"^\s*\[(MA\d+[A-Z]*)(?=V\d+R\d+)",
+          # A board part number -- `board add 0/0 H805GPFD`. A branch and not
+          # a rule of its own, because `[platform] hardware-model = "keep"`
+          # has to mean one thing on every dialect and a line card is a
+          # hardware model. `board add standby` names no part and cannot
+          # match: the slot is required.
+          r"^\s*board\s+add\s+\d+/\d+\s+(\S+)",
+          # and the same part numbers again in the `display board` table a
+          # RANCID capture keeps as a comment above the configuration. Left
+          # out, the model was destroyed where the device configures it and
+          # kept twelve lines higher up where the device reports it -- which
+          # is not a policy anybody asked for. `H` and three digits is the
+          # whole of Huawei's part-number shape and the slot number in front
+          # is what keeps the branch off the rest of the table.
+          r"^\s*!\s+\d+\s+(H\d{3}[A-Z0-9]+)(?![-\w])"), "platform", None),
     ("os-version",
      _alt(_rest(r"\s*(?:set\s+)?version\s+(?=\d)"),
           # the Arista header, the token after the last comma
@@ -650,7 +841,13 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
           rf"{_FORTIOS_HEADER}.*?-(\d+\.\d[^\s:]*)",
           # `#buildno=` and `#branch_pt=`, the same release stated again on
           # their own lines
-          r"^\s*#(?:buildno|branch_pt)=(\S+)\s*$"), "platform", None),
+          r"^\s*#(?:buildno|branch_pt)=(\S+)\s*$",
+          # Huawei's `[MA5600V800R013: 3910]`. `.*?` for the model in front
+          # for the reason the FortiOS branch needs one: `hardware-model` is
+          # an earlier rule and has already replaced it by the time this one
+          # looks, so a pattern that could not span `<REMOVED>` left the
+          # release behind on exactly the files where the model was acted on.
+          r"^\s*\[.*?(V\d+R\d+[\w.]*)"), "platform", None),
     ("software-image",
      _rest(rf"\s*!?\s*(?:(?:{_IMAGE_KEYS})(?:\s*[:=]\s*|\s+)"
            rf"|(?:{_IMAGE_COLON_KEYS})\s*[:=]\s*)"), "platform", None),
@@ -671,10 +868,12 @@ _BUILTIN: list[tuple[str, str, str, str | None]] = [
     # `contact` as a command keyword. `contact-info` is FortiOS's spelling of
     # the contact field.
     ("location",
-     _alt(_rest(r"\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?location\s+"),
+     _alt(_rest(r"\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+"
+                r"|snmp-agent\s+sys-info\s+)?location\s+"),
           r".*(?<![-\w])location=%VAL%"), "locations", None),
     ("contact",
-     _alt(_rest(r"\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?contact(?:-info)?\s+"),
+     _alt(_rest(r"\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+"
+                r"|snmp-agent\s+sys-info\s+)?contact(?:-info)?\s+"),
           r".*(?<![-\w])contact=%VAL%"), "text", None),
     # the body of a JunOS `location { ... }` stanza: the keys carry the street
     # address the `location` rule itself must not eat (it is a stanza opener,
@@ -902,6 +1101,24 @@ _RULE_VENDORS: dict[str, str] = {
     "fortios-credential-key": "fortinet",
     "fortios-encrypted": "fortinet",
     "fortios-object-name": "fortinet",
+    # Huawei MA5600T / MA5800 grammar: `ont add`, `terminal user name`,
+    # `snmp-agent`, `service-port desc`, and the `%#%#` cipher delimiter.
+    # Labels, as every entry here is -- each of these rules is held to the
+    # dialect by the command keyword its pattern names, which is evidence in
+    # the line and not a guess about the file.
+    "huawei-cipher": "huawei",
+    "huawei-ont-credential": "huawei",
+    "huawei-ont-desc": "huawei",
+    "huawei-ont-serial": "huawei",
+    "huawei-profile-name": "huawei",
+    "huawei-region-name": "huawei",
+    "huawei-port-desc": "huawei",
+    "huawei-rack-info": "huawei",
+    "huawei-snmp-community": "huawei",
+    "huawei-snmp-engineid": "huawei",
+    "huawei-snmp-usm": "huawei",
+    "huawei-terminal-user": "huawei",
+    "huawei-traffic-table-name": "huawei",
 }
 
 #: rules whose value needs a code path rather than a plain span replacement
@@ -924,6 +1141,20 @@ _BANNER_RULE = ("banner", "text")
 #: context stays *outside* the groups instead of being rebuilt by a template.
 _BLOB: list[tuple[str, str, str, int]] = [
     ("junos-type9", r'(\$9\$[^\s";]+)', "secrets", 0),
+    # Huawei's cipher, which is SELF-DELIMITING and therefore recognisable
+    # with no keyword in front of it at all: `%#%#` opens the blob and `%#%#`
+    # closes it, and nothing else in any dialect writes that sequence. That is
+    # what makes it a shape rule rather than a keyword one -- the same
+    # argument `junos-type9` makes for `$9$`.
+    #
+    # It earns its place by reaching the blobs a keyword cannot. A Huawei
+    # capture wraps mid-value, and where the wrap defeats the joiner the tail
+    # of an ONT password arrives as a line of its own with no `password-auth`
+    # anywhere on it; searched rather than matched, this finds the fragment
+    # where it lies. `[^\s"]` for the payload, because the payload's own
+    # punctuation includes bare quotes -- see `huawei-ont-credential` -- but
+    # never whitespace, so a blob cannot run past the token it is in.
+    ("huawei-cipher", r'(%#%#[^\s]*?%#%#)', "secrets", 0),
     ("crypt-hash", r'(\$(?:1|2[abxy]?|5|6|y)\$[^\s";]+)', "secrets", 0),
     # two shapes, because the algorithm token is not always glued to the blob:
     # IOS `key-hash ssh-rsa <fingerprint> <blob>` puts the fingerprint between
@@ -1329,7 +1560,10 @@ class RuleCatalogue:
 HOSTNAME_PATS = (
     # the optional `set` is FortiOS's `set hostname "FGT-EDGE-01"`; the quotes
     # come off in the collect pass, which strips them from every name source
-    re.compile(r"^\s*(?:set\s+)?(?:hostname|switchname)\s+(\S+)", re.I),
+    # `sysname` is Huawei's and H3C's spelling of the same command. A third
+    # alternative here rather than a pattern of its own, so one collector
+    # learns the device's name whichever dialect states it.
+    re.compile(r"^\s*(?:set\s+)?(?:hostname|switchname|sysname)\s+(\S+)", re.I),
     re.compile(r"^\s*(?:set\s+system\s+)?host-name\s+(\S+?);?\s*$", re.I),
     re.compile(r"^\s*!\s*device:\s*(\S+)", re.I),
 )
@@ -1351,6 +1585,17 @@ USERNAME_PATS = (
     # model and the release earlier on that line and leave this untouched,
     # which is the split the two families are for.
     re.compile(r"^#config-version=.*[:\s]user=(\S+)", re.I),
+    # Huawei's local user table, `terminal user name <flag> <user> *<cipher>*
+    # ...`. The account name is the SECOND token after `name`, not the first:
+    # the device writes a flag of its own there -- `buildrun_new_password`,
+    # `history_password` -- and reading that as the account would have
+    # substituted a device keyword everywhere and missed every real login.
+    # Anchoring on the flag's shape is what tells the two apart, and a flag
+    # spelled some other way means this collector declines the line rather
+    # than guessing at which token is the name.
+    re.compile(r"^\s*terminal\s+user\s+name\s+[\w-]*password\s+(\S+)", re.I),
+    # and the same accounts again where the SSH server lists them
+    re.compile(r"^\s*ssh\s+user\s+(\S+)", re.I),
 )
 
 #: identity declarations that only the enclosing block makes recognisable:
@@ -1562,8 +1807,123 @@ _ROUTEROS_WRAPPED = re.compile(
     re.I)
 
 
+#: the opening line of a Huawei command whose quoted value a capture split.
+#:
+#: ``display current-configuration`` wraps its output at the width of the
+#: session that collected it, and the wrap is INVISIBLE: there is no
+#: continuation character, the break can fall anywhere -- between tokens,
+#: inside a token, inside a credential -- and the remainder arrives at column
+#: zero on the next physical line. Most of those breaks fall on a space and
+#: cost nothing (``cbs 640000 pir `` / ``43008 pbs 2713600``: two halves of a
+#: rate, neither of them sensitive). The ones that matter fall inside a quoted
+#: value, and there they are the half-redacted line this project treats as
+#: worse than a plain miss -- a customer name, or the tail of an ONT password,
+#: carried past every rule that could recognise it.
+#:
+#: So the evidence is assembled from three things at once, and each one is
+#: load-bearing:
+#:
+#: * the line is spelled like one of the Huawei commands that carries a quoted
+#:   value. That is the standard :data:`_ROUTEROS_WRAPPED` is held to and it is
+#:   needed for the same reason: an unbalanced quote is perfectly ordinary in
+#:   an ASCII-art banner body, and joining one would mangle a banner.
+#: * the line is still UNFINISHED at its end -- see
+#:   :func:`_huawei_unfinished`. A line that finished was never wrapped.
+#: * the next line is at column zero while this one is indented. Every command
+#:   inside a ``[...-config]`` section is indented and no wrap remainder is,
+#:   which is what stops a COMPLETE command from swallowing the one after it:
+#:   ``terminal user name history_password root *J$1a$...v616"0f!'...$*$*``
+#:   carries a lone quote inside its cipher blob, and nothing else about it
+#:   says it is unfinished.
+_HUAWEI_WRAPPED = re.compile(
+    r"^\s+(?:ont(?:-(?:line|srv)profile)?|terminal|service-port|traffic"
+    r"|dba-profile|vlan)\s", re.I)
+
+#: a line of Huawei's own structure rather than a wrap remainder: a
+#: ``[section]`` marker, the ``<sub-section>`` under it, the ``#`` that
+#: separates two, a RANCID comment, and the ``return`` that ends the file.
+_HUAWEI_STRUCTURE = re.compile(r"[\[#!<]|return\s*$")
+
+
+def _quote_open(text: str) -> bool:
+    """Is ``text`` still inside a double-quoted Huawei value at its end?
+
+    Quotes are counted rather than matched, because that is all the grammar
+    offers -- and the doubled pair is why this cannot be ``count('"') % 2``.
+    Inside a value ``""`` is one escaped quote and closes nothing
+    (:data:`HUAWEI_QUOTED` reads it the same way); outside one it is an empty
+    value that opens and closes. Reading a trailing ``"A""`` as an escape
+    therefore errs towards "still open", which is the direction that joins a
+    line instead of abandoning half a credential on it.
+    """
+    inside = False
+    index = 0
+    while index < len(text):
+        if text[index] != '"':
+            index += 1
+            continue
+        if inside and text[index:index + 2] == '""':
+            index += 2
+            continue
+        inside = not inside
+        index += 1
+    return inside
+
+
+#: an ``ont add`` / ``ont confirm`` that has stated a credential, and the
+#: profile id such a command cannot end without. Between them they are the
+#: second way of seeing that a line was wrapped, and the ONLY way of seeing it
+#: where the credential is a ``%#%#`` blob.
+#:
+#: Quote counting is not enough there, and the reason is the blob: its payload
+#: carries bare quotes (see ``huawei-ont-credential``), so a wrap that falls
+#: inside one lands on a line whose quotes happen to BALANCE. Twelve ONT
+#: passwords on one real capture were left half-destroyed that way -- the
+#: opening fragment redacted by the rule's fallback branch, the tail sitting on
+#: the next line with `huawei-cipher-left` reporting it and nothing able to act
+#: on it.
+#:
+#: The grammar has no such ambiguity. `ont add` names both the line profile
+#: and the SERVICE profile it provisions against, always and in that order, so
+#: a line that has reached `password-auth` and not `ont-srvprofile-id` is
+#: unfinished whatever its quotes say.
+#:
+#: It has to be the second of the two. Stopping at `ont-lineprofile-id` joined
+#: the credential back together and then left a THIRD fragment --
+#: `ont-srvprofile-id 110 desc "Northwind Retail Group, 100M"` -- standing on
+#: its own, where no rule can see it: `huawei-ont-desc` needs the `ont add`
+#: that is now two lines above it, so twenty-five customer names survived a
+#: run that destroyed every credential in the file.
+#:
+#: `ont modify` is deliberately absent: it has short forms that legitimately
+#: end before either profile, and a command that may end early is no evidence
+#: at all.
+_HUAWEI_ONT_AUTH = re.compile(
+    r"^\s+ont\s+(?:add|confirm)\s.*\bpassword-auth\s", re.I)
+_HUAWEI_ONT_PROFILE = re.compile(r"\bont-srvprofile-id(?![-\w])", re.I)
+
+
+def _huawei_unfinished(line: str) -> bool:
+    """Does ``line`` end in the middle of a Huawei command?"""
+    return (_quote_open(line)
+            or (bool(_HUAWEI_ONT_AUTH.match(line))
+                and not _HUAWEI_ONT_PROFILE.search(line)))
+
+
+def _huawei_remainder(line: str) -> bool:
+    """Is ``line`` the remainder of a wrapped Huawei command?"""
+    return bool(line) and not line[:1].isspace() and not _HUAWEI_STRUCTURE.match(line)
+
+
 def join_continuations(lines: Iterable[str]) -> list[str]:
-    r"""Join every wrapped RouterOS command into one logical line.
+    r"""Join every wrapped command into one logical line.
+
+    TWO dialects wrap, and they are undone here together because both have to
+    be undone in the same place -- before any rule runs, and in the one
+    function ``verify`` normalises its own input with.
+
+    RouterOS marks its wraps and Huawei does not, so the two halves of this
+    function look nothing alike; what they share is the failure they prevent.
 
     ``/export`` wraps a long command with a trailing ``\\`` and continues it,
     indented, on the next line. Rules see one line at a time, so a wrap would
@@ -1596,9 +1956,31 @@ def join_continuations(lines: Iterable[str]) -> list[str]:
     not, and nothing in a config says it does; the assumption came from the
     shapes that happened to be in front of it.)
 
+    Huawei writes no marker whatsoever. ``display current-configuration``
+    wraps at the width of the session that collected it, so the break is a bare
+    newline in the middle of whatever it landed on and the remainder starts at
+    column zero:
+
+         ont add 0 0 sn-auth "48575443AAAA0001" ... ont-srvprofile-id 110 desc "
+        Bob's Bakery Pty Ltd, 50M"
+
+    is ONE command, and read as two it hands the rule a description that is the
+    empty string and leaves the customer on a line no rule can recognise. So a
+    Huawei line is joined on the three pieces of evidence set out at
+    :data:`_HUAWEI_WRAPPED`, and nothing goes between the halves here either --
+    the wrap fell inside a value, and a value has no separator in it.
+
     The line count therefore changes, as it already can where a block body or a
-    banner collapses. Idempotent, because nothing in the result ends in ``\``:
-    that is what lets ``verify`` normalise its own input the same way and stay
+    banner collapses.
+
+    Idempotent in both dialects, by different arguments. Nothing in the result
+    ends in ``\``, so the RouterOS half cannot fire twice. The Huawei half can
+    still see an unfinished line in its own output -- a cipher blob with an odd
+    number of quotes in it reads as unfinished however often it is joined -- and
+    what settles that one is the OTHER half of the evidence: a joined line is
+    followed by whatever followed the last remainder, which is a section
+    marker, a ``#``, or an indented command, and none of those is a remainder.
+    That is what lets ``verify`` normalise its own input the same way and stay
     line-for-line with what :meth:`RuleCatalogue.transform` produced.
     """
     source = list(lines)
@@ -1606,6 +1988,24 @@ def join_continuations(lines: Iterable[str]) -> list[str]:
     index = 0
     while index < len(source):
         line = source[index]
+        # Huawei first, because its recogniser is the narrower of the two: a
+        # RouterOS wrap is a trailing backslash, which no Huawei command line
+        # here can end in, so the order costs nothing and reads better.
+        if (_HUAWEI_WRAPPED.match(line) and _huawei_unfinished(line)
+                and index + 1 < len(source)
+                and _huawei_remainder(source[index + 1])):
+            index += 1
+            # Keep joining while the value is still open: a description long
+            # enough to wrap once can wrap twice, and the ONT credentials in a
+            # `%#%#...%#%#` config regularly do.
+            while True:
+                line += source[index]
+                index += 1
+                if not (_huawei_unfinished(line) and index < len(source)
+                        and _huawei_remainder(source[index])):
+                    break
+            out.append(line)
+            continue
         # a trailing backslash on the last line of a file continues nothing, so
         # it is a character of the value and stays exactly where it is
         if not (_ROUTEROS_WRAPPED.match(line) and index + 1 < len(source)):

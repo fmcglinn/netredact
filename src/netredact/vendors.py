@@ -15,6 +15,14 @@ without its parenthesised contents, ``! Command: show running-config``,
 ``switchname``, ``boot-start-marker``, a ``set system`` line, or -- for
 FortiOS, whose whole header is ``platform`` material -- the ``config <path>`` /
 ``edit "<name>"`` / ``next`` shapes its grammar cannot do without.
+
+Huawei is the case that makes the point hardest. Its version marker,
+``[MA5600V800R013: 3910]``, is the only line in an OLT capture that names the
+product at all, and BOTH halves of it belong to ``platform`` -- so a detector
+that leant on it would answer ``unknown`` for every sanitised OLT config. What
+it leans on instead is the provisioning grammar, ``ont add ... sn-auth ...``
+and ``service-port <n> vlan <n> gpon ...``, whose keywords survive every
+action because only the values around them are ever replaced.
 """
 
 from __future__ import annotations
@@ -101,6 +109,42 @@ VENDOR_HINTS = (
         # FortiOS's spelling of "return this to its default". JunOS deletes and
         # IOS says `no`, so the word is suggestive on its own but no more.
         (r"^\s*unset\s+\S", WEAK),
+    )),
+    ("huawei", (
+        # `ont add 0 0 sn-auth "..." password-auth "..."`. The keywords are
+        # what is DECISIVE here and the values are irrelevant, which is the
+        # property every hint in this table needs: `secrets` and `identity`
+        # replace both values on this line, and the command still reads as
+        # Huawei's afterwards.
+        (r"^\s*ont\s+(?:add|confirm|modify)\s+\d+\s+\d+\s+", DECISIVE),
+        # a GPON service port, the other line this box has thousands of
+        (r"^\s*service-port\s+\d+\s+vlan\s+\d+\s+gpon\s+", DECISIVE),
+        # the model, for as long as it is there. `platform` removes it -- both
+        # halves of `[MA5600V800R013: 3910]` belong to a rule -- which is
+        # exactly why it is one hint among a dozen and not the answer.
+        # No trailing `\b`: the release is GLUED to the model in that marker,
+        # so `\bMA5600\b` asked for a boundary between `0` and `V` and never
+        # matched the one line it was written for.
+        (r"\bMA5[68]\d\d(?!\d)", DECISIVE),
+        # `display current-configuration` frames the file in bracketed
+        # sections, and the four that every capture carries are named after
+        # what they configure rather than after anything vendor-specific, so
+        # they are strong rather than decisive.
+        (r"^\[(?:global|public|vlan|device|platform|sysmode)-config\]\s*$", STRONG),
+        (r"^\s*<(?:global|public|vlan|device|platform|sysmode)-config>\s*$", STRONG),
+        (r"^\s*ont-(?:line|srv)profile\s+gpon\b", STRONG),
+        (r"^\s*interface\s+gpon\s+\d+/\d+", STRONG),
+        (r"^\s*terminal\s+user\s+name\s+", STRONG),
+        (r"^\s*snmp-agent\s+(?:local-engineid|community|sys-info|usm-user)\b", STRONG),
+        (r"^\s*sysman\s+(?:ip-access|vpn-instance)\b", STRONG),
+        (r"^\s*traffic\s+table\s+\S+\s+index\s+\d+\b", STRONG),
+        (r"^\s*vlan\s+\d+(?:\s+to\s+\d+)?\s+smart\b", STRONG),
+        # `sysname` is H3C's word too, and the GPON provisioning verbs are
+        # merely suggestive on their own -- they exist to break a tie on a
+        # fragment that carries none of the above.
+        (r"^\s*sysname\s+\S", WEAK),
+        (r"^\s*(?:gem\s+(?:add|mapping)|tcont)\s+\d", WEAK),
+        (r"^\s*dba-profile\s+add\s+profile-id\b", WEAK),
     )),
     ("cisco", (
         (r"^\s*boot-start-marker", DECISIVE),

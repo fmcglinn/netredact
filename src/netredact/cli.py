@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap = _Parser(
         prog="netredact",
         description="Strip secrets and identifying data from Cisco, Arista, "
-                    "Juniper and Fortinet configurations.",
+                    "Juniper, Fortinet, MikroTik and Huawei configurations.",
         epilog="Configuration selects a part of the config and gives it an "
                "action: keep, pseudo, hash or redact. By default secrets are "
                "redacted and everything else is kept. Settings live in "

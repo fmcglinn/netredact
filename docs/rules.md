@@ -7,9 +7,9 @@ Every named rule, the family it belongs to, and every check the
 verification pass runs afterwards. Generated from the source, so it
 matches the code exactly.
 
-**73 rules**: 43 `secrets`, 8 `text`, 2 `locations`, 9 `identity`, 4 `platform`, 4 `interfaces`, 1 `vlans`, 2 `circuits`.
+**86 rules**: 48 `secrets`, 11 `text`, 3 `locations`, 11 `identity`, 4 `platform`, 6 `interfaces`, 1 `vlans`, 2 `circuits`.
 
-- 16 verification checks
+- 17 verification checks
 
 A rule does not decide what happens to what it finds. Its **family**
 does, and every family of rules is a section: the action is
@@ -169,6 +169,18 @@ Each rule name links to its pattern, which is listed in full under
 | [`fortios-encrypted`](#fortios-encrypted) | `secrets` | FortiOS `set <key> ENC X` for a key `fortios-secret` does not name -- the marker is the evidence, so a key no release has invented yet is still covered -- fortinet grammar |  |
 | [`fortios-credential-key`](#fortios-credential-key) | `secrets` | a qualified FortiOS credential key without the `ENC` marker -- `group-password`, `key-passphrase`, `password2` -- fortinet grammar |  |
 | [`fortios-object-name`](#fortios-object-name) | `text` | `set name` on a FortiOS object nothing refers to by name -- a firewall policy, which the configuration addresses by its `edit <id>` -- fortinet grammar | inside `object-labels` |
+| [`huawei-ont-credential`](#huawei-ont-credential) | `secrets` | the credentials on a Huawei `ont add` line -- `password-auth X [hex Y]`. Reached through the GRAMMAR and not the quoting: the cipher blob is emitted raw, so its payload carries bare quotes, and the region runs from `password-auth` to the `omci` that follows it -- huawei grammar |  |
+| [`huawei-terminal-user`](#huawei-terminal-user) | `secrets` | the `*...*` cipher on a Huawei `terminal user name` line, anchored on the level and timestamps that follow it -- or, where a wrapped capture left the command unfinished, everything from the `*` to the end of the line -- huawei grammar |  |
+| [`huawei-snmp-community`](#huawei-snmp-community) | `secrets` | Huawei `snmp-agent community read\|write X` and `target-host ... securityname X` -- huawei grammar |  |
+| [`huawei-snmp-usm`](#huawei-snmp-usm) | `secrets` | Huawei `snmp-agent ... authentication-mode\|privacy-mode <algorithm> X` -- huawei grammar |  |
+| [`huawei-snmp-engineid`](#huawei-snmp-engineid) | `identity` | `snmp-agent local-engineid X` -- identifies the device, and a 24-character hex run, so a kept one has to be a rule the shape checks can be blinded to -- huawei grammar |  |
+| [`huawei-ont-serial`](#huawei-ont-serial) | `identity` | the ONT serial on `ont add ... sn-auth X`. `identity`, alongside `serial-number`: `pseudo` keeps an `ont confirm` elsewhere in the file reading as the same ONT -- huawei grammar |  |
+| [`huawei-ont-desc`](#huawei-ont-desc) | `interfaces` | `ont add ... desc X`, which on a provider's OLT is the subscriber -- huawei grammar |  |
+| [`huawei-port-desc`](#huawei-port-desc) | `interfaces` | Huawei `service-port desc <n> description X` and `port desc <f>/<s>/<p> description X` -- huawei grammar |  |
+| [`huawei-rack-info`](#huawei-rack-info) | `locations` | `rack info <n> description X name Y` -- the cabinet a chassis stands in -- huawei grammar |  |
+| [`huawei-profile-name`](#huawei-profile-name) | `text` | a Huawei `profile-name X`, on a line, service, DBA or VLAN-service profile. Safe to act on because the configuration refers to every one of them by NUMBER and never by name -- huawei grammar |  |
+| [`huawei-traffic-table-name`](#huawei-traffic-table-name) | `text` | `traffic table ip index <n> name X` -- huawei grammar |  |
+| [`huawei-region-name`](#huawei-region-name) | `text` | `region-name X`, the MSTP region -- named after the site on an access ring -- huawei grammar |  |
 | [`junos-password`](#junos-password) | `secrets` | `encrypted-password`, `plain-text-password-value` -- juniper grammar |  |
 | [`script-checksum`](#script-checksum) | `identity` |  |  |
 | [`fortios-secret`](#fortios-secret) | `secrets` | every FortiOS `set <attribute> <value>` credential: `password`, `passwd`, `psksecret`, `ppk-secret`, `auth-pwd`, `priv-pwd`, `passphrase`, `api-key`, `secret`, `key`. The keyword must be the first token after `set`, which is what keeps the two ordinary words off a JunOS `set` path -- fortinet grammar |  |
@@ -202,6 +214,7 @@ Each rule name links to its pattern, which is listed in full under
 | [`comment`](#comment) | `text` | RouterOS's `comment=`, anywhere EXCEPT inside a `/interface …` section -- a firewall rule, a DHCP lease, an address list. The interface case is its own rule in its own family, exactly as `description` is split -- mikrotik grammar |  outside `interfaces` |
 | [`interface-comment`](#interface-comment) | `interfaces` | the same RouterOS `comment=`, when it is inside a `/interface …` section -- mikrotik grammar | inside `interfaces` |
 | [`junos-type9`](#junos-type9) | `secrets` | any `$9$...` blob, wherever it appears -- juniper grammar |  |
+| [`huawei-cipher`](#huawei-cipher) | `secrets` | any `%#%#...%#%#` blob, wherever it appears -- Huawei's cipher is self-delimiting, which is what lets this reach a fragment a wrapped capture left with no keyword on it -- huawei grammar |  |
 | [`crypt-hash`](#crypt-hash) | `secrets` | any `$1$ $2a/b/x/y$ $5$ $6$ $y$` hash, wherever it appears |  |
 | [`ssh-public-key`](#ssh-public-key) | `identity` | `ssh-rsa` / `ssh-dss` / `ssh-ed25519` / `ecdsa-sha2-*` plus `AAAA...`, and JunOS `ssh-known-hosts` key forms |  |
 | [`license-udi`](#license-udi) | `identity` | `License UDI: ...` |  |
@@ -411,6 +424,78 @@ block also carries the pattern that ends it.
 \s*set\s+name\s+
 ```
 
+### `huawei-ont-credential`
+
+```
+(?:^\s*ont\s+(?:add|confirm|modify)\s.*?\bpassword-auth\s+(\S.*?)(?:\s+hex\s+(\S.*?))?(?=\s+omci(?![-\w]))|^\s*ont\s+(?:add|confirm|modify)\s.*?\bpassword-auth\s+(\S.*?)\s*$)
+```
+
+### `huawei-terminal-user`
+
+```
+(?:^\s*terminal\s+user\s+name\s+\S+\s+\S+\s+(\*.*\*)(?=\s+\d+\s+\d{4}:\d{2}:)|^\s*terminal\s+user\s+name\s+\S+\s+\S+\s+(\*.*?)\s*$|^(\S*\*)(?=\s+\d+\s+\d{4}:\d{2}:\d{2}:\d{2}:\d{2}:\d{2}\s))
+```
+
+### `huawei-snmp-community`
+
+```
+(?:^\s*snmp-agent\s+community\s+(?:read|write)\s+(?:(?:cipher|simple)\s+)?(\S+)|^\s*snmp-agent\s+target-host\s+.*?\bsecurityname\s+(\S+))
+```
+
+### `huawei-snmp-usm`
+
+```
+^\s*snmp-agent\s.*?\b(?:authentication|privacy)-mode\s+(?:md5|sha\d*|sha2-\d+|aes\d*|des\d*|3des)\s+(\S+)
+```
+
+### `huawei-snmp-engineid`
+
+```
+\s*snmp-agent\s+local-engineid\s+
+```
+
+### `huawei-ont-serial`
+
+```
+^\s*ont\s+(?:add|confirm|modify)\s.*?\bsn-auth\s+%VAL%
+```
+
+### `huawei-ont-desc`
+
+```
+^\s*ont\s+(?:add|confirm|modify)\s.*?\bdesc\s+(\S.*?)\s*$
+```
+
+### `huawei-port-desc`
+
+```
+^\s*(?:service-)?port\s+desc\s+\S+\s+description\s+(\S.*?)\s*$
+```
+
+### `huawei-rack-info`
+
+```
+^\s*rack\s+info\s+\d+\s+description\s+%VAL%(?:\s+name\s+%VAL%)?
+```
+
+### `huawei-profile-name`
+
+```
+\s*(?:\S+\s+)*?profile-name\s+
+```
+
+### `huawei-traffic-table-name`
+
+```
+\s*traffic\s+table\s+\S+\s+index\s+\d+\s+name\s+
+```
+
+### `huawei-region-name`
+
+```
+\s*region-name\s+
+```
+
 ### `junos-password`
 
 ```
@@ -450,13 +535,13 @@ block also carries the pattern that ends it.
 ### `hardware-model`
 
 ```
-(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),|^#config-version=([\w-]+?)-(?=\d+\.\d))
+(?:^\s*[!#]?\s*(?:hardware(?:\s+(?:model|version|revision))?|model(?:\s+(?:number|name))?|chassis(?:\s+type)?|product(?:\s+id)?|platform|pid)\s*[:=]\s*(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\(([^)]+),|^#config-version=([\w-]+?)-(?=\d+\.\d)|^\s*\[(MA\d+[A-Z]*)(?=V\d+R\d+)|^\s*board\s+add\s+\d+/\d+\s+(\S+)|^\s*!\s+\d+\s+(H\d{3}[A-Z0-9]+)(?![-\w]))
 ```
 
 ### `os-version`
 
 ```
-(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$|^#config-version=.*?-(\d+\.\d[^\s:]*)|^\s*#(?:buildno|branch_pt)=(\S+)\s*$)
+(?:^\s*(?:set\s+)?version\s+(?=\d)(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|^\s*!\s*device:\s*\S+\s*\([^)]+,\s*([^\s,)]+)\s*\)\s*$|^\s*#.*\bby\s+RouterOS\s+%VAL%\s*$|^#config-version=.*?-(\d+\.\d[^\s:]*)|^\s*#(?:buildno|branch_pt)=(\S+)\s*$|^\s*\[.*?(V\d+R\d+[\w.]*))
 ```
 
 ### `software-image`
@@ -474,13 +559,13 @@ block also carries the pattern that ends it.
 ### `location`
 
 ```
-(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
+(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+|snmp-agent\s+sys-info\s+)?location\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])location=%VAL%)
 ```
 
 ### `contact`
 
 ```
-(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+)?contact(?:-info)?\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
+(?:^\s*(?:set\s+(?:snmp\s+)?|snmp-server\s+|snmp-agent\s+sys-info\s+)?contact(?:-info)?\s+(?![{}\s]*$)(.+?)(?:\s*;\s*(?:##.*)?)?$|.*(?<![-\w])contact=%VAL%)
 ```
 
 ### `junos-location-body`
@@ -609,6 +694,12 @@ block also carries the pattern that ends it.
 (\$9\$[^\s";]+)
 ```
 
+### `huawei-cipher`
+
+```
+(%#%#[^\s]*?%#%#)
+```
+
 ### `crypt-hash`
 
 ```
@@ -704,6 +795,7 @@ block. A kept `secrets` rule never blinds anything.
 | `ssh-key-left` | SSH key material survived | `[policy] identity` is not `"keep"` -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
 | `pem-left` | a `-----BEGIN` block survived -- private keys and DH parameters always, certificates only when `identity` acts | always for a private key; the certificate half needs `identity` to act -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
 | `type7-left` | a Cisco type-7 string survived | always |
+| `huawei-cipher-left` | a Huawei cipher survived -- `%#%#`, `$1a$`, or a `*`-delimited blob where the `terminal user name` grammar puts one | always |
 | `long-hex-left` | an unexplained run of 24+ hex characters | always -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
 | `long-base64-left` | an unexplained run of 40+ base64 characters | always -- blind to spans a kept `identity` / `text` / `locations` / `interfaces` / `vlans` / `circuits` rule matched |
 | `credential-left` | a credential keyword not followed by a placeholder | always |

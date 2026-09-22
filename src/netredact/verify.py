@@ -145,6 +145,34 @@ VERIFY_RULES = [
     # identity, and is checked separately under the same name
     ("pem-left", re.compile(r"-----BEGIN(?![A-Z0-9 ]*CERTIFICATE-----)")),
     ("type7-left", re.compile(r"\b(?:password|key)\s+7\s+[0-9A-Fa-f]{6,}", re.I)),
+    # Huawei's cipher, by the delimiters it carries rather than by the keyword
+    # in front of it -- which is what lets this see a fragment that arrived on
+    # a line of its own after a capture wrapped mid-credential. Named for
+    # exactly the reason ``wpa-psk`` and FortiOS's ``ENC`` are named: without
+    # it a regressed ``huawei-ont-credential`` left an ONT password in the
+    # output with only ``long-base64-left`` -- a check that knows a shape and
+    # not what the material is -- between it and a clean ``--strict``, and a
+    # ``%#%#`` blob is punctuation, so that check never saw one.
+    #
+    # Four shapes, all of them Huawei's own and none of them anything else's:
+    #
+    # * ``%#%#``, the delimiter the cipher carries wherever it sits;
+    # * ``$1a$``, the marker on an irreversible-cipher password, which is
+    #   Huawei's ``$9$``;
+    # * a ``*`` where the ``terminal user name`` grammar puts the cipher. The
+    #   keyword is the evidence here, exactly as ``set <key> ENC`` is for
+    #   FortiOS, and it is needed because the oldest blobs carry no marker of
+    #   their own at all -- ``*[NwNetopsPass**2Vq5!*`` is a password and
+    #   nothing about its own text says so;
+    # * a ``*`` immediately in front of that command's tail grammar -- a level
+    #   and a ``yyyy:mm:dd:hh:mm:ss`` stamp. This is the one shape with no
+    #   keyword to go on, because it is the wrap remainder that arrives on a
+    #   line of its own, and it is what makes a regression in
+    #   ``huawei-terminal-user``'s third branch impossible to miss.
+    ("huawei-cipher-left", re.compile(
+        r"%#%#|\$1a\$"
+        r"|^\s*terminal\s+user\s+name\s+\S+\s+\S+\s+\*"
+        r"|\*\s+\d+\s+\d{4}:\d{2}:", re.I | re.M)),
     ("long-hex-left", re.compile(r"(?<![\w.])[0-9A-Fa-f]{24,}(?![\w.])")),
     ("long-base64-left", re.compile(r"(?<![\w+/=])[A-Za-z0-9+/]{40,}={0,2}(?![\w+/=])")),
     # the optional `=` is RouterOS's separator: `password=<REMOVED>` is a
@@ -167,10 +195,29 @@ VERIFY_RULES = [
     #
     # The empty value ends only THIS match; `search` keeps scanning, so
     # `auth-key="" password=hunter2` still fires on the second keyword.
+    #
+    # ``(?:-[\w-]+)?`` IS THE QUALIFIER, and it belongs inside the lookahead
+    # rather than in the keyword list. A hyphen is a word boundary, so
+    # ``\bpassword\b`` matches inside ``password-auth`` -- and then judges the
+    # line on what follows the SHORTER word, which is ``-auth "<REMOVED>"`` and
+    # matches none of the shapes below. Every Huawei ONT line was reported as a
+    # survivor after its credential had already been destroyed.
+    #
+    # Putting the longer spelling first in the alternation does not fix it and
+    # cannot: the longer branch matches, the lookahead then refuses it, and the
+    # engine backtracks to the shorter branch and reports that instead. The
+    # qualifier has to be admitted where the judgement is made.
+    #
+    # Admitting it here rather than narrowing the keyword's boundary to
+    # ``(?![-\w])`` is deliberate. That would have stopped ``secret`` reaching
+    # ``secret-key hunter2`` at all, trading a false report for silence over a
+    # real credential -- the wrong direction. This way the keyword still reaches
+    # every qualified spelling of itself, and only a qualified spelling that has
+    # been DEALT WITH goes unreported.
     ("credential-left", re.compile(
         rf"(?:\b(?:{_CRED_KEYWORDS})\b|{_CRED_COMMUNITY}\b|{_CRED_SET}"
         rf"|{_CRED_FORTIOS}\b)"
-        rf"(?!\s*=?\s*(?:{VTOK}\s*)*"
+        rf"(?!(?:-[\w-]+)?\s*=?\s*(?:{VTOK}\s*)*"
         rf"(?:$|[;{{]|\"?<|\"?-----BEGIN\b|\"\"|''))",
         re.I | re.M)),
 ]

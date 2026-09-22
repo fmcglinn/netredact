@@ -19,7 +19,7 @@
 marker = true  # write one comment line at the top of the output naming this tool. It is
 # what lets netredact refuse to sanitise its own output a second time -- turn it
 # off and a re-run maps pseudonyms again, with nothing to warn you.
-vendor = "auto"  # auto | arista | cisco | fortinet | juniper | mikrotik
+vendor = "auto"  # auto | arista | cisco | fortinet | huawei | juniper | mikrotik
 
 # Passwords, keys, community strings and password hashes. This is
 # the one family that acts by default, and the whole of netredact's
@@ -63,6 +63,10 @@ default = "redact"  # the action for every rule not named below
 # ftp-password            = "redact"
 # fortios-encrypted       = "redact"
 # fortios-credential-key  = "redact"
+# huawei-ont-credential   = "redact"
+# huawei-terminal-user    = "redact"
+# huawei-snmp-community   = "redact"
+# huawei-snmp-usm         = "redact"
 # junos-password          = "redact"
 # fortios-secret          = "redact"
 # fortios-snmp-community  = "redact"
@@ -74,6 +78,7 @@ default = "redact"  # the action for every rule not named below
 # routeros-auth-key       = "redact"
 # routeros-snmp-community = "redact"
 # junos-type9             = "redact"
+# huawei-cipher           = "redact"
 # crypt-hash              = "redact"
 # key-string-block        = "redact"
 # pem-key                 = "redact"
@@ -91,14 +96,17 @@ default = "redact"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
-# fortios-object-name  = "keep"
-# contact              = "keep"
-# description          = "keep"
-# acl-remark           = "keep"
-# login-message        = "keep"
-# banner               = "keep"
-# routeros-object-name = "keep"
-# comment              = "keep"
+# fortios-object-name       = "keep"
+# huawei-profile-name       = "keep"
+# huawei-traffic-table-name = "keep"
+# huawei-region-name        = "keep"
+# contact                   = "keep"
+# description               = "keep"
+# acl-remark                = "keep"
+# login-message             = "keep"
+# banner                    = "keep"
+# routeros-object-name      = "keep"
+# comment                   = "keep"
 
 # Explicit physical locations: SNMP location values and structured
 # JunOS building, floor, rack, room and street-address fields.
@@ -111,6 +119,7 @@ default = "keep"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
+# huawei-rack-info    = "keep"
 # location            = "keep"
 # junos-location-body = "keep"
 
@@ -126,15 +135,17 @@ default = "keep"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
-# snmp-engineid       = "keep"
-# routeros-license-id = "keep"
-# script-checksum     = "keep"
-# routeros-public-key = "keep"
-# ssh-public-key      = "keep"
-# license-udi         = "keep"
-# serial-number       = "keep"
-# certificate-block   = "keep"
-# pem-cert            = "keep"
+# snmp-engineid        = "keep"
+# routeros-license-id  = "keep"
+# huawei-snmp-engineid = "keep"
+# huawei-ont-serial    = "keep"
+# script-checksum      = "keep"
+# routeros-public-key  = "keep"
+# ssh-public-key       = "keep"
+# license-udi          = "keep"
+# serial-number        = "keep"
+# certificate-block    = "keep"
+# pem-cert             = "keep"
 
 # The hardware model, the software release and the boot image.
 # Neither a credential nor an instance identity -- every device off
@@ -170,6 +181,8 @@ default = "keep"  # the action for every rule not named below
 default = "keep"  # the action for every rule not named below
 
 # Per-rule actions. Commented out means: inherit `default`.
+# huawei-ont-desc         = "keep"
+# huawei-port-desc        = "keep"
 # fortios-interface-alias = "keep"
 # interface-description   = "keep"
 # routeros-peer-name      = "keep"

@@ -1,7 +1,8 @@
 """netredact -- strip secrets and identifying data from network configurations.
 
 Supports Cisco IOS / IOS-XE / NX-OS, Arista EOS, Juniper JunOS (both the
-curly-brace and ``set`` formats), MikroTik RouterOS and Fortinet FortiOS.
+curly-brace and ``set`` formats), MikroTik RouterOS, Fortinet FortiOS and
+Huawei MA5600T / MA5800 GPON OLTs.
 
 Configuration selects a **part of the config** and chooses an **action** for
 it:

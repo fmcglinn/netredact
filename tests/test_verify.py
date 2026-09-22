@@ -14,7 +14,7 @@ from .conftest import SALT, policy
 
 UNCONDITIONAL = ("crypt-hash-left", "junos-type9-left", "pem-left",
                  "type7-left", "long-hex-left", "long-base64-left",
-                 "credential-left")
+                 "credential-left", "huawei-cipher-left")
 CONDITIONAL = ("email-left", "ipv4-left", "ipv6-left", "mac-left",
                "operational-name-left", "as-number-left", "location-left",
                "routeros-header-left")
@@ -432,6 +432,45 @@ def test_keeping_a_fortios_secret_still_fails_the_safety_net(fortinet):
     it is not, and that is what these checks are for."""
     result = sanitise_text(fortinet, policy(secrets="keep"), salt=SALT)
     assert "credential-left" in {f.check for f in result.findings}
+
+
+def test_a_clean_huawei_olt_capture_verifies_clean(huawei):
+    result = sanitise_text(huawei, Config(), salt=SALT)
+    assert result.findings == [], "\n".join(str(f) for f in result.findings)
+
+
+def test_keeping_a_huawei_cipher_still_fails_the_safety_net(huawei):
+    result = sanitise_text(huawei, policy(secrets="keep"), salt=SALT)
+    assert "huawei-cipher-left" in {f.check for f in result.findings}
+
+
+@pytest.mark.parametrize("line", [
+    # the `%#%#` delimiter, wherever it sits -- including on the wrap
+    # remainder that arrives with no keyword on it at all
+    'Z![l;4wuBEAcXQBS15>Q(IYYJy{>u$%#%#" omci ont-lineprofile-id 305',
+    ' terminal user name buildrun_new_password root *J$1a$kRT4DB[-z1$lXn$* 7 ',
+    # a cipher blob still in front of the `terminal user` tail grammar, which
+    # is what says the wrap fell INSIDE the credential
+    "TA!* 0 2026:03:24:17:55:10 2026:03:24:17:55:10 root 3 \"-----\"",
+])
+def test_a_surviving_huawei_cipher_is_reported_with_no_keyword_to_go_on(line):
+    assert "huawei-cipher-left" in {f.check for f in verify([line], Config())}
+
+
+def test_a_handled_huawei_credential_is_not_reported_as_a_survivor():
+    """`\bpassword\b` matches inside `password-auth`, so the check judged the
+    line on `-auth "<REMOVED>"` and reported all 96 ONT lines of a real capture
+    after their credentials had been destroyed."""
+    assert verify([' ont add 0 0 sn-auth "48575443AAAA0001" '
+                   'password-auth "<REMOVED>" hex "<REMOVED>" omci'],
+                  Config()) == []
+
+
+def test_a_qualified_credential_keyword_still_reaches_a_real_secret():
+    """The other half of the same change: admitting the qualifier into the
+    lookahead must not stop the keyword reaching a credential that survived."""
+    assert "credential-left" in {f.check for f in
+                                 verify(["secret-key hunter2"], Config())}
 
 
 # ---------------------------------------------------------------------------

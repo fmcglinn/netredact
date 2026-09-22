@@ -153,3 +153,51 @@ def test_a_fortios_config_still_says_what_it_configures(fortinet):
                    "set psksecret ENC", "set allowaccess ping https ssh snmp",
                    "set security wpa2-only-personal", "set remote-as"):
         assert keeper in out, keeper
+
+
+# ---------------------------------------------------------------------------
+# Huawei, where the credentials are NOT reached through their quoting: a
+# `%#%#` cipher blob is emitted raw inside `"..."` and its own punctuation
+# includes bare quotes, so the rules anchor on the command's grammar instead.
+# ---------------------------------------------------------------------------
+
+def test_a_huawei_cipher_blob_is_destroyed_whole_despite_its_bare_quotes(huawei):
+    """Eight quotes on the line and six of them payload. A rule that closed
+    the value at a quote closed it inside the credential and wrote a marker
+    over the first fragment -- a line that reads as handled with the rest of
+    the password still on it."""
+    out = sanitise_text(huawei, Config(), salt=SALT).text
+    for fragment in ("NwOntPassEXAMPLE", "NwOntHexEXAMPLE", "NwUsmAuthEXAMPLE",
+                     "NwTrapEXAMPLE", "%#%#", "$1a$", "YQ6J", "WMLnorthwind"):
+        assert fragment not in out, fragment
+
+
+def test_a_huawei_ont_line_still_says_what_it_provisions(huawei):
+    """The keywords are grammar; only their values may move. They are also
+    what the vendor detector reads once the values are gone."""
+    out = sanitise_text(huawei, maximal(), salt=SALT).text
+    for keeper in ("ont add 0 0 sn-auth", "password-auth", "hex ",
+                   "omci ont-lineprofile-id 305 ont-srvprofile-id 110",
+                   "snmp-agent local-engineid", "snmp-agent community read",
+                   "terminal user name buildrun_new_password",
+                   "service-port desc 2 description"):
+        assert keeper in out, keeper
+
+
+def test_a_huawei_capture_keeps_its_section_structure(huawei):
+    """The bracketed sections and the `#` between them are the file's frame,
+    and a joined wrap may not consume one."""
+    out = sanitise_text(huawei, maximal(), salt=SALT).text
+    for marker in ("[global-config]", "[public-config]", "[gpon]",
+                   "  <gpon-0/0>", "[post-system]", "return"):
+        assert marker in out.splitlines(), marker
+
+
+def test_an_ont_serial_is_identity_and_survives_a_secrets_only_run(huawei):
+    """The chosen split: in SN-auth mode the serial admits the ONT, but it is
+    a hardware serial, so it goes with `serial-number` in `identity` and the
+    default policy keeps it."""
+    out = sanitise_text(huawei, Config(), salt=SALT).text
+    assert 'sn-auth "48575443AAAA0001"' in out
+    pseudo = sanitise_text(huawei, policy(identity="pseudo"), salt=SALT).text
+    assert "48575443AAAA0001" not in pseudo

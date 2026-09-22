@@ -207,6 +207,42 @@ RULE_NOTES = {
                        "line refers to it (`pseudowire ldp X alternate Y`). "
                        "One rule, so a definition and its references can "
                        "never be given two different actions",
+    "huawei-ont-credential": "the credentials on a Huawei `ont add` line -- "
+                             "`password-auth X [hex Y]`. Reached through the "
+                             "GRAMMAR and not the quoting: the cipher blob is "
+                             "emitted raw, so its payload carries bare "
+                             "quotes, and the region runs from "
+                             "`password-auth` to the `omci` that follows it",
+    "huawei-terminal-user": "the `*...*` cipher on a Huawei `terminal user "
+                            "name` line, anchored on the level and timestamps "
+                            "that follow it -- or, where a wrapped capture "
+                            "left the command unfinished, everything from the "
+                            "`*` to the end of the line",
+    "huawei-snmp-community": "Huawei `snmp-agent community read|write X` and "
+                             "`target-host ... securityname X`",
+    "huawei-snmp-usm": "Huawei `snmp-agent ... authentication-mode|"
+                       "privacy-mode <algorithm> X`",
+    "huawei-snmp-engineid": "`snmp-agent local-engineid X` -- identifies the "
+                            "device, and a 24-character hex run, so a kept "
+                            "one has to be a rule the shape checks can be "
+                            "blinded to",
+    "huawei-ont-serial": "the ONT serial on `ont add ... sn-auth X`. "
+                         "`identity`, alongside `serial-number`: `pseudo` "
+                         "keeps an `ont confirm` elsewhere in the file "
+                         "reading as the same ONT",
+    "huawei-ont-desc": "`ont add ... desc X`, which on a provider's OLT is "
+                       "the subscriber",
+    "huawei-port-desc": "Huawei `service-port desc <n> description X` and "
+                        "`port desc <f>/<s>/<p> description X`",
+    "huawei-rack-info": "`rack info <n> description X name Y` -- the cabinet "
+                        "a chassis stands in",
+    "huawei-profile-name": "a Huawei `profile-name X`, on a line, service, "
+                           "DBA or VLAN-service profile. Safe to act on "
+                           "because the configuration refers to every one of "
+                           "them by NUMBER and never by name",
+    "huawei-traffic-table-name": "`traffic table ip index <n> name X`",
+    "huawei-region-name": "`region-name X`, the MSTP region -- named after "
+                          "the site on an access ring",
 }
 
 BLOB_NOTES = {
@@ -217,6 +253,10 @@ BLOB_NOTES = {
     "license-udi": "`License UDI: ...`",
     "serial-number": "`Serial Number: ...`, `System serial number ...`, "
                      "RouterOS's `# serial number = ...`",
+    "huawei-cipher": "any `%#%#...%#%#` blob, wherever it appears -- Huawei's "
+                     "cipher is self-delimiting, which is what lets this "
+                     "reach a fragment a wrapped capture left with no keyword "
+                     "on it",
 }
 
 BLOCK_NOTES = {
@@ -229,6 +269,9 @@ BLOCK_NOTES = {
 VERIFY_NOTES = {
     "crypt-hash-left": "a `$1$`/`$5$`/`$6$`-style hash survived",
     "junos-type9-left": "a JunOS `$9$` blob survived",
+    "huawei-cipher-left": "a Huawei cipher survived -- `%#%#`, `$1a$`, or a "
+                          "`*`-delimited blob where the `terminal user name` "
+                          "grammar puts one",
     "ssh-key-left": "SSH key material survived",
     "pem-left": "a `-----BEGIN` block survived -- private keys and DH "
                 "parameters always, certificates only when `identity` acts",
